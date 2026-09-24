@@ -18,10 +18,10 @@ M1.2: UEFI headers + hello loader + disk image (`needs-owner`), branch
   `gdb` wired to the existing boot harness (no-op until M1.2 produces a bootable image).
 
 ## Next step
-Continue M1.2 from `docs/logs/M1.2.md`'s plan: write `boot/uefi/include/efi/` headers, then
-`efiMain` (prints `bongOS loader` to ConOut + COM1, halts), then `tools/mkimage`, then wire
-`mk/image.mk` and extend `tests/harness/run-qemu.sh` with a serial-banner-match mode. See the
-log for exact next file/function.
+M1.2's code is written and `make test`/`make format-check` pass locally (see
+`docs/logs/M1.2.md`'s 10:30 entry for the full list). The `architect` subagent is reviewing the
+on-disk-format pieces (GPT/mkimage, D-056, D-057) before this locks in -- next: act on its
+findings, run the `reviewer` subagent on the full diff, fix Critical findings, then open the PR.
 
 ## Blockers
 _(none)_

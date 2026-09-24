@@ -16,17 +16,21 @@ usage: run-qemu.sh [options]
   --gdb             start paused with -s -S, serial to a log file, and return immediately;
                      writes its pid to build/run/NAME.pid so a caller can gdb it and kill it
   --extra "ARGS"    extra QEMU arguments (devices, netdev, audio, iommu...)
+  --expect-serial S banner-match mode: PASS once S appears on serial, instead of waiting on the
+                     isa-debug-exit/KTEST protocol (for milestones before the kernel exists, e.g.
+                     M1.2's loader, which only prints and halts)
 Monitor socket: build/run/NAME.monitor (screendump, sendkey, system_powerdown).
 Serial log:     build/logs/NAME.serial.log
 USAGE
 }
-IMAGE=build/bongos.img FW=uefi CPUS=1 MEM=512 TIMEOUT=120 NAME="" DEBUG=0 INTERACTIVE=0 GDBMODE=0 EXTRA=""
+IMAGE=build/bongos.img FW=uefi CPUS=1 MEM=512 TIMEOUT=120 NAME="" DEBUG=0 INTERACTIVE=0 GDBMODE=0 EXTRA="" EXPECT=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --image) IMAGE=$2; shift 2 ;; --fw) FW=$2; shift 2 ;; --cpus) CPUS=$2; shift 2 ;;
         --mem) MEM=$2; shift 2 ;; --timeout) TIMEOUT=$2; shift 2 ;; --name) NAME=$2; shift 2 ;;
         --debug) DEBUG=1; shift ;; --interactive) INTERACTIVE=1; shift ;; --gdb) GDBMODE=1; shift ;;
-        --extra) EXTRA=$2; shift 2 ;; -h|--help) usage; exit 0 ;;
+        --extra) EXTRA=$2; shift 2 ;; --expect-serial) EXPECT=$2; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
         *) echo "unknown option $1"; usage; exit 2 ;;
     esac
 done
@@ -83,6 +87,36 @@ fi
 if [ "$INTERACTIVE" = 1 ]; then
     # shellcheck disable=SC2086
     exec "${BASE[@]}" -serial stdio $EXTRA
+fi
+
+if [ -n "$EXPECT" ]; then
+    # Banner-match mode: no isa-debug-exit/reboot signal exists yet (the kernel that drives it
+    # arrives in M1.3), so success is "the expected text showed up on serial before the timeout
+    # or the process exiting" rather than a QEMU exit code.
+    : > "$LOG"
+    # shellcheck disable=SC2086
+    "${BASE[@]}" -display none -serial "file:$LOG" $EXTRA < /dev/null &
+    qemupid=$!
+    SECONDS=0
+    result=HANG
+    while [ "$SECONDS" -lt "$TIMEOUT" ]; do
+        if grep -qF "$EXPECT" "$LOG" 2>/dev/null; then
+            result=PASS
+            break
+        fi
+        if ! kill -0 "$qemupid" 2>/dev/null; then
+            result=CRASH
+            break
+        fi
+        sleep 0.2
+    done
+    kill "$qemupid" 2>/dev/null
+    wait "$qemupid" 2>/dev/null
+    case "$result" in
+        PASS)  echo "RESULT $NAME: PASS"; exit 0 ;;
+        CRASH) echo "RESULT $NAME: CRASH (qemu exited before \"$EXPECT\" appeared on serial; see $LOG)"; exit 1 ;;
+        *)     echo "RESULT $NAME: HANG (\"$EXPECT\" not seen on serial after ${TIMEOUT}s; see $LOG)"; exit 1 ;;
+    esac
 fi
 
 # shellcheck disable=SC2086

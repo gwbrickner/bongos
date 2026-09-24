@@ -1,1 +1,0 @@
-Minimal headers written from the UEFI spec: base types, EFI_SYSTEM_TABLE, Boot Services, Simple Text Output, Loaded Image, Simple File System + File Protocol, GOP, RNG, and the config-table GUIDs. Arrives in M1.2 (D-007: no gnu-efi/POSIX-UEFI).
