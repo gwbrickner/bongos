@@ -1,0 +1,1 @@
+Recipes and patches for third-party applications (bash, SDL2, chocolate-doom, LLVM, make, nasm, ...), built from upstream source plus our patches. Never copied into the base tree (ARCHITECTURE §0). Arrives starting M14.5.
