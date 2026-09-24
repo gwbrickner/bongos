@@ -4,7 +4,8 @@ _Main-line status. Parallel-lane sessions don't edit this file; they track progr
 **Last updated:** 2026-09-24 (M1.2 done, PR open)
 
 ## Current milestone
-None in progress. M1.2 is done and its PR is open (branch `m1-2-uefi-hello-loader`; see
+None in progress. M1.2 is done and its PR is open
+(https://github.com/gwbrickner/bongos/pull/2, branch `m1-2-uefi-hello-loader`; see
 `docs/logs/M1.2.md`). **Next: M1.3: Kernel skeleton + real handoff** (`needs-owner`), once M1.2
 merges.
 
