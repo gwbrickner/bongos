@@ -5,7 +5,7 @@ SHELL := /bin/bash
 .DELETE_ON_ERROR:
 
 BUILD := build
-RELEASE ?= 0
+RELEASE ?= 0   # wired to -O2 (vs. debug -O1 + UBSan/lock validator) starting with kernel.mk in M1.3
 
 include mk/branding.mk
 include mk/format.mk

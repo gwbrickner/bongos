@@ -71,11 +71,12 @@ BASE=(qemu-system-x86_64 -M q35 -cpu max -smp "$CPUS" -m "$MEM" "${ACCEL[@]}" "$
       -monitor "unix:build/run/$NAME.monitor,server,nowait" "${DBG[@]}")
 
 if [ "$GDBMODE" = 1 ]; then
+    # -daemonize detaches QEMU into its own session, so Ctrl-C inside gdb (which targets the
+    # foreground process group) can't also kill QEMU the way a plain backgrounded `&` would.
     # shellcheck disable=SC2086
-    "${BASE[@]}" -display none -serial "file:$LOG" -s -S $EXTRA < /dev/null &
-    pid=$!
-    echo "$pid" > "build/run/$NAME.pid"
-    echo "QEMU started (pid $pid), paused, listening for gdb on :1234; serial log: $LOG"
+    "${BASE[@]}" -display none -serial "file:$LOG" -s -S -daemonize \
+        -pidfile "build/run/$NAME.pid" $EXTRA < /dev/null
+    echo "QEMU started (pid $(cat "build/run/$NAME.pid")), paused, listening for gdb on :1234; serial log: $LOG"
     exit 0
 fi
 

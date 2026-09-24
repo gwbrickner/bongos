@@ -5,19 +5,26 @@
 # .github/workflows/release.yml (phase <= 15 -> "0.<phase>.<n>", else "1.<phase-15>.<n>").
 set -euo pipefail
 
-clean() { tr -d '\r\n'; }
+# head -n1 takes only the first line (a multi-line branding/name would otherwise get glued into
+# one string); tr -d '\r' handles a CRLF-checked-out file.
+clean() { head -n1 | tr -d '\r'; }
 escape() { sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
 name=$(clean < branding/name | escape)
 version=$(clean < branding/version)
 versionEscaped=$(printf '%s' "$version" | escape)
 
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "gen-branding.sh: branding/version ('$version') isn't X.Y.Z" >&2
+    exit 1
+fi
 major=$(echo "$version" | cut -d. -f1)
 minor=$(echo "$version" | cut -d. -f2)
+# 10#... forces base-10 so a leading zero (e.g. a hypothetical "0.08.0") isn't read as octal.
 if [ "$major" -ge 1 ]; then
-    phase=$((minor + 15))
+    phase=$((10#$minor + 15))
 else
-    phase=$minor
+    phase=$((10#$minor))
 fi
 codename=$(awk -F'\t' -v p="$phase" '$1 == p { print $2 }' branding/codenames.tsv)
 [ -n "$codename" ] || codename="unreleased"

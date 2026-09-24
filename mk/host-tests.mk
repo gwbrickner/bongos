@@ -11,7 +11,7 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 host-tests: $(HOST_TEST_BIN)
 	$(HOST_TEST_BIN)
 
-$(HOST_TEST_BIN): $(HOST_TEST_SRCS) $(HOST_TEST_HDRS) $(BRANDING_HDR)
+$(HOST_TEST_BIN): $(HOST_TEST_SRCS) $(HOST_TEST_HDRS) $(BRANDING_HDR) Makefile mk/host-tests.mk
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -std=c17 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
 		-fno-sanitize-recover=all -I$(HOST_TEST_DIR) -I$(BUILD)/include -o $@ $(HOST_TEST_SRCS)

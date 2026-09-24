@@ -16,6 +16,7 @@ debug: image
 
 gdb: image
 	@[ -f $(IMAGE) ] || { echo "gdb: no image yet -- run 'make image' once M1.2 lands (see ROADMAP.md)"; exit 1; }
+	@nc -z localhost 1234 2>/dev/null && { echo "gdb: port 1234 already in use -- a stale QEMU from another session? kill it first"; exit 1; } || true
 	@tests/harness/run-qemu.sh --image $(IMAGE) --fw uefi --gdb --name gdb-session
 	@pid=$$(cat build/run/gdb-session.pid 2>/dev/null); \
 	trap 'kill $$pid 2>/dev/null' EXIT INT TERM; \

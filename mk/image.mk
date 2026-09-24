@@ -4,7 +4,7 @@
 # this fragment must be replaced with a real build rule rather than silently no-op forever --
 # the $(error) below catches that.
 IMAGE := $(BUILD)/bongos.img
-BOOT_SOURCES := $(wildcard boot/uefi/*.c boot/common/*.c)
+BOOT_SOURCES := $(shell find boot/uefi boot/common -name '*.c' 2>/dev/null)
 
 .PHONY: image
 image: branding

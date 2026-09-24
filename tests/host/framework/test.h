@@ -1,9 +1,10 @@
 /* Tiny assert-based test framework for host-side unit tests (ARCHITECTURE §23: pure logic --
  * allocators' algorithms, bongfs core, crypto vectors, parsers). Tests self-register via a
  * constructor, so a new TEST() needs no separate registration list. An assert that fails
- * returns from the enclosing test immediately, so a later assert can't run against state a
+ * returns from its enclosing function immediately, so a later assert can't run against state a
  * failed precondition never established (e.g. dereferencing a pointer ASSERT_TRUE just
- * rejected). */
+ * rejected). Used inside a helper called from a TEST(), it only returns from that helper --
+ * the failure is still recorded, but the test body keeps running after the helper returns. */
 #ifndef HOST_TEST_H
 #define HOST_TEST_H
 
@@ -42,11 +43,19 @@ void hostTestRegister(TestCase *tc);
         }                                                                                          \
     } while (0)
 
+/* Evaluates a and b exactly once into their own types (__auto_type; a clang/gcc extension) so
+ * an operand with side effects (a counter, an allocator call) isn't re-run for the failure
+ * message with a different result. The message casts to long long for printing, which is
+ * exact for anything that fits (the common case: sizes, counts, small pointers) and only
+ * approximate for huge unsigned values or floats -- good enough for a diagnostic, not used for
+ * the pass/fail decision itself. */
 #define ASSERT_EQ(a, b)                                                                            \
     do {                                                                                           \
-        if (!((a) == (b))) {                                                                       \
+        __auto_type a_ = (a);                                                                      \
+        __auto_type b_ = (b);                                                                      \
+        if (!(a_ == b_)) {                                                                         \
             fprintf(stderr, "  FAIL %s:%d: ASSERT_EQ(%s, %s) -> %lld != %lld\n", __FILE__,         \
-                    __LINE__, #a, #b, (long long)(a), (long long)(b));                             \
+                    __LINE__, #a, #b, (long long)a_, (long long)b_);                               \
             hostTestFailures++;                                                                    \
             return;                                                                                \
         }                                                                                          \
