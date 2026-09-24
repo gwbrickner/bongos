@@ -1,5 +1,6 @@
 #include "gpt.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,16 +8,22 @@
 
 #include "crc32.h"
 
+_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+               "gpt.c writes on-disk fields with the host's native byte order; the build host "
+               "must be little-endian (ARCHITECTURE §1.1)");
+
 const GptGuid GPT_GUID_ESP = {
     0xC12A7328, 0xF81F, 0x11D2, {0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B}};
 
 const GptGuid GPT_GUID_BIOS_BOOT = {
     0x21686148, 0x6449, 0x6E6F, {0x74, 0x4E, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49}};
 
-/* D-056: bongfs root partition type, minted for this project with a host CSPRNG-generated GUID
- * (not a version-4 UUID derivation of anything -- there's no upstream to derive it from). */
-const GptGuid GPT_GUID_BONGFS_ROOT = {
-    0xFFFFBF91, 0xC780, 0x49F6, {0x9A, 0x07, 0xE2, 0x0A, 0x65, 0xA6, 0x5B, 0x96}};
+/* D-056: generated with `cat /proc/sys/kernel/random/uuid` (the kernel's own RFC 4122 v4
+ * generator), one call per constant. */
+const GptGuid GPT_TYPE_GUID_ROOT = {
+    0xD873F840, 0x6583, 0x4B38, {0x8C, 0x8B, 0xFA, 0x27, 0xF8, 0x33, 0x2D, 0x8D}};
+const GptGuid GPT_TYPE_GUID_SWAP = {
+    0x1FC85B55, 0x4413, 0x4D12, {0x8C, 0x5F, 0xAD, 0x7B, 0xFA, 0xA6, 0xCB, 0x9D}};
 
 void gptRandomGuid(GptGuid *out) {
     FILE *urandom = fopen("/dev/urandom", "rb");
@@ -155,11 +162,29 @@ uint64_t gptLastUsableLba(uint64_t totalSectors) {
 
 void gptWriteLayout(uint8_t *image, uint64_t totalSectors, const GptGuid *diskGuid,
                     const GptPartitionSpec *partitions, size_t partitionCount) {
+    /* A disk with no room for the primary + backup metadata at all is a caller bug, not a user
+     * mistake to report nicely -- main.c's own --size-mib validation is what a bad CLI argument
+     * hits first. gptLastUsableLba() would silently underflow past this point. */
+    assert(totalSectors >= 2 * (2 + GPT_PARTITION_ARRAY_SECTORS) &&
+           "totalSectors too small to hold the primary and backup GPT metadata");
+    assert(partitionCount <= GPT_PARTITION_ENTRY_COUNT);
+
     uint64_t primaryArrayLba = 2;
     uint64_t firstUsableLba = gptFirstUsableLba();
     uint64_t backupHeaderLba = totalSectors - 1;
     uint64_t backupArrayLba = backupHeaderLba - GPT_PARTITION_ARRAY_SECTORS;
     uint64_t lastUsableLba = gptLastUsableLba(totalSectors);
+
+    for (size_t i = 0; i < partitionCount; i++) {
+        assert(partitions[i].startLba <= partitions[i].endLba && "partition start after end");
+        assert(partitions[i].startLba >= firstUsableLba && partitions[i].endLba <= lastUsableLba &&
+               "partition outside the usable LBA range");
+        for (size_t j = 0; j < i; j++) {
+            assert((partitions[i].endLba < partitions[j].startLba ||
+                    partitions[i].startLba > partitions[j].endLba) &&
+                   "overlapping partitions");
+        }
+    }
 
     uint8_t *array = malloc((size_t)GPT_PARTITION_ENTRY_COUNT * GPT_PARTITION_ENTRY_SIZE);
     if (array == NULL) {

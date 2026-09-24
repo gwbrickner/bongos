@@ -31,8 +31,18 @@ extern const GptGuid GPT_GUID_ESP;
 /* BIOS boot partition (the GRUB-originated convention ARCHITECTURE §5.1 reuses for our own
  * stage2). */
 extern const GptGuid GPT_GUID_BIOS_BOOT;
-/* bongfs root partition type, minted for this project (D-056). */
-extern const GptGuid GPT_GUID_BONGFS_ROOT;
+/* D-056: the OS-root-partition *role*, not a filesystem identifier -- a partition with this type
+ * holds whatever ARCHITECTURE §5.1/§15.2 says root looks like right now (currently: a bongfs
+ * superblock, or, once full-disk encryption exists, a crypt header wrapping one; identify the
+ * actual contents by their own magic, never by this GUID). A partition with this type and no
+ * recognized magic is unformatted -- never treat that as corruption, and never auto-format it.
+ * The kernel finds root by scanning for this type GUID only on the disk whose GPT DiskGUID
+ * matches BootInfo.bootDiskGuid, never by scanning every disk. */
+extern const GptGuid GPT_TYPE_GUID_ROOT;
+/* D-056: same role-not-format reasoning, for the optional swap partition (ARCHITECTURE §5.1 row
+ * 4). Not used by mkimage yet (swap arrives in M7.8); minted alongside GPT_TYPE_GUID_ROOT so both
+ * format constants get owner review together. */
+extern const GptGuid GPT_TYPE_GUID_SWAP;
 
 /* Fills `out` with a random, RFC 4122 version-4 GUID from the OS CSPRNG (/dev/urandom). Used for
  * the disk GUID and each partition's unique GUID -- never for a partition *type* GUID, which

@@ -2,18 +2,32 @@
  * with the host's own clang (ARCHITECTURE §0's "host-side tools" exception covers mkfs.fat and
  * mtools, which this shells out to for the FAT32 ESP; the GPT/MBR layout itself is our own code,
  * see gpt.c). */
+/* -std=c17 alone hides glibc's POSIX declarations (setenv, pwrite, ftruncate); this is host
+ * tooling, not the freestanding kernel/loader C17 subset ARCHITECTURE §4 restricts. */
+#define _DEFAULT_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "branding.h"
 #include "gpt.h"
 
 #define SECTOR_SIZE 512
 #define MIB         (1024ULL * 1024ULL)
 #define ALIGN_LBA   2048ULL /* 1 MiB, the conventional GPT partition alignment */
+/* A degenerate (near-zero) root partition is a config error worth catching here rather than
+ * shipping an image whose root can't hold a boot.cfg-sized initrd, let alone bongfs later. */
+#define MIN_ROOT_SECTORS 2048ULL /* 1 MiB */
+/* FAT32 needs >= 65525 data clusters (else mkfs.fat legally formats it as FAT16 instead, which a
+ * strict UEFI implementation may refuse to boot from). This is a coarse safety floor, not an
+ * exact bound -- mkfs.fat picks the cluster size itself and its own error is the real check --
+ * but it catches an obviously-too-small --esp-mib before spending a build cycle on mkfs.fat's
+ * error message. ARCHITECTURE §5.1's 256 MiB default stays comfortably above it. */
+#define MIN_ESP_MIB 33ULL
 
 typedef struct {
     const char *output;
@@ -88,6 +102,20 @@ static int parseOptions(int argc, char **argv, Options *opt) {
         fprintf(stderr, "mkimage: --output and --efi are required\n");
         return -1;
     }
+    if (opt->biosBootMib < 1) {
+        fprintf(stderr, "mkimage: --bios-boot-mib must be at least 1\n");
+        return -1;
+    }
+    if (opt->espMib < MIN_ESP_MIB) {
+        fprintf(stderr, "mkimage: --esp-mib must be at least %llu (FAT32's 65525-cluster floor)\n",
+                (unsigned long long)MIN_ESP_MIB);
+        return -1;
+    }
+    if (opt->sizeMib > (UINT64_MAX / MIB)) {
+        fprintf(stderr, "mkimage: --size-mib %llu overflows a byte count\n",
+                (unsigned long long)opt->sizeMib);
+        return -1;
+    }
     return 0;
 }
 
@@ -117,12 +145,26 @@ static void runCommand(char *const argv[]) {
 }
 
 /* Builds a FAT32 ESP image at `espPath`, `espSectors` sectors, containing /EFI/BOOT/BOOTX64.EFI
- * (from opt->efi) and, if given, /bong/{boot.cfg,kernel.elf,initrd.img}. */
-static void buildEspImage(const Options *opt, const char *espPath, uint64_t espSectors) {
+ * (from opt->efi) and, if given, /bong/{boot.cfg,kernel.elf,initrd.img}. `espStart` becomes the
+ * partition's hidden-sector count (-h): some tools, and our own future BIOS FAT32 reader, read
+ * that field rather than assuming 0. */
+static void buildEspImage(const Options *opt, const char *espPath, uint64_t espSectors,
+                          uint64_t espStart) {
+    /* mtools otherwise refuses to touch a file whose apparent geometry doesn't match its BPB,
+     * which our own tooling (and QEMU's raw block device) doesn't care about. */
+    setenv("MTOOLS_SKIP_CHECK", "1", 1);
+
+    /* mkfs.fat's -C creates the target file, but refuses if one already exists -- clear out a
+     * stale file left by a prior interrupted run first. */
+    unlink(espPath);
+
     uint64_t espKib = (espSectors * SECTOR_SIZE) / 1024;
     char kibArg[32];
     snprintf(kibArg, sizeof(kibArg), "%llu", (unsigned long long)espKib);
-    char *mkfsArgv[] = {"mkfs.fat",      "-C",   "-F", "32", "-n", "EFI_SYSTEM",
+    char hiddenArg[32];
+    snprintf(hiddenArg, sizeof(hiddenArg), "%llu", (unsigned long long)espStart);
+    char *mkfsArgv[] = {"mkfs.fat",      "-C",   "-F",      "32", "-S",
+                        "512",           "-h",   hiddenArg, "-n", "EFI_SYSTEM",
                         (char *)espPath, kibArg, NULL};
     runCommand(mkfsArgv);
 
@@ -159,6 +201,24 @@ static uint64_t alignUp(uint64_t lba, uint64_t alignment) {
     return ((lba + alignment - 1) / alignment) * alignment;
 }
 
+/* Writes `length` bytes at `offset`; exits on any short write or I/O error, since a partial
+ * image is worse than no image. */
+static void pwriteExact(int fd, const void *buf, size_t length, off_t offset) {
+    const uint8_t *p = buf;
+    size_t done = 0;
+    while (done < length) {
+        ssize_t n = pwrite(fd, p + done, length - done, offset + (off_t)done);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            fprintf(stderr, "mkimage: pwrite failed: %s\n", strerror(errno));
+            exit(1);
+        }
+        done += (size_t)n;
+    }
+}
+
 int main(int argc, char **argv) {
     Options opt;
     if (parseOptions(argc, argv, &opt) != 0) {
@@ -176,19 +236,25 @@ int main(int argc, char **argv) {
     uint64_t espEnd = espStart + espSectors - 1;
     uint64_t rootStart = alignUp(espEnd + 1, ALIGN_LBA);
     uint64_t lastUsable = gptLastUsableLba(totalSectors);
-    if (rootStart > lastUsable) {
+    /* Root fills whatever is left (ARCHITECTURE §5.1), aligned down to a 1 MiB boundary like
+     * every other partition edge -- an unaligned end wastes nothing functionally, but every real
+     * partitioning tool (and bongfs's own 4 KiB block / XTS data-unit alignment later, ARCHITECTURE
+     * §15.1/§15.2) expects it, so `sgdisk -v` stays clean. */
+    uint64_t rootEnd = ((lastUsable + 1) / ALIGN_LBA) * ALIGN_LBA - 1;
+    if (rootStart + MIN_ROOT_SECTORS > rootEnd + 1) {
         fprintf(stderr,
                 "mkimage: --size-mib %llu is too small for a %llu MiB BIOS boot partition + "
-                "%llu MiB ESP\n",
+                "%llu MiB ESP + a usable root partition\n",
                 (unsigned long long)opt.sizeMib, (unsigned long long)opt.biosBootMib,
                 (unsigned long long)opt.espMib);
         return 1;
     }
-    uint64_t rootEnd = lastUsable; /* root fills whatever is left, ARCHITECTURE §5.1 */
 
+    char outputTmpPath[4096];
+    snprintf(outputTmpPath, sizeof(outputTmpPath), "%s.tmp", opt.output);
     char espTmpPath[4096];
     snprintf(espTmpPath, sizeof(espTmpPath), "%s.esp.tmp", opt.output);
-    buildEspImage(&opt, espTmpPath, espSectors);
+    buildEspImage(&opt, espTmpPath, espSectors, espStart);
 
     FILE *espFile = fopen(espTmpPath, "rb");
     if (espFile == NULL) {
@@ -204,6 +270,10 @@ int main(int argc, char **argv) {
     fclose(espFile);
     unlink(espTmpPath);
 
+    /* Build the full metadata region (protective MBR + primary header/array) plus the backup
+     * region in one contiguous in-memory image, same as before; only the final write below
+     * changed, to leave the (large, empty) BIOS boot and root partitions as holes on disk rather
+     * than writing real zero bytes across the whole 2 GiB. */
     uint8_t *image = calloc((size_t)totalSectors, SECTOR_SIZE);
     if (image == NULL) {
         fprintf(stderr, "mkimage: out of memory allocating a %llu MiB image\n",
@@ -217,32 +287,52 @@ int main(int argc, char **argv) {
     gptRandomGuid(&espGuid);
     gptRandomGuid(&rootGuid);
 
+    char rootName[36];
+    snprintf(rootName, sizeof(rootName), "%s root", BRANDING_NAME);
+
     GptPartitionSpec partitions[3] = {
         {GPT_GUID_BIOS_BOOT, biosBootGuid, biosBootStart, biosBootEnd, "BIOS_BOOT"},
         {GPT_GUID_ESP, espGuid, espStart, espEnd, "EFI_SYSTEM"},
-        {GPT_GUID_BONGFS_ROOT, rootGuid, rootStart, rootEnd, "bongOS root"},
+        {GPT_TYPE_GUID_ROOT, rootGuid, rootStart, rootEnd, rootName},
     };
     gptWriteLayout(image, totalSectors, &diskGuid, partitions, 3);
-
     memcpy(image + espStart * SECTOR_SIZE, espData, (size_t)(espSectors * SECTOR_SIZE));
     free(espData);
     /* The BIOS boot and root partitions stay zeroed: BIOS stage1/stage2 land in M2.5, and root
      * has no filesystem until bongfs (M7.6-M7.7) -- ARCHITECTURE §5.1 says the initrd stands in
      * for root until then. */
 
-    FILE *out = fopen(opt.output, "wb");
-    if (out == NULL) {
-        fprintf(stderr, "mkimage: cannot create %s: %s\n", opt.output, strerror(errno));
+    unlink(outputTmpPath);
+    int fd = open(outputTmpPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        fprintf(stderr, "mkimage: cannot create %s: %s\n", outputTmpPath, strerror(errno));
         return 1;
     }
-    if (fwrite(image, 1, (size_t)(totalSectors * SECTOR_SIZE), out) !=
-        (size_t)(totalSectors * SECTOR_SIZE)) {
-        fprintf(stderr, "mkimage: short write to %s\n", opt.output);
-        fclose(out);
+    if (ftruncate(fd, (off_t)(totalSectors * SECTOR_SIZE)) != 0) {
+        fprintf(stderr, "mkimage: ftruncate %s failed: %s\n", outputTmpPath, strerror(errno));
         return 1;
     }
-    fclose(out);
+
+    uint64_t backupArrayLba = lastUsable + 1;
+    uint64_t backupRegionSectors = totalSectors - backupArrayLba; /* array + backup header */
+    uint64_t primaryMetadataSectors = gptFirstUsableLba();        /* protective MBR + LBA1-33 */
+
+    pwriteExact(fd, image, (size_t)(primaryMetadataSectors * SECTOR_SIZE), 0);
+    pwriteExact(fd, image + espStart * SECTOR_SIZE, (size_t)(espSectors * SECTOR_SIZE),
+                (off_t)(espStart * SECTOR_SIZE));
+    pwriteExact(fd, image + backupArrayLba * SECTOR_SIZE,
+                (size_t)(backupRegionSectors * SECTOR_SIZE), (off_t)(backupArrayLba * SECTOR_SIZE));
     free(image);
+
+    if (close(fd) != 0) {
+        fprintf(stderr, "mkimage: close %s failed: %s\n", outputTmpPath, strerror(errno));
+        return 1;
+    }
+    if (rename(outputTmpPath, opt.output) != 0) {
+        fprintf(stderr, "mkimage: rename %s -> %s failed: %s\n", outputTmpPath, opt.output,
+                strerror(errno));
+        return 1;
+    }
 
     printf("mkimage: wrote %s (%llu MiB): BIOS boot [%llu-%llu], ESP [%llu-%llu], root "
            "[%llu-%llu]\n",

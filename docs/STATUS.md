@@ -18,10 +18,11 @@ M1.2: UEFI headers + hello loader + disk image (`needs-owner`), branch
   `gdb` wired to the existing boot harness (no-op until M1.2 produces a bootable image).
 
 ## Next step
-M1.2's code is written and `make test`/`make format-check` pass locally (see
-`docs/logs/M1.2.md`'s 10:30 entry for the full list). The `architect` subagent is reviewing the
-on-disk-format pieces (GPT/mkimage, D-056, D-057) before this locks in -- next: act on its
-findings, run the `reviewer` subagent on the full diff, fix Critical findings, then open the PR.
+M1.2's code is written; the `architect` subagent reviewed the on-disk-format pieces (GPT/mkimage,
+D-056, D-057), found 2 Critical + 6 Should-fix issues, and all are fixed (see
+`docs/logs/M1.2.md`'s 11:15 entry). `make image`/`test`/`test-full`/`format-check` all pass;
+`sgdisk -v` reports the rebuilt image clean. Next: run the `reviewer` subagent on the full
+milestone diff, fix any Critical findings, then open the PR (`needs-owner: yes`).
 
 ## Blockers
 _(none)_

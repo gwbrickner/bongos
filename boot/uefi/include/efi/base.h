@@ -5,6 +5,7 @@
 #define EFI_BASE_H
 
 #include <stdbool.h>
+#include <stddef.h> /* NULL */
 #include <stdint.h>
 
 /* The loader is built with --target=x86_64-unknown-windows (ARCHITECTURE §3), which already

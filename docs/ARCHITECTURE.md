@@ -173,12 +173,15 @@ GPT disk:
 | LBA 0 | Protective MBR | boot-code area (440 B) = **BIOS stage1**; stage2 LBA/length patched in by mkimage |
 | 1 | BIOS boot partition, 1 MiB, type `21686148-6449-6E6F-744E-656564454649` | **BIOS stage2**, raw |
 | 2 | EFI System Partition, FAT32, 256 MiB | `/EFI/BOOT/BOOTX64.EFI`, `/bong/boot.cfg`, `/bong/kernel.elf`, `/bong/initrd.img` |
-| 3 | Root, bongfs (custom type GUID recorded in DECISIONS.md) | the system; until bongfs exists the root is the initrd |
-| 4 | Swap (optional, custom type GUID) | swap space |
+| 3 | Root (type GUID recorded in D-056: a partition *role*, not a filesystem -- identify actual contents by their own on-disk magic) | the system; until bongfs exists the root is the initrd |
+| 4 | Swap (optional; type GUID also recorded in D-056) | swap space |
 
 - The ESP is mounted at `/boot`.
 - The initrd is a **cpio newc** archive containing early userspace and `/lib/modules/*.kmod`
   plus `modules.idx`.
+- The image assumes 512-byte logical sectors throughout (mkimage's LBA math, GPT header fields).
+  USB media is commonly 512e (512-byte logical, larger physical); a loader or driver that reads
+  block size must take it from the device (`BlockIo->Media` under UEFI) rather than assuming 512.
 
 ### 5.2 `boot.cfg`
 This is a plain `key = value` file with `[entry]` sections that make up the boot menu.
