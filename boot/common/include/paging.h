@@ -1,4 +1,4 @@
-/* The loader's page-table builder (ARCHITECTURE §5.4/§6.1/§6.3, D-061). Builds the 4-level page
+/* The loader's page-table builder (ARCHITECTURE §5.4/§6.1/§6.3). Builds the 4-level page
  * tables the kernel is handed at entry: the HHDM, the kernel image mapping, and the trampoline's
  * identity page. Runs before ExitBootServices, where every physical address is still directly
  * usable as a pointer (bootPhysToPtr, bootmem.h). */
@@ -26,6 +26,9 @@
 /* Leaf flag combinations (the table in the M1.3 design doc). Non-leaf entries (PML4E/PDPTE/PDE
  * used as a pointer to the next level) always get P|W only -- never NX/global -- written directly
  * by ptGetOrAllocTable() in paging.c, not through these macros. */
+/* Uniformly RW-/NX: the HHDM also aliases the kernel's own text/rodata as writable, which is a
+ * known gap (out of scope here) -- making that alias read-only is M2.3's job, once something
+ * actually needs a non-uniform HHDM. */
 #define PT_FLAGS_HHDM       (PT_P | PT_W | PT_NX | PT_G)
 #define PT_FLAGS_KERNEL_RX  (PT_P | PT_G)
 #define PT_FLAGS_KERNEL_RO  (PT_P | PT_G | PT_NX)
@@ -47,10 +50,12 @@ BootStatus ptInit(PtBuilder *b, uint64_t poolPhys, uint32_t poolPages, bool has1
 
 /* Maps `size` bytes at `va` to `pa`, using the largest page size the alignment/size/has1G allow
  * when `allowLarge` is set (never straddling a leaf boundary), or 4 KiB pages when it isn't
- * (§6.3: the kernel image is always 4K-mapped). Every leaf gets exactly `leafFlags`. Returns
- * BOOT_ERR_PT_CONFLICT if a mapping already covers part of the range (this builder never
- * overwrites or coalesces an existing entry) or BOOT_ERR_NO_MEMORY if the pool runs out. `size`,
- * `va`, and `pa` must already be 4 KiB-aligned. No locks, boot-time or host-test only. */
+ * (§6.3: the kernel image is always 4K-mapped). Every leaf gets exactly `leafFlags`. `size`, `va`,
+ * and `pa` must already be 4 KiB-aligned -- returns BOOT_ERR_PT_UNALIGNED if not (a misaligned
+ * `size` would otherwise underflow the loop counter and keep mapping until the pool is exhausted).
+ * Returns BOOT_ERR_PT_CONFLICT if a mapping already covers part of the range (this builder never
+ * overwrites or coalesces an existing entry) or BOOT_ERR_NO_MEMORY if the pool runs out. No locks,
+ * boot-time or host-test only. */
 BootStatus ptMapRange(PtBuilder *b, uint64_t va, uint64_t pa, uint64_t size, uint64_t leafFlags,
                       bool allowLarge);
 

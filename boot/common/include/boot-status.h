@@ -18,10 +18,13 @@ typedef enum {
     BOOT_ERR_MEMMAP_CAPACITY = -9,
     BOOT_ERR_MEMMAP_OVERLAY = -10,
     BOOT_ERR_CFG = -11,
-    /* Deviation from the architect's design (D-061): the design's BootStatus list has no code for
-     * "this virtual address isn't mapped", which ptLookup() (paging.c) needs to report distinctly
-     * from a real conflict. Added here rather than overloading an unrelated code. */
+    /* Addition beyond the architect's original design: the design's BootStatus list has no code
+     * for "this virtual address isn't mapped", which ptLookup() (paging.c) needs to report
+     * distinctly from a real conflict. Added here rather than overloading an unrelated code. */
     BOOT_ERR_NOT_MAPPED = -12,
+    /* Also an addition: ptMapRange() needs to report a misaligned va/pa/size distinctly from a
+     * real conflict (mapping over an existing entry). */
+    BOOT_ERR_PT_UNALIGNED = -13,
 } BootStatus;
 
 /* Returns a static, human-readable string for `s` (never NULL, even for an unrecognized value).

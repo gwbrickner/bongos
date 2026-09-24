@@ -163,6 +163,33 @@ TEST(elfParseRejectsSegmentOutsideKernelWindow) {
     ASSERT_EQ(elfParse(buf, sizeof(buf), &img), BOOT_ERR_ELF_RANGE);
 }
 
+TEST(elfParseRejectsSegmentAtOrAboveKernelWindowEnd) {
+    uint8_t buf[TEST_ELF_BUF_SIZE];
+    /* vaddr == BOOTINFO_KERNEL_WINDOW_END: entirely outside the window (the window is
+     * half-open, [BASE, END)), must be rejected outright rather than accepted because
+     * END - vaddr happens to be 0. */
+    TestPhdr phdrs[1] = {{PT_LOAD_T, ELF_PF_R | ELF_PF_X, 0x2000, BOOTINFO_KERNEL_WINDOW_END,
+                          BOOTINFO_KERNEL_WINDOW_END, 16, 0x1000, 0x1000}};
+    buildElf(buf, BOOTINFO_KERNEL_WINDOW_END, phdrs, 1);
+
+    ElfImage img;
+    ASSERT_EQ(elfParse(buf, sizeof(buf), &img), BOOT_ERR_ELF_RANGE);
+}
+
+TEST(elfParseRejectsSegmentWhoseEndWrapsAroundTheWindowCheck) {
+    uint8_t buf[TEST_ELF_BUF_SIZE];
+    /* vaddr is far above the window (near 2^64), memsz=0x2000: BOOTINFO_KERNEL_WINDOW_END -
+     * vaddr underflows to a huge unsigned value if vaddr >= END isn't rejected first, which
+     * would make `memsz > (huge value)` false and wrongly accept the segment. */
+    uint64_t vaddr = 0xFFFFFFFFFFFFF000ULL;
+    TestPhdr phdrs[1] = {
+        {PT_LOAD_T, ELF_PF_R | ELF_PF_X, 0x2000, vaddr, vaddr, 0x2000, 0x2000, 0x1000}};
+    buildElf(buf, vaddr, phdrs, 1);
+
+    ElfImage img;
+    ASSERT_EQ(elfParse(buf, sizeof(buf), &img), BOOT_ERR_ELF_RANGE);
+}
+
 TEST(elfParseRejectsUnalignedVaddr) {
     uint8_t buf[TEST_ELF_BUF_SIZE];
     TestPhdr phdrs[1] = {

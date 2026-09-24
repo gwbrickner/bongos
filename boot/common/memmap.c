@@ -50,6 +50,9 @@ static int memMapRoundInput(const MemMapInput *r, uint64_t *outBase, uint64_t *o
     uint64_t base, roundedEnd;
     if (r->type == BOOT_MEM_USABLE) {
         base = bootAlignUp(r->base, MEM_MAP_PAGE_SIZE);
+        if (base < r->base) {
+            return 0; /* overflow rounding up near 2^64 wrapped to a bogus [0, X) region */
+        }
         roundedEnd = bootAlignDown(end, MEM_MAP_PAGE_SIZE);
     } else {
         base = bootAlignDown(r->base, MEM_MAP_PAGE_SIZE);
@@ -169,11 +172,17 @@ BootStatus memMapCheckOverlay(uint64_t base, uint64_t length, const MemMapInput 
         return BOOT_OK;
     }
     uint64_t end = base + length;
+    if (end < base) { /* overflow: no real range can wrap the address space */
+        return BOOT_ERR_MEMMAP_OVERLAY;
+    }
     for (uint32_t i = 0; i < nEfi; i++) {
         if (efiRegions[i].type != 1 && efiRegions[i].type != 2) {
             continue;
         }
         uint64_t regionEnd = efiRegions[i].base + efiRegions[i].length;
+        if (regionEnd < efiRegions[i].base) {
+            continue; /* a malformed input region can't contain anything */
+        }
         if (efiRegions[i].base <= base && end <= regionEnd) {
             return BOOT_OK;
         }

@@ -44,7 +44,11 @@ EFI_STATUS EFIAPI efiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     EFI_STATUS status = handoffRun(ImageHandle, SystemTable, loaderTsc);
     /* handoffRun() only returns on failure -- success ends in a jump to the kernel that never
      * comes back. Whether ConOut/BootServices are still usable depends on how far it got before
-     * failing, so report over COM1 only (always safe) and let the harness/human read the log. */
+     * failing, so report over COM1 only (always safe) and let the harness/human read the log.
+     * Design note (out of scope for this milestone): a pre-ExitBootServices failure could instead
+     * `return status` here and let the firmware fall through to its next boot option, rather than
+     * halting -- not done, since a silent fallback to another OS/entry could be more confusing
+     * than a clear halt with a logged reason. */
     loaderSerialWriteString("loader: handoff failed, halting\n");
     (void)status;
     loaderHalt();

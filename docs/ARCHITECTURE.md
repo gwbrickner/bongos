@@ -207,6 +207,7 @@ The menu is rendered on the framebuffer and on serial, and uses the arrow keys p
 ```c
 #define BOOTINFO_MAGIC   0x544F4F42474E4F42ULL   /* "BONGBOOT" */
 #define BOOTINFO_VERSION 1                         /* bump on any layout change */
+#define BOOTINFO_CMDLINE_MAX 4096                  /* bytes, including the NUL */
 
 typedef enum { BOOT_METHOD_UEFI = 1, BOOT_METHOD_BIOS = 2 } BootMethod;
 
@@ -241,19 +242,25 @@ typedef struct BootInfo {
 ```
 
 All addresses are physical. The kernel reads them through the HHDM. If the kernel sees a
-different `version`, it refuses to boot and says so on serial and on the framebuffer.
+different `version`, it refuses to boot and says so on serial and on the framebuffer. A zero
+value means "not provided" for `fb.phys`, `initrdPhys`/`initrdSize`, `rsdpPhys`,
+`efiSystemTablePhys`, and both GUID fields (D-064).
 
 ### 5.4 Machine state at kernel entry (both loaders)
 - **Mode:** long mode with loader-built page tables:
-  - the direct map of all RAM plus the ACPI and framebuffer ranges at `hhdmBase =
-    0xFFFF800000000000`, using 1 GiB pages (or 2 MiB pages without PDPE1GB)
+  - the direct map of every RAM-backed EFI descriptor type the loader sees pre-ExitBootServices
+    (Loader{Code,Data}, BootServices{Code,Data}, Runtime{Code,Data}, Conventional, ACPIReclaim,
+    ACPINVS), clipped at the 64 TiB HHDM window, at `hhdmBase = 0xFFFF800000000000`, using 1 GiB
+    pages (or 2 MiB pages without PDPE1GB); MMIO, reserved, persistent, and unaccepted memory are
+    never HHDM-mapped (D-059)
   - the kernel image at `kernelVirtBase` (slid when KASLR is on)
   - an identity mapping of the loader's trampoline page only; the kernel removes it
 - **Control registers:** `EFER.NXE=1`, `CR0.WP=1`, `CR4.PAE|PGE`. Interrupts are disabled.
 - **Registers:** `rdi` holds the BootInfo virtual address (in the HHDM). `rsp` points to a
   64 KiB boot stack that is marked `LOADER_RECLAIM`. The kernel switches to its own stack
   before reclaiming it.
-- **GDT/IDT:** the loader's temporary ones. The kernel installs its own first thing.
+- **GDT/IDT:** the firmware's own, left in place (now unmapped under the loader's page tables).
+  The kernel installs its own first thing.
 
 ### 5.5 UEFI loader flow
 1. Get the LoadedImage and SimpleFileSystem protocols, then read `/bong/boot.cfg`.

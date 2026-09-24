@@ -20,9 +20,13 @@ typedef struct KtestCase {
 
 /* Defines and registers a test case named `testName` (a bare identifier, not a string). The body
  * follows the macro like a function body and receives `ktestCtx` implicitly (used by
- * KTEST_ASSERT*). Registration is a `.ktests`-section pointer to a `static`... no: the KtestCase
- * itself is non-static (so its address is stable and the section entry, itself static, can point
- * to it) -- see kernel/test/bootinfo_test.c for example usage. */
+ * KTEST_ASSERT*). Registration works by pointer, not by embedding the struct:
+ * `ktestCase_##testName` itself is a plain (non-static) `const KtestCase`, with external linkage
+ * and a real address, and the `.ktests` section holds a `static const KtestCase *const` pointing at
+ * it. Each translation unit's section entry is therefore just one pointer-sized, pointer-aligned
+ * slot -- entries from different object files never get padding between them, which is what keeps
+ * the linker-array walk
+ * (`ktestsStart`/`ktestsEnd`, D-063) safe -- see kernel/test/bootinfo_test.c for example usage. */
 #define KTEST(testName)                                                                            \
     static void ktestFn_##testName(KtestCtx *ktestCtx);                                            \
     const KtestCase ktestCase_##testName = {#testName, ktestFn_##testName, __FILE__, __LINE__, 0}; \

@@ -1,6 +1,7 @@
 /* See format.h. */
 #include "format.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 static size_t appendChar(char *buf, size_t size, size_t pos, char c) {
@@ -56,7 +57,8 @@ static size_t appendInt(char *buf, size_t size, size_t pos, int64_t value, int w
 
 int kvsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
     size_t pos = 0;
-    for (const char *p = fmt; *p != '\0'; p++) {
+    const char *p = fmt;
+    for (; *p != '\0'; p++) {
         if (*p != '%') {
             pos = appendChar(buf, size, pos, *p);
             continue;
@@ -127,7 +129,17 @@ int kvsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
         }
     }
     if (size > 0) {
-        buf[pos < size ? pos : size - 1] = '\0';
+        bool truncated = pos >= size;
+        buf[truncated ? size - 1 : pos] = '\0';
+        /* A truncated line silently drops its trailing '\n' (the byte that would hold it gets
+         * overwritten by the NUL above), which visually joins the next line onto it in the serial
+         * log -- easy to misread as one garbled line rather than two separate ones. If the format
+         * string itself ends in '\n' (true for every wire-protocol line this kernel emits), force
+         * it back in so a truncated line is still terminated. */
+        if (truncated && size >= 2 && p != fmt && p[-1] == '\n') {
+            buf[size - 2] = '\n';
+            buf[size - 1] = '\0';
+        }
     }
     return (int)pos;
 }

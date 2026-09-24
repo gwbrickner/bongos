@@ -115,12 +115,34 @@ static bool bootRangeInsideType(const BootMemRegion *regions, uint32_t count, ui
         return true;
     }
     uint64_t end = base + length;
+    if (end < base) { /* overflow: no real range can wrap the address space */
+        return false;
+    }
     for (uint32_t i = 0; i < count; i++) {
         if (regions[i].type != type) {
             continue;
         }
         uint64_t regionEnd = regions[i].base + regions[i].length;
         if (regions[i].base <= base && end <= regionEnd) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Finds the single region of `type` that contains the single byte at `base` and returns its end
+ * address. Unlike bootRangeInsideType, this doesn't need a length up front -- it's for validating
+ * where a variable-length blob (like a NUL-terminated string) *starts* before touching any of its
+ * bytes, so the caller then knows how far past `base` it's safe to read. */
+static bool bootFindContainingRegionEnd(const BootMemRegion *regions, uint32_t count, uint64_t base,
+                                        uint32_t type, uint64_t *outEnd) {
+    for (uint32_t i = 0; i < count; i++) {
+        if (regions[i].type != type) {
+            continue;
+        }
+        uint64_t regionEnd = regions[i].base + regions[i].length;
+        if (regions[i].base <= base && base < regionEnd) {
+            *outEnd = regionEnd;
             return true;
         }
     }
@@ -145,22 +167,33 @@ Status bootInfoCheckRefs(const BootInfo *bi, const BootMemRegion *regions, uint3
         *why = "cmdlinePhys is zero";
         return STATUS_ERR_INVALID;
     }
+    /* Containment is checked *before* any dereference: a corrupted cmdlinePhys could otherwise
+     * point at a non-canonical or unmapped address, and scanning it for a NUL terminator first
+     * would fault with the null IDT (instant triple fault, no diagnostic). Cap the scan at the
+     * containing region's own end rather than a fixed BOOTINFO_CMDLINE_MAX, so it never reads past
+     * memory the loader actually claimed for it either. */
+    uint64_t cmdlineRegionEnd = 0;
+    if (!bootFindContainingRegionEnd(regions, count, bi->cmdlinePhys, BOOT_MEM_LOADER_RECLAIM,
+                                     &cmdlineRegionEnd)) {
+        *why = "cmdline is not inside a LOADER_RECLAIM region";
+        return STATUS_ERR_INVALID;
+    }
+    uint64_t cmdlineMaxScan = cmdlineRegionEnd - bi->cmdlinePhys;
+    if (cmdlineMaxScan > BOOTINFO_CMDLINE_MAX) {
+        cmdlineMaxScan = BOOTINFO_CMDLINE_MAX;
+    }
     const char *cmdline = (const char *)(uintptr_t)(bi->hhdmBase + bi->cmdlinePhys);
     uint32_t cmdLen = 0;
     bool foundNul = false;
-    for (; cmdLen < BOOTINFO_CMDLINE_MAX; cmdLen++) {
+    for (; (uint64_t)cmdLen < cmdlineMaxScan; cmdLen++) {
         if (cmdline[cmdLen] == '\0') {
             foundNul = true;
             break;
         }
     }
     if (!foundNul) {
-        *why = "cmdline is not NUL-terminated within BOOTINFO_CMDLINE_MAX bytes";
-        return STATUS_ERR_INVALID;
-    }
-    if (!bootRangeInsideType(regions, count, bi->cmdlinePhys, (uint64_t)cmdLen + 1,
-                             BOOT_MEM_LOADER_RECLAIM)) {
-        *why = "cmdline is not inside a LOADER_RECLAIM region";
+        *why = "cmdline is not NUL-terminated within its containing region or "
+               "BOOTINFO_CMDLINE_MAX bytes";
         return STATUS_ERR_INVALID;
     }
 

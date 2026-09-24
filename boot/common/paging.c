@@ -63,6 +63,12 @@ static BootStatus ptWriteLeaf(uint64_t *table, uint32_t idx, uint64_t value) {
 
 BootStatus ptMapRange(PtBuilder *b, uint64_t va, uint64_t pa, uint64_t size, uint64_t leafFlags,
                       bool allowLarge) {
+    /* A misaligned size would underflow the loop counter below (size -= PT_SIZE_4K past zero)
+     * and keep mapping until the pool is exhausted instead of stopping cleanly. */
+    if (((va | pa | size) & (PT_SIZE_4K - 1)) != 0) {
+        return BOOT_ERR_PT_UNALIGNED;
+    }
+
     uint64_t *pml4 = (uint64_t *)bootPhysToPtr(b->pml4Phys);
 
     while (size > 0) {

@@ -7,6 +7,7 @@
 #include "ktest.h"
 #include "panic.h"
 
+#include <arch/cpu.h>
 #include <stdint.h>
 
 #include "drivers/serial/uart16550.h"
@@ -57,6 +58,8 @@ static void kernelPrintMemoryMapSummary(const BootInfo *bi) {
     }
 }
 
+/* No locks; boot-time only (called exactly once, from entry.asm, on the kernel's own boot stack);
+ * never returns. */
 _Noreturn void kernelMain(const BootInfo *bi) {
     serialInit();
     klogInit();
@@ -74,6 +77,12 @@ _Noreturn void kernelMain(const BootInfo *bi) {
 
     liveBootInfo = bi;
     bootInfoCopy = *bi;
+    /* Nothing reads randomSeed out of bootInfoCopy (only the live BootInfo page matters, and only
+     * once a real consumer such as M2.1's CSPRNG init reads it there); don't keep a second
+     * permanent copy of key material sitting around in kernel .data. */
+    for (int i = 0; i < (int)sizeof(bootInfoCopy.randomSeed); i++) {
+        bootInfoCopy.randomSeed[i] = 0;
+    }
     const char *srcCmdline = (const char *)(uintptr_t)(bi->hhdmBase + bi->cmdlinePhys);
     uint32_t i = 0;
     for (; i < BOOTINFO_CMDLINE_MAX - 1 && srcCmdline[i] != '\0'; i++) {
@@ -86,8 +95,5 @@ _Noreturn void kernelMain(const BootInfo *bi) {
     ktestRunFromCmdline(cmdlineCopy); /* never returns if ktest= was present */
 
     klogWrite(KLOG_INFO, "kernel", "init done");
-    for (;;) {
-        __asm__ volatile("cli");
-        __asm__ volatile("hlt");
-    }
+    archHaltForever();
 }

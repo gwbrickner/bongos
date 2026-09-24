@@ -65,6 +65,7 @@ BootStatus bootCfgParse(const char *text, uint64_t textLen, BootCfg *out) {
     out->cmdline[0] = '\0';
     out->hasKernel = false;
     out->hasCmdline = false;
+    out->cmdlineTruncated = false;
 
     const char *p = text;
     const char *fileEnd = text + textLen;
@@ -109,7 +110,10 @@ BootStatus bootCfgParse(const char *text, uint64_t textLen, BootCfg *out) {
                 return st;
             }
         } else if (!out->hasCmdline && cfgStreqBounded(keyStart, keyEnd, "cmdline")) {
-            cfgCopyBounded(valueStart, valueEnd, out->cmdline, sizeof(out->cmdline));
+            uint64_t rawLen = (uint64_t)(valueEnd - valueStart);
+            uint64_t copiedLen =
+                cfgCopyBounded(valueStart, valueEnd, out->cmdline, sizeof(out->cmdline));
+            out->cmdlineTruncated = copiedLen < rawLen;
             out->hasCmdline = true;
         }
         /* Every other key, and a repeated kernel/cmdline, is ignored (first wins; M1.4 adds

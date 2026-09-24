@@ -22,7 +22,7 @@ UEFI_AS := nasm
 # -I$(BUILD)/include: branding.h. -Iboot/common/include: the shared BootInfo/ELF/paging/memmap/
 # boot.cfg headers (ARCHITECTURE §2). -mno-stack-arg-probe: without it, any frame over 4 KiB (the
 # page-table pool bookkeeping and the static memory-map buffers in handoff.c both get close)
-# emits a call to `__chkstk`, which nothing on this freestanding target provides (D-065).
+# emits a call to `__chkstk`, which nothing on this freestanding target provides.
 # -MMD -MP: so editing a header under boot/uefi/include/efi/, boot/common/include/, or
 # branding.h triggers a rebuild of whatever included it, not just editing the .c file itself.
 UEFI_CFLAGS := --target=x86_64-unknown-windows -std=c17 -ffreestanding -fshort-wchar \

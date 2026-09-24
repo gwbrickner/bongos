@@ -1,7 +1,7 @@
 /* BootInfo: the boot handoff ABI (ARCHITECTURE §5.3), shared by boot/uefi, boot/bios (M2.5), and
  * the kernel. Field order and sizes are exactly ARCHITECTURE §5.3's struct; do not reorder fields
- * or add padding without bumping BOOTINFO_VERSION and updating that section in the same PR
- * (D-059). All addresses in this struct are physical; the kernel reaches them through the HHDM. */
+ * or add padding without bumping BOOTINFO_VERSION and updating that section in the same PR.
+ * All addresses in this struct are physical; the kernel reaches them through the HHDM. */
 #ifndef BOOT_COMMON_BOOTINFO_H
 #define BOOT_COMMON_BOOTINFO_H
 

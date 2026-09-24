@@ -110,7 +110,7 @@ BootStatus elfParse(const uint8_t *file, uint64_t fileSize, ElfImage *out) {
         if (ph.offset > fileSize || ph.filesz > fileSize - ph.offset) {
             return BOOT_ERR_ELF_SEGMENT;
         }
-        if ((ph.vaddr % ELF_PAGE_SIZE) != 0) {
+        if ((ph.vaddr & (ELF_PAGE_SIZE - 1)) != 0) {
             return BOOT_ERR_ELF_SEGMENT;
         }
         if ((ph.flags & ELF_PF_R) == 0) {
@@ -119,7 +119,10 @@ BootStatus elfParse(const uint8_t *file, uint64_t fileSize, ElfImage *out) {
         if ((ph.flags & (ELF_PF_W | ELF_PF_X)) == (ELF_PF_W | ELF_PF_X)) {
             return BOOT_ERR_ELF_WX;
         }
-        if (ph.vaddr < BOOTINFO_KERNEL_WINDOW_BASE ||
+        /* Reject vaddr at/beyond the window *before* computing END - vaddr: if vaddr >= END that
+         * subtraction underflows (unsigned wraparound) to a huge value and the memsz check below
+         * would wrongly pass. Order matters here. */
+        if (ph.vaddr < BOOTINFO_KERNEL_WINDOW_BASE || ph.vaddr >= BOOTINFO_KERNEL_WINDOW_END ||
             ph.memsz > BOOTINFO_KERNEL_WINDOW_END - ph.vaddr) {
             return BOOT_ERR_ELF_RANGE;
         }
@@ -174,6 +177,11 @@ BootStatus elfLoad(const ElfImage *img, const uint8_t *file, uint8_t *dest) {
     for (uint32_t i = 0; i < img->segCount; i++) {
         const ElfSegment *s = &img->segs[i];
         uint64_t destOff = s->vaddr - img->linkBase;
+        /* Belt and suspenders against any other miscomputed span: never copy outside the
+         * destination block, even if elfParse's bookkeeping were wrong somehow. */
+        if (destOff > img->span || s->filesz > img->span - destOff) {
+            return BOOT_ERR_ELF_SEGMENT;
+        }
         bootMemcpy(dest + destOff, file + s->offset, s->filesz);
     }
     return BOOT_OK;

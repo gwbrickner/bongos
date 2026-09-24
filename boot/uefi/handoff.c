@@ -63,6 +63,15 @@ static bool handoffCpuCheck(bool *outHas1G) {
     return (edx & (1u << 20)) != 0;
 }
 
+/* CR4.LA57 (bit 12): if firmware left 5-level paging enabled, the CPU would read our 4-level PML4
+ * as a PML5 and the trampoline's `mov cr3` would triple-fault with zero diagnostic output. This
+ * loader only builds 4-level tables (ARCHITECTURE §6.3), so refuse to boot rather than guess. */
+static bool handoffLa57Enabled(void) {
+    uint64_t cr4;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    return (cr4 & (1ull << 12)) != 0;
+}
+
 static void handoffSetEferNxe(void) {
     uint32_t lo, hi;
     __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0xC0000080u));
@@ -88,9 +97,25 @@ static bool handoffRdrand64(uint64_t *out) {
     return ok != 0;
 }
 
-/* EFI_RNG_PROTOCOL if present, else RDSEED (10 retries), else RDRAND (10 retries), else 0; then
- * RDTSC (perturbed per qword) is XORed into every qword regardless, per ARCHITECTURE §5.5 step 7.
- */
+/* ARCHITECTURE §1.3's minimum CPU doesn't guarantee either instruction: executing an unsupported
+ * one takes #UD, and with no IDT installed yet that's an instant triple fault with no diagnostic.
+ * CPUID.(EAX=7,ECX=0):EBX bit 18 = RDSEED (SDM Vol.2A, CPUID). */
+static bool handoffHasRdseed(void) {
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(7), "c"(0));
+    return (ebx & (1u << 18)) != 0;
+}
+
+/* CPUID.1:ECX bit 30 = RDRAND. */
+static bool handoffHasRdrand(void) {
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(1));
+    return (ecx & (1u << 30)) != 0;
+}
+
+/* EFI_RNG_PROTOCOL if present, else RDSEED (10 retries) if the CPU has it, else RDRAND (10
+ * retries) if the CPU has it, else 0; then RDTSC (perturbed per qword) is XORed into every qword
+ * regardless, per ARCHITECTURE §5.5 step 7. */
 static void handoffGatherRandomSeed(EFI_SYSTEM_TABLE *st, uint64_t seed[8]) {
     bool gotRng = false;
     EFI_RNG_PROTOCOL *rng = NULL;
@@ -101,13 +126,21 @@ static void handoffGatherRandomSeed(EFI_SYSTEM_TABLE *st, uint64_t seed[8]) {
         }
     }
     if (!gotRng) {
+        bool hasRdseed = handoffHasRdseed();
+        bool hasRdrand = handoffHasRdrand();
+        if (!hasRdseed && !hasRdrand) {
+            loaderSerialWriteString(
+                "loader: no EFI_RNG_PROTOCOL, RDSEED, or RDRAND; seeding from TSC jitter only\n");
+        }
         for (int i = 0; i < 8; i++) {
             uint64_t v = 0;
             bool ok = false;
-            for (int retry = 0; retry < 10 && !ok; retry++) {
-                ok = handoffRdseed64(&v);
+            if (hasRdseed) {
+                for (int retry = 0; retry < 10 && !ok; retry++) {
+                    ok = handoffRdseed64(&v);
+                }
             }
-            if (!ok) {
+            if (!ok && hasRdrand) {
                 for (int retry = 0; retry < 10 && !ok; retry++) {
                     ok = handoffRdrand64(&v);
                 }
@@ -213,6 +246,12 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         loaderSerialWriteString("loader: CPU lacks NX; refusing to boot\n");
         return EFI_UNSUPPORTED;
     }
+    if (handoffLa57Enabled()) {
+        loaderSerialWriteString(
+            "loader: CR4.LA57 (5-level paging) is enabled; this loader only builds 4-level page "
+            "tables, refusing to boot\n");
+        return EFI_UNSUPPORTED;
+    }
 
     EFI_FILE_PROTOCOL *root = NULL;
     EFI_STATUS status = loaderOpenVolume(st, imageHandle, &root);
@@ -238,6 +277,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         loaderSerialWriteString("loader: boot.cfg not found; using defaults\n");
         cfg.hasKernel = false;
         cfg.hasCmdline = false;
+        cfg.cmdlineTruncated = false;
         cfg.kernel[0] = '\0';
         cfg.cmdline[0] = '\0';
     }
@@ -311,10 +351,20 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     }
     uint32_t nRunsInput = 0;
     UINTN nPreDesc = preMapSize / preDescSize;
-    for (UINTN i = 0; i < nPreDesc && nRunsInput < HANDOFF_MAX_INPUTS; i++) {
+    for (UINTN i = 0; i < nPreDesc; i++) {
         EFI_MEMORY_DESCRIPTOR *d =
             (EFI_MEMORY_DESCRIPTOR *)((uint8_t *)preMapBuf + i * preDescSize);
         if (handoffIsHhdmType(d->Type)) {
+            if (nRunsInput >= HANDOFF_MAX_INPUTS) {
+                /* Fail loudly rather than silently dropping descriptors: a truncated pre-map
+                 * would just make the HHDM run set too small (safe but a smaller HHDM than
+                 * intended), but we'd rather flag a memory map this pathological than guess. */
+                bs->FreePool(preMapBuf);
+                loaderSerialWriteString(
+                    "loader: EFI memory map has more usable descriptors than HANDOFF_MAX_INPUTS; "
+                    "refusing to boot\n");
+                return EFI_OUT_OF_RESOURCES;
+            }
             preRunsInput[nRunsInput].base = d->PhysicalStart;
             preRunsInput[nRunsInput].length = d->NumberOfPages * HANDOFF_PAGE_SIZE;
             preRunsInput[nRunsInput].type = BOOT_MEM_USABLE; /* rank is irrelevant: one type in */
@@ -400,12 +450,19 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     uint64_t stackTopVa = BOOTINFO_HHDM_BASE + (uint64_t)stackPhys +
                           (uint64_t)HANDOFF_BOOT_STACK_PAGES * HANDOFF_PAGE_SIZE;
     uint64_t bootInfoVa = BOOTINFO_HHDM_BASE + bootInfoPhys;
+    uint64_t cmdlineVa = BOOTINFO_HHDM_BASE + cmdlinePhys;
+    uint64_t memMapVa = BOOTINFO_HHDM_BASE + memMapArrayPhys;
     uint64_t checkPa, checkFlags;
     bool selfCheckOk = ptLookup(&pt, entryVa, &checkPa, &checkFlags) == BOOT_OK &&
                        (checkFlags & PT_W) == 0 && (checkFlags & PT_NX) == 0 &&
                        ptLookup(&pt, stackTopVa - 8, &checkPa, &checkFlags) == BOOT_OK &&
                        (checkFlags & PT_W) != 0 && (checkFlags & PT_NX) != 0 &&
                        ptLookup(&pt, bootInfoVa, &checkPa, &checkFlags) == BOOT_OK &&
+                       /* Spot-check the rest of the handoff block too, not just page 0
+                        * (BootInfo): the cmdline page and (the start of) the memory-map array
+                        * are just as load-bearing for the kernel's first instructions. */
+                       ptLookup(&pt, cmdlineVa, &checkPa, &checkFlags) == BOOT_OK &&
+                       ptLookup(&pt, memMapVa, &checkPa, &checkFlags) == BOOT_OK &&
                        ptLookup(&pt, trampPhys, &checkPa, &checkFlags) == BOOT_OK &&
                        (checkFlags & PT_NX) == 0;
     if (!selfCheckOk) {
@@ -430,19 +487,28 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     bi->loaderTsc = loaderTsc;
     bi->efiSystemTablePhys = (uint64_t)(uintptr_t)st;
     bootMemcpy(bi->randomSeed, randomSeed, sizeof(bi->randomSeed));
+    /* Wipe the loader's stack-local copy now that it's in the BootInfo page: otherwise it lingers
+     * in BootServicesData memory, which becomes plain USABLE after ExitBootServices and would be
+     * recoverable by any later kernel code that walks USABLE memory. volatile so this store isn't
+     * optimized away as a dead write to a local about to go out of scope. Note: the *original*
+     * BootInfo page's seed still needs a proper wipe once a real consumer (M2.1's CSPRNG init)
+     * exists and before LOADER_RECLAIM memory is ever freed -- that's a forward-reference for a
+     * later milestone, not something this one solves. */
+    for (int i = 0; i < 8; i++) {
+        *(volatile uint64_t *)&randomSeed[i] = 0;
+    }
 
+    /* cfg.cmdline is already NUL-terminated and within BOOTINFO_CMDLINE_MAX by construction
+     * (bootCfgParse's cfgCopyBounded never overflows its destination), so this is a plain copy,
+     * not a second truncation pass -- bootCfgParse is what actually detects truncation, in
+     * cfg.cmdlineTruncated. */
     char *cmdlineDst = (char *)(uintptr_t)cmdlinePhys;
     uint32_t cmdLen = 0;
-    bool cmdlineTruncated = false;
-    for (; cfg.cmdline[cmdLen] != '\0'; cmdLen++) {
-        if (cmdLen >= BOOTINFO_CMDLINE_MAX - 1) {
-            cmdlineTruncated = true;
-            break;
-        }
-        cmdlineDst[cmdLen] = cfg.cmdline[cmdLen];
+    while (cfg.cmdline[cmdLen] != '\0') {
+        cmdLen++;
     }
-    cmdlineDst[cmdLen] = '\0';
-    if (cmdlineTruncated) {
+    bootMemcpy(cmdlineDst, cfg.cmdline, (uint64_t)cmdLen + 1);
+    if (cfg.cmdlineTruncated) {
         loaderSerialWriteString("loader: cmdline truncated to fit BOOTINFO_CMDLINE_MAX\n");
     }
 
@@ -488,8 +554,22 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     __asm__ volatile("cli");
     handoffSetEferNxe();
 
+    /* We are past ExitBootServices: ConOut and every other Boot Service are gone, and there is no
+     * retrying from scratch. A truncated array here would silently drop the overlays appended
+     * below (KERNEL, LOADER_RECLAIM for page tables/stack/BootInfo) *first*, since they're added
+     * after the raw descriptors -- meaning the kernel image and page tables could show up as plain
+     * USABLE memory to a later milestone's allocator. Check the total fits before writing anything,
+     * and halt loudly (the only diagnostic left is raw serial) rather than let that happen. */
+    if ((uint64_t)nFinalDesc + allocCount > HANDOFF_MAX_INPUTS) {
+        loaderSerialWriteString(
+            "loader: final memory map + overlay count exceeds HANDOFF_MAX_INPUTS; halting\n");
+        for (;;) {
+            __asm__ volatile("cli");
+            __asm__ volatile("hlt");
+        }
+    }
     uint32_t nFinalInputs = 0;
-    for (UINTN i = 0; i < nFinalDesc && nFinalInputs < HANDOFF_MAX_INPUTS; i++) {
+    for (UINTN i = 0; i < nFinalDesc; i++) {
         EFI_MEMORY_DESCRIPTOR *d =
             (EFI_MEMORY_DESCRIPTOR *)((uint8_t *)finalMapBuf + i * finalDescSize);
         finalInputs[nFinalInputs].base = d->PhysicalStart;
@@ -497,7 +577,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         finalInputs[nFinalInputs].type = memMapEfiTypeToBootMem(d->Type, d->Attribute);
         nFinalInputs++;
     }
-    for (uint32_t i = 0; i < allocCount && nFinalInputs < HANDOFF_MAX_INPUTS; i++) {
+    for (uint32_t i = 0; i < allocCount; i++) {
         finalInputs[nFinalInputs].base = allocs[i].base;
         finalInputs[nFinalInputs].length = allocs[i].pages * HANDOFF_PAGE_SIZE;
         finalInputs[nFinalInputs].type = allocs[i].type;

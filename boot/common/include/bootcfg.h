@@ -18,6 +18,7 @@ typedef struct {
     char cmdline[BOOTINFO_CMDLINE_MAX];
     bool hasKernel;
     bool hasCmdline;
+    bool cmdlineTruncated; /* the cmdline= value was longer than BOOTINFO_CMDLINE_MAX and got cut */
 } BootCfg;
 
 /* Parses `text` (`textLen` bytes, not necessarily NUL-terminated -- a raw file read). Fills
@@ -27,8 +28,9 @@ typedef struct {
  * default, kernel=/bong/kernel.elf, empty cmdline) from an explicit empty value. Fails with
  * BOOT_ERR_CFG only if a `kernel =` line's value doesn't start with '/', exceeds 255 characters,
  * or isn't 7-bit ASCII (ARCHITECTURE §5.2); a `cmdline =` value longer than the buffer is
- * truncated (the caller logs that, matching the whole-BootInfo cmdline truncation warning in
- * ARCHITECTURE §5.5 step 11), not rejected. No locks, boot-time or host-test only; pure. */
+ * truncated, not rejected, with `out->cmdlineTruncated` set so the caller can log it (matching the
+ * whole-BootInfo cmdline truncation warning in ARCHITECTURE §5.5 step 11). No locks, boot-time or
+ * host-test only; pure. */
 BootStatus bootCfgParse(const char *text, uint64_t textLen, BootCfg *out);
 
 #endif

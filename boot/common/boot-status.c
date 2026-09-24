@@ -26,6 +26,10 @@ const char *bootStatusString(BootStatus s) {
             return "loader allocation outside its backing EFI memory type";
         case BOOT_ERR_CFG:
             return "invalid boot.cfg";
+        case BOOT_ERR_NOT_MAPPED:
+            return "virtual address not mapped";
+        case BOOT_ERR_PT_UNALIGNED:
+            return "page-table mapping request not 4 KiB aligned";
         default:
             return "unknown boot status";
     }

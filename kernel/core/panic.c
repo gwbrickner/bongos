@@ -6,6 +6,7 @@
 #include "ktest.h"
 #include "sections.h"
 
+#include <arch/cpu.h>
 #include <arch/qemu.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -13,17 +14,10 @@
 
 static bool panicking = false;
 
-static _Noreturn void panicHang(void) {
-    for (;;) {
-        __asm__ volatile("cli");
-        __asm__ volatile("hlt");
-    }
-}
-
 _Noreturn void panic(const char *fmt, ...) {
-    __asm__ volatile("cli");
+    archDisableInterrupts();
     if (panicking) {
-        panicHang();
+        archHaltForever();
     }
     panicking = true;
 
@@ -42,8 +36,7 @@ _Noreturn void panic(const char *fmt, ...) {
      * rbp (kernelMain's own frame has none below it, since entry.asm zeroed rbp before calling
      * it) or once rbp strays outside the boot stack -- a corrupted chain must not walk into
      * unmapped or unrelated memory. */
-    uint64_t rbp;
-    __asm__ volatile("mov %%rbp, %0" : "=r"(rbp));
+    uint64_t rbp = archFramePointer();
     uint64_t stackBottom = (uint64_t)(uintptr_t)kernelBootStackBottom;
     uint64_t stackTop = (uint64_t)(uintptr_t)kernelBootStackTop;
     for (int frame = 0; frame < 16 && rbp != 0; frame++) {
@@ -69,5 +62,5 @@ _Noreturn void panic(const char *fmt, ...) {
         archDebugExit(0x11);
     }
 
-    panicHang();
+    archHaltForever();
 }

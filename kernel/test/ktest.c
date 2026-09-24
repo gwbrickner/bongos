@@ -61,14 +61,22 @@ void ktestRunFromCmdline(const char *cmdline) {
     bool isAll = cmdlineStrEq(value, "all");
     char *patterns[KTEST_MAX_PATTERNS];
     uint32_t patternCount = 0;
+    bool patternsDropped = false;
     if (!isAll) {
         char *p = value;
         patterns[patternCount++] = p;
-        while (*p != '\0' && patternCount < KTEST_MAX_PATTERNS) {
+        /* Keep walking (and NUL-splitting at every comma) even past KTEST_MAX_PATTERNS, so a
+         * pattern beyond the cap is cleanly dropped rather than silently swallowed -- with commas
+         * intact -- into the last slot we did keep. */
+        while (*p != '\0') {
             if (*p == ',') {
                 *p = '\0';
                 p++;
-                patterns[patternCount++] = p;
+                if (patternCount < KTEST_MAX_PATTERNS) {
+                    patterns[patternCount++] = p;
+                } else {
+                    patternsDropped = true;
+                }
             } else {
                 p++;
             }
@@ -79,6 +87,14 @@ void ktestRunFromCmdline(const char *cmdline) {
     uint32_t realPassed = 0;
     uint32_t realFailed = 0;
     uint32_t patternMisses = 0;
+    if (patternsDropped) {
+        char msg[80];
+        ksnprintf(msg, sizeof(msg),
+                  "KTEST FAIL ktest: more than %u ktest= patterns given; extra patterns dropped\n",
+                  (unsigned)KTEST_MAX_PATTERNS);
+        klogRaw(msg);
+        patternMisses++;
+    }
 
     /* Report unmatched patterns before running anything, per ARCHITECTURE §23. */
     if (isAll) {

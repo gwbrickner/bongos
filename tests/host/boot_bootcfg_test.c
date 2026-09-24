@@ -12,6 +12,7 @@ TEST(bootCfgParsesKernelAndCmdline) {
     ASSERT_STREQ(cfg.kernel, "/bong/kernel.elf");
     ASSERT_TRUE(cfg.hasCmdline);
     ASSERT_STREQ(cfg.cmdline, "ktest=all");
+    ASSERT_TRUE(!cfg.cmdlineTruncated);
 }
 
 TEST(bootCfgSkipsCommentsBlankAndSectionLines) {
@@ -88,4 +89,5 @@ TEST(bootCfgTruncatesOverlongCmdline) {
     ASSERT_EQ(bootCfgParse(text, strlen(text), &cfg), BOOT_OK);
     ASSERT_TRUE(cfg.hasCmdline);
     ASSERT_EQ(strlen(cfg.cmdline), (uint64_t)(BOOTINFO_CMDLINE_MAX - 1));
+    ASSERT_TRUE(cfg.cmdlineTruncated);
 }
