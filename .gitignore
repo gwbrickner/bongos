@@ -1,0 +1,11 @@
+build/
+*.o
+*.d
+*.a
+*.kmod
+*.efi
+*.img
+*.img.xz
+*.qcow2
+*.fd
+.claude/settings.local.json

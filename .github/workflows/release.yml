@@ -1,0 +1,57 @@
+# On every merge to main whose squash commit title starts with "M<phase>.<n>:", build the
+# release image and publish a GitHub Release named after the phase's strain codename.
+name: release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      milestone:
+        description: "Milestone to (re)release, e.g. M1.4"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Work out the tag
+        id: m
+        run: |
+          msg="${{ github.event.inputs.milestone }}"
+          [ -n "$msg" ] || msg="$(git log -1 --pretty=%s)"
+          if [[ "$msg" =~ ^M([0-9]+)\.([0-9]+) ]]; then
+            p=${BASH_REMATCH[1]}; n=${BASH_REMATCH[2]}
+            if [ "$p" -le 15 ]; then tag="v0.$p.$n"; else tag="v1.$((p-15)).$n"; fi
+            codename=$(awk -F'\t' -v p="$p" '$1==p {print $2}' branding/codenames.tsv)
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "title=bongOS ${tag#v} ($codename)" >> "$GITHUB_OUTPUT"
+            echo "log=docs/logs/M$p.$n.md" >> "$GITHUB_OUTPUT"
+            echo "go=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build release image
+        if: steps.m.outputs.go == '1' && hashFiles('Makefile') != ''
+        run: |
+          sudo bash tools/ci/install-deps.sh
+          make RELEASE=1 image
+          xz -T0 -k -9 build/bongos.img
+      - name: Publish release
+        if: steps.m.outputs.go == '1' && hashFiles('Makefile') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          log="${{ steps.m.outputs.log }}"
+          {
+            if [ -f "$log" ]; then awk '/^## Summary/{f=1;next} /^## /{f=0} f' "$log"; fi
+            echo
+            echo "Flash \`bongos.img\` (after decompressing) to a USB stick and boot it in UEFI mode."
+            echo "Crypto in bongOS is custom and EXPERIMENTAL: don't trust it with real secrets."
+          } > notes.md
+          gh release view "${{ steps.m.outputs.tag }}" >/dev/null 2>&1 && exit 0
+          gh release create "${{ steps.m.outputs.tag }}" build/bongos.img.xz \
+            --title "${{ steps.m.outputs.title }}" --notes-file notes.md --target "$GITHUB_SHA"

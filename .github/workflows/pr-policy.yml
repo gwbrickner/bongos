@@ -1,0 +1,42 @@
+# Merge policy (D-045): PRs that touch sensitive areas (or say "needs-owner: yes") get the
+# needs-owner label and wait for the owner. Everything else auto-merges once CI is green,
+# as long as the PR body says "Reviewer: PASS".
+# Requires: repo setting "Allow auto-merge", branch protection on main requiring the "ci"
+# check, and (recommended) a BOT_TOKEN secret so merges trigger the release workflow.
+name: pr-policy
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  policy:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Apply policy
+        env:
+          GH_TOKEN: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          gh label create needs-owner --color B60205 --description "Waits for owner review" --force -R "$REPO"
+          files=$(gh pr diff "$PR" --name-only -R "$REPO")
+          body=$(gh pr view "$PR" --json body -q .body -R "$REPO")
+          sensitive='^(kernel/mm/|kernel/sync/|kernel/crypto/|libs/crypto/|libs/bongfs/|docs/specs/|docs/ARCHITECTURE\.md|boot/common/include/bootinfo\.h|kernel/include/uapi/|kernel/fs/(bongfs|crypt|vfs|namespace)|kernel/net/firewall|kernel/core/(sched|syscall|handle|object|random|signal|process)|kernel/arch/x86_64/.*(apic|smp|irq|idt|gdt|paging|iommu|trampoline|syscall|entry)|system/(permd|sshd|login|greeter)|cmds/(elevate|passwd|useradd)|\.github/|\.claude/)'
+          if echo "$files" | grep -Eq "$sensitive" || echo "$body" | grep -Eqi 'needs-owner: *yes'; then
+            gh pr edit "$PR" --add-label needs-owner -R "$REPO"
+            gh pr merge "$PR" --disable-auto -R "$REPO" || true
+            echo "Sensitive area -> needs-owner; waiting for the owner."
+            exit 0
+          fi
+          if echo "$body" | grep -q 'Reviewer: PASS'; then
+            gh pr merge "$PR" --auto --squash -R "$REPO"
+            echo "Auto-merge enabled; merges when CI is green."
+          else
+            echo "No 'Reviewer: PASS' in the PR body; not enabling auto-merge."
+          fi

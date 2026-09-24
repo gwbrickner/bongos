@@ -1,0 +1,52 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(./tests/harness/*)",
+      "Bash(tests/harness/*)",
+      "Bash(./tools/*)",
+      "Bash(qemu-system-x86_64 *)",
+      "Bash(qemu-img *)",
+      "Bash(llvm-addr2line *)",
+      "Bash(llvm-objdump *)",
+      "Bash(nm *)",
+      "Bash(git status*)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push)",
+      "Bash(git push -u origin *)",
+      "Bash(git switch *)",
+      "Bash(git checkout -b *)",
+      "Bash(git fetch *)",
+      "Bash(git branch *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push origin main*)",
+      "Bash(git reset --hard origin/main*)"
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/stop-check.sh" }
+        ]
+      }
+    ]
+  }
+}
