@@ -5,8 +5,10 @@
 
 #include "bootinfo.h"
 
-/* The kernel's validated copy of the loader's BootInfo. Only valid from kernelMain's post-
- * validation point on (i.e. from ktests, which run after it). No locks; read-only. */
+/* The live, loader-supplied BootInfo pointer kernelMain validated and received (not a kernel-
+ * owned copy: it still points into the original LOADER_RECLAIM page, which stays valid to read
+ * until M2.2 reclaims it). Only valid from kernelMain's post-validation point on (i.e. from
+ * ktests, which run after it). No locks; read-only. */
 const BootInfo *kernelBootInfo(void);
 
 /* The kernel's own NUL-terminated copy of the command line. Same availability as

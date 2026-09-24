@@ -40,7 +40,11 @@ _Noreturn void panic(const char *fmt, ...) {
     uint64_t stackBottom = (uint64_t)(uintptr_t)kernelBootStackBottom;
     uint64_t stackTop = (uint64_t)(uintptr_t)kernelBootStackTop;
     for (int frame = 0; frame < 16 && rbp != 0; frame++) {
-        if (rbp < stackBottom || rbp >= stackTop) {
+        /* frameWords[1] reads 8 bytes starting at rbp+8, so rbp must leave a full 16 bytes (both
+         * saved-rbp and return-address words) inside the mapped stack, not just 1; and rbp must be
+         * 8-aligned, since every legitimate frame pointer is (a corrupted chain landing on an
+         * unaligned address is exactly the kind of thing this bounds check exists to catch). */
+        if ((rbp & 7) != 0 || rbp < stackBottom || rbp > stackTop - 16) {
             break;
         }
         const uint64_t *frameWords = (const uint64_t *)(uintptr_t)rbp;

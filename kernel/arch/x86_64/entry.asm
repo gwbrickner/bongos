@@ -3,8 +3,8 @@
 ; State on entry (guaranteed by the loader, ARCHITECTURE §5.4):
 ;   rdi = BootInfo HHDM virtual address
 ;   rsp = top of the loader's own 64 KiB boot stack (HHDM)
-;   IF=0; CS/SS and the IDTR still point at the loader's temporary, now-unmapped-under-our-CR3
-;   firmware/loader structures.
+;   IF=0; CS/SS and the IDTR still point at the firmware's own GDT/IDT, now unmapped under our
+;   CR3 (the loader never installs one of its own -- ARCHITECTURE §5.4).
 ;
 ; Rule: until the stack switch below, touch no memory except RIP-relative kernel symbols, and
 ; never clobber rdi.

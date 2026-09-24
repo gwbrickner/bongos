@@ -7,16 +7,21 @@
 
 #include <stdint.h>
 
-/* No locks, boot-time/IRQ-safe (a single instruction, no shared state): safe from any context. */
+/* No locks, boot-time/IRQ-safe (a single instruction, no shared state): safe from any context.
+ * The "memory" clobber is load-bearing, not decoration: without it, the compiler is free to
+ * reorder ordinary loads/stores across `cli` (it has no other side effect it can see), which
+ * would silently break any caller relying on "no IRQ can run past this point" as an ordering
+ * fence -- e.g. panic()'s own `panicking` recursion guard, and every irq-save lock built on this
+ * later. */
 static inline void archDisableInterrupts(void) {
-    __asm__ volatile("cli");
+    __asm__ volatile("cli" ::: "memory");
 }
 
 /* No locks; never returns. */
 static inline _Noreturn void archHaltForever(void) {
     for (;;) {
-        __asm__ volatile("cli");
-        __asm__ volatile("hlt");
+        __asm__ volatile("cli" ::: "memory");
+        __asm__ volatile("hlt" ::: "memory");
     }
 }
 

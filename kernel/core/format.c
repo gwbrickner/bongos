@@ -91,6 +91,14 @@ int kvsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
             isLongLong = 1; /* %l and %ll are both treated as 64-bit on this target */
         }
 
+        if (*p == '\0') {
+            /* An incomplete specifier ("%l", "%0", "%5", ...) walked p onto the format string's
+             * own NUL. Stop here instead of falling into the switch's default case, which would
+             * append *p (the NUL itself) and then the loop's p++ would read one byte past the
+             * string's end. */
+            break;
+        }
+
         switch (*p) {
             case 'c':
                 pos = appendChar(buf, size, pos, (char)va_arg(ap, int));

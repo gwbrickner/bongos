@@ -8,6 +8,7 @@
 #include "panic.h"
 
 #include <arch/cpu.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "drivers/serial/uart16550.h"
@@ -79,9 +80,12 @@ _Noreturn void kernelMain(const BootInfo *bi) {
     bootInfoCopy = *bi;
     /* Nothing reads randomSeed out of bootInfoCopy (only the live BootInfo page matters, and only
      * once a real consumer such as M2.1's CSPRNG init reads it there); don't keep a second
-     * permanent copy of key material sitting around in kernel .data. */
-    for (int i = 0; i < (int)sizeof(bootInfoCopy.randomSeed); i++) {
-        bootInfoCopy.randomSeed[i] = 0;
+     * permanent copy of key material sitting around in kernel .data. A plain write here would be a
+     * dead store an optimizing compiler is free to elide (nothing ever reads the field back), so
+     * this goes through a volatile pointer the same way the loader wipes its own stack copy. */
+    volatile uint8_t *seedWipe = bootInfoCopy.randomSeed;
+    for (size_t i = 0; i < sizeof(bootInfoCopy.randomSeed); i++) {
+        seedWipe[i] = 0;
     }
     const char *srcCmdline = (const char *)(uintptr_t)(bi->hhdmBase + bi->cmdlinePhys);
     uint32_t i = 0;

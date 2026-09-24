@@ -36,20 +36,37 @@ extern int memcmp(const void *a, const void *b, size_t n);
 #define HANDOFF_MEMMAP_CAP_PAGES 24u /* ceil(4096 * sizeof(BootMemRegion) / 4096) */
 #define HANDOFF_PAGE_SIZE        4096ULL
 
+_Static_assert(HANDOFF_MEMMAP_CAP_PAGES *HANDOFF_PAGE_SIZE >=
+                   (uint64_t)HANDOFF_MEMMAP_CAP * sizeof(BootMemRegion),
+               "HANDOFF_MEMMAP_CAP_PAGES is too small for HANDOFF_MEMMAP_CAP entries -- update "
+               "it (and this assert) together if either constant or BootMemRegion's size changes");
+
 typedef struct {
     uint64_t base;
     uint64_t pages;
     uint32_t type; /* a BootMemType value */
 } LoaderAlloc;
 
+/* Every call site today is a fixed, compile-time-known sequence (kernel, boot stack, the handoff
+ * block, the page-table pool, the trampoline page: 5 calls total against a cap of
+ * HANDOFF_MAX_ALLOCS=16), so this can never actually trip -- but silently dropping an overlay
+ * record here would be exactly the same class of bug as the memory-map-array truncation above
+ * (an allocation quietly reappearing as USABLE memory), so fail loudly instead of assuming that
+ * stays true forever. */
 static void handoffRecordAlloc(LoaderAlloc *allocs, uint32_t *count, uint64_t base, uint64_t pages,
                                uint32_t type) {
-    if (*count < HANDOFF_MAX_ALLOCS) {
-        allocs[*count].base = base;
-        allocs[*count].pages = pages;
-        allocs[*count].type = type;
-        (*count)++;
+    if (*count >= HANDOFF_MAX_ALLOCS) {
+        loaderSerialWriteString(
+            "loader: allocation overlay count exceeds HANDOFF_MAX_ALLOCS; halting\n");
+        for (;;) {
+            __asm__ volatile("cli");
+            __asm__ volatile("hlt");
+        }
     }
+    allocs[*count].base = base;
+    allocs[*count].pages = pages;
+    allocs[*count].type = type;
+    (*count)++;
 }
 
 /* CPUID 0x80000001 EDX bit 20 (NX, required) and bit 26 (PDPE1GB, gates 1 GiB HHDM pages). */
@@ -97,10 +114,23 @@ static bool handoffRdrand64(uint64_t *out) {
     return ok != 0;
 }
 
+/* CPUID.0:EAX is the highest supported *basic* leaf; querying leaf 7 without checking this first
+ * is unsafe -- on Intel CPUs an out-of-range basic leaf request returns the highest supported
+ * leaf's data instead of zeros, so a machine with a basic-leaf max below 7 would read garbage
+ * into EBX and could spuriously believe RDSEED exists. */
+static uint32_t handoffMaxBasicLeaf(void) {
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0));
+    return eax;
+}
+
 /* ARCHITECTURE §1.3's minimum CPU doesn't guarantee either instruction: executing an unsupported
  * one takes #UD, and with no IDT installed yet that's an instant triple fault with no diagnostic.
  * CPUID.(EAX=7,ECX=0):EBX bit 18 = RDSEED (SDM Vol.2A, CPUID). */
 static bool handoffHasRdseed(void) {
+    if (handoffMaxBasicLeaf() < 7) {
+        return false;
+    }
     uint32_t eax, ebx, ecx, edx;
     __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(7), "c"(0));
     return (ebx & (1u << 18)) != 0;

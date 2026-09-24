@@ -23,4 +23,12 @@ KTEST(klog_format) {
 
     ksnprintf(buf, sizeof(buf), "%016llx", 0xABCULL);
     KTEST_ASSERT(cmdlineStrEq(buf, "0000000000000abc"));
+
+    /* A format string that ends mid-specifier ("%l", "%0", "%5", ...) must stop cleanly at the
+     * string's own NUL instead of reading past it: this used to walk one byte past the format
+     * string's terminator (confirmed under a host ASan build), because the length modifier/width
+     * parsing left `p` pointing at the NUL and the switch's `default:` case then appended it and
+     * advanced past it. */
+    ksnprintf(buf, sizeof(buf), "%l");
+    KTEST_ASSERT(cmdlineStrEq(buf, ""));
 }

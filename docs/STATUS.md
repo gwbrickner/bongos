@@ -1,19 +1,13 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-24 (M1.3: implemented, `make test` green, reviewer pass in progress)
+**Last updated:** 2026-09-24 (M1.3 done, PR open)
 
 ## Current milestone
-**M1.3: Kernel skeleton + real handoff** (`needs-owner`), in progress. See `docs/logs/M1.3.md`.
-Branch: `claude/relaxed-curie-knpvwb` (see the note at the top of the log for why this isn't the
-usual `m1-3-...` name).
-
-Implemented per an `architect`-designed spec: `kernel.ld` + entry stub, serial/klog/panic, the
-ktest framework, the ELF64 loader, the page-table builder (HHDM + kernel mapping + trampoline),
-BootInfo validation, and memory-map conversion, plus the UEFI loader wired to load `kernel.elf`,
-build page tables, exit boot services, and jump. `make host-tests` (52/52) and `make test`
-(`KTEST PASS bootinfo_valid`, exit 33) both verified independently by the `qemu-tester` subagent,
-not just self-reported by the implementing agent. A `reviewer` pass on the diff is running now.
+None in progress. M1.3 is done and its PR is open (see `docs/logs/M1.3.md`). **Next: M1.4:
+Framebuffer console + boot menu** (needs owner hardware check for the on-screen part), once
+M1.3 merges. Branch: `claude/relaxed-curie-knpvwb` (see the note at the top of the M1.3 log for
+why this isn't the usual `m1-3-...` name).
 
 ## Phase
 1: Acapulco Gold
@@ -30,11 +24,24 @@ not just self-reported by the implementing agent. A `reviewer` pass on the diff 
   headers (D-007) prints a banner to ConOut and COM1, then halts. `make test` boots it under OVMF
   and checks the serial output (D-057's `--expect-serial`, a bridge until M1.3's kernel brings
   the real KTEST protocol).
+- M1.3 (PR open): bongOS has a real kernel. `kernel.ld` links it higher-half with a W^X section
+  layout; the entry stub installs a boot GDT and null IDT; the kernel has a 16550 serial driver,
+  `klog`, `panic()`, and an in-kernel test framework (`KTEST()`, `ktest=` cmdline, isa-debug-exit
+  PASS/FAIL reporting). `boot/common/` gained a from-scratch ELF64 loader, a page-table builder
+  (HHDM + W^X kernel mapping + a trampoline identity page, 1 GiB/2 MiB pages where supported), a
+  BootInfo builder matching ARCHITECTURE §5.3 byte-for-byte, and memory-map conversion/
+  normalization. The UEFI loader now reads `boot.cfg`, loads `kernel.elf`, builds page tables,
+  exits boot services with a proper retry loop, and jumps to the kernel. `make test` boots under
+  OVMF and QEMU exits 33 with `KTEST PASS bootinfo_valid` in the serial log; the harness now greps
+  for that literal line instead of trusting the exit code alone, so the Done-when guarantee is an
+  enforced gate, not a coincidence. Reviewed (`architect` for the design, then two `reviewer`
+  rounds -- the first found and fixed one Critical, an ELF-loader integer-overflow bug; the second
+  passed clean after fixing 3 more Should-fix items -- see `docs/logs/M1.3.md`); PR open,
+  `needs-owner: yes`.
 
 ## Next step
-Wait for the `reviewer` subagent's findings on the M1.3 diff (already running); fix any Critical
-findings and re-review. Then finish the milestone per CLAUDE.md: check ROADMAP.md's M1.3 box,
-write `docs/logs/M1.3.md`'s Summary, and open the PR with `needs-owner: yes`.
+Once M1.3's PR is reviewed/merged by the owner, start M1.4 (framebuffer console + boot menu)
+following the session protocol in CLAUDE.md.
 
 ## Blockers
 _(none)_

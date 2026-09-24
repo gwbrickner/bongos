@@ -190,6 +190,36 @@ TEST(elfParseRejectsSegmentWhoseEndWrapsAroundTheWindowCheck) {
     ASSERT_EQ(elfParse(buf, sizeof(buf), &img), BOOT_ERR_ELF_RANGE);
 }
 
+TEST(elfParseRejectsSegmentPastWindowEndWithoutWrapping) {
+    uint8_t buf[TEST_ELF_BUF_SIZE];
+    /* The actual pre-fix exploit shape: vaddr a page past the window's end, with a memsz small
+     * enough that `END - vaddr` (before the fix, computed even though vaddr > END) doesn't
+     * underflow at all -- it's just a small positive number bigger than memsz, so the old
+     * `memsz > END - vaddr` comparison alone accepted this segment outright (BOOT_OK), no wrap
+     * needed. Only checking `vaddr >= END` before doing that subtraction rejects it. */
+    uint64_t vaddr = BOOTINFO_KERNEL_WINDOW_END + 0x1000;
+    TestPhdr phdrs[1] = {
+        {PT_LOAD_T, ELF_PF_R | ELF_PF_X, 0x2000, vaddr, vaddr, 16, 0x1000, 0x1000}};
+    buildElf(buf, vaddr, phdrs, 1);
+
+    ElfImage img;
+    ASSERT_EQ(elfParse(buf, sizeof(buf), &img), BOOT_ERR_ELF_RANGE);
+}
+
+TEST(elfParseRejectsSegmentCrossingWindowEnd) {
+    uint8_t buf[TEST_ELF_BUF_SIZE];
+    /* In-window vaddr, but vaddr+memsz crosses BOOTINFO_KERNEL_WINDOW_END: exercises the
+     * `memsz > END - vaddr` branch itself (as opposed to the `vaddr >= END` branch the two tests
+     * above cover), on a subtraction that's valid (vaddr < END here, so it can't underflow). */
+    uint64_t vaddr = BOOTINFO_KERNEL_WINDOW_END - 0x1000;
+    TestPhdr phdrs[1] = {
+        {PT_LOAD_T, ELF_PF_R | ELF_PF_X, 0x2000, vaddr, vaddr, 16, 0x2000, 0x1000}};
+    buildElf(buf, vaddr, phdrs, 1);
+
+    ElfImage img;
+    ASSERT_EQ(elfParse(buf, sizeof(buf), &img), BOOT_ERR_ELF_RANGE);
+}
+
 TEST(elfParseRejectsUnalignedVaddr) {
     uint8_t buf[TEST_ELF_BUF_SIZE];
     TestPhdr phdrs[1] = {
