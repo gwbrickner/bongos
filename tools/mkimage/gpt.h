@@ -44,7 +44,7 @@ extern const GptGuid GPT_TYPE_GUID_ROOT;
  * format constants get owner review together. */
 extern const GptGuid GPT_TYPE_GUID_SWAP;
 
-/* Fills `out` with a random, RFC 4122 version-4 GUID from the OS CSPRNG (/dev/urandom). Used for
+/* Fills `out` with a random, RFC 4122 version-4 GUID from the OS CSPRNG (getrandom()). Used for
  * the disk GUID and each partition's unique GUID -- never for a partition *type* GUID, which
  * must be one of the well-known constants above. */
 void gptRandomGuid(GptGuid *out);

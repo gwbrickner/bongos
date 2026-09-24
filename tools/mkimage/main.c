@@ -53,6 +53,13 @@ static void usage(const char *argv0) {
 }
 
 static uint64_t parseUint(const char *s, const char *argName) {
+    /* strtoull silently accepts a leading '-' (wrapping a negative value into a huge unsigned
+     * one, e.g. "-1" -> UINT64_MAX) -- reject it outright rather than let that reach the size
+     * math below. */
+    if (s[0] == '-') {
+        fprintf(stderr, "mkimage: %s must be a positive integer, got \"%s\"\n", argName, s);
+        exit(1);
+    }
     char *end = NULL;
     errno = 0;
     unsigned long long v = strtoull(s, &end, 10);
@@ -61,6 +68,17 @@ static uint64_t parseUint(const char *s, const char *argName) {
         exit(1);
     }
     return (uint64_t)v;
+}
+
+/* Every *-mib option is multiplied by MIB and divided into 512-byte sectors; reject anything
+ * that would overflow that multiplication before it ever reaches the size math. */
+static int requireMibFits(uint64_t mib, const char *argName) {
+    if (mib > (UINT64_MAX / MIB)) {
+        fprintf(stderr, "mkimage: %s %llu overflows a byte count\n", argName,
+                (unsigned long long)mib);
+        return -1;
+    }
+    return 0;
 }
 
 static int parseOptions(int argc, char **argv, Options *opt) {
@@ -102,6 +120,15 @@ static int parseOptions(int argc, char **argv, Options *opt) {
         fprintf(stderr, "mkimage: --output and --efi are required\n");
         return -1;
     }
+    if (requireMibFits(opt->sizeMib, "--size-mib") != 0 ||
+        requireMibFits(opt->biosBootMib, "--bios-boot-mib") != 0 ||
+        requireMibFits(opt->espMib, "--esp-mib") != 0) {
+        return -1;
+    }
+    if (opt->sizeMib < 1) {
+        fprintf(stderr, "mkimage: --size-mib must be at least 1\n");
+        return -1;
+    }
     if (opt->biosBootMib < 1) {
         fprintf(stderr, "mkimage: --bios-boot-mib must be at least 1\n");
         return -1;
@@ -111,12 +138,39 @@ static int parseOptions(int argc, char **argv, Options *opt) {
                 (unsigned long long)MIN_ESP_MIB);
         return -1;
     }
-    if (opt->sizeMib > (UINT64_MAX / MIB)) {
-        fprintf(stderr, "mkimage: --size-mib %llu overflows a byte count\n",
-                (unsigned long long)opt->sizeMib);
+    if (opt->biosBootMib + opt->espMib >= opt->sizeMib) {
+        fprintf(stderr,
+                "mkimage: --size-mib %llu leaves no room for a root partition after a %llu MiB "
+                "BIOS boot partition + a %llu MiB ESP\n",
+                (unsigned long long)opt->sizeMib, (unsigned long long)opt->biosBootMib,
+                (unsigned long long)opt->espMib);
         return -1;
     }
     return 0;
+}
+
+/* mkfs.fat and friends install to /usr/sbin or /sbin, which aren't on a non-root interactive
+ * shell's PATH on Debian/Ubuntu (only on a login shell's, or root's) -- execvp() would then fail
+ * to find them even though they're right there. Append both if missing, once, rather than making
+ * every runCommand() caller guess the full path. */
+static void ensureSbinInPath(void) {
+    const char *path = getenv("PATH");
+    const char *extra = "/usr/sbin:/sbin";
+    if (path == NULL) {
+        setenv("PATH", extra, 1);
+        return;
+    }
+    if (strstr(path, "/usr/sbin") != NULL || strstr(path, "/sbin") != NULL) {
+        return;
+    }
+    size_t newLen = strlen(path) + 1 + strlen(extra) + 1;
+    char *newPath = malloc(newLen);
+    if (newPath == NULL) {
+        return; /* best-effort; execvp will just fail with a clear error if this was needed */
+    }
+    snprintf(newPath, newLen, "%s:%s", path, extra);
+    setenv("PATH", newPath, 1);
+    free(newPath);
 }
 
 /* Runs argv[0] with the given arguments (NULL-terminated), with no shell involved, and exits the
@@ -144,15 +198,32 @@ static void runCommand(char *const argv[]) {
     }
 }
 
+/* mkfs.fat and mtools read a bare "-x" as an option, and mtools additionally reads a leading
+ * "X:" as a DOS drive letter -- normalizing every external path to start with "./" (when it
+ * isn't already absolute or already so prefixed) sidesteps both without needing to know each
+ * tool's own quirks. Every path this program hands to an external tool goes through this. */
+static const char *normalizePath(const char *path, char *buf, size_t bufSize) {
+    if (path[0] == '/' || (path[0] == '.' && path[1] == '/')) {
+        return path;
+    }
+    snprintf(buf, bufSize, "./%s", path);
+    return buf;
+}
+
+#define ESP_LOADER_DIR "::/bong" /* M1.3+: boot.cfg, kernel.elf, initrd.img (ARCHITECTURE §5.1) */
+
 /* Builds a FAT32 ESP image at `espPath`, `espSectors` sectors, containing /EFI/BOOT/BOOTX64.EFI
- * (from opt->efi) and, if given, /bong/{boot.cfg,kernel.elf,initrd.img}. `espStart` becomes the
- * partition's hidden-sector count (-h): some tools, and our own future BIOS FAT32 reader, read
- * that field rather than assuming 0. */
+ * (from opt->efi) and, if given, ESP_LOADER_DIR/{boot.cfg,kernel.elf,initrd.img}. `espStart`
+ * becomes the partition's hidden-sector count (-h): some tools, and our own future BIOS FAT32
+ * reader, read that field rather than assuming 0. */
 static void buildEspImage(const Options *opt, const char *espPath, uint64_t espSectors,
                           uint64_t espStart) {
     /* mtools otherwise refuses to touch a file whose apparent geometry doesn't match its BPB,
      * which our own tooling (and QEMU's raw block device) doesn't care about. */
     setenv("MTOOLS_SKIP_CHECK", "1", 1);
+
+    char espPathBuf[4096], efiBuf[4096], bootCfgBuf[4096], kernelBuf[4096], initrdBuf[4096];
+    espPath = normalizePath(espPath, espPathBuf, sizeof(espPathBuf));
 
     /* mkfs.fat's -C creates the target file, but refuses if one already exists -- clear out a
      * stale file left by a prior interrupted run first. */
@@ -172,27 +243,31 @@ static void buildEspImage(const Options *opt, const char *espPath, uint64_t espS
     runCommand(mmdEfi);
     char *mmdEfiBoot[] = {"mmd", "-i", (char *)espPath, "::/EFI/BOOT", NULL};
     runCommand(mmdEfiBoot);
-    char *mcopyEfi[] = {"mcopy", "-i", (char *)espPath, (char *)opt->efi, "::/EFI/BOOT/BOOTX64.EFI",
+    const char *efi = normalizePath(opt->efi, efiBuf, sizeof(efiBuf));
+    char *mcopyEfi[] = {"mcopy", "-i", (char *)espPath, (char *)efi, "::/EFI/BOOT/BOOTX64.EFI",
                         NULL};
     runCommand(mcopyEfi);
 
     if (opt->bootCfg != NULL || opt->kernel != NULL || opt->initrd != NULL) {
-        char *mmdBong[] = {"mmd", "-i", (char *)espPath, "::/bong", NULL};
-        runCommand(mmdBong);
+        char *mmdLoaderDir[] = {"mmd", "-i", (char *)espPath, ESP_LOADER_DIR, NULL};
+        runCommand(mmdLoaderDir);
     }
     if (opt->bootCfg != NULL) {
-        char *mcopy[] = {"mcopy", "-i", (char *)espPath, (char *)opt->bootCfg, "::/bong/boot.cfg",
-                         NULL};
+        const char *bootCfg = normalizePath(opt->bootCfg, bootCfgBuf, sizeof(bootCfgBuf));
+        char *mcopy[] = {
+            "mcopy", "-i", (char *)espPath, (char *)bootCfg, ESP_LOADER_DIR "/boot.cfg", NULL};
         runCommand(mcopy);
     }
     if (opt->kernel != NULL) {
-        char *mcopy[] = {"mcopy", "-i", (char *)espPath, (char *)opt->kernel, "::/bong/kernel.elf",
-                         NULL};
+        const char *kernel = normalizePath(opt->kernel, kernelBuf, sizeof(kernelBuf));
+        char *mcopy[] = {
+            "mcopy", "-i", (char *)espPath, (char *)kernel, ESP_LOADER_DIR "/kernel.elf", NULL};
         runCommand(mcopy);
     }
     if (opt->initrd != NULL) {
-        char *mcopy[] = {"mcopy", "-i", (char *)espPath, (char *)opt->initrd, "::/bong/initrd.img",
-                         NULL};
+        const char *initrd = normalizePath(opt->initrd, initrdBuf, sizeof(initrdBuf));
+        char *mcopy[] = {
+            "mcopy", "-i", (char *)espPath, (char *)initrd, ESP_LOADER_DIR "/initrd.img", NULL};
         runCommand(mcopy);
     }
 }
@@ -219,14 +294,45 @@ static void pwriteExact(int fd, const void *buf, size_t length, off_t offset) {
     }
 }
 
+/* Registered with atexit() so a leftover temp file from an aborted run (any of the many early
+ * `return 1`s below) doesn't sit there breaking the next invocation the way a stale ESP scratch
+ * file used to (see the M1.2 milestone log). Paths are set once they're known and left empty
+ * until then; unlink() on a path that no longer exists (already renamed into place, or never
+ * created) is a silent no-op. */
+static char cleanupOutputTmpPath[4096];
+static char cleanupEspTmpPath[4096];
+
+static void cleanupTmpFiles(void) {
+    if (cleanupOutputTmpPath[0] != '\0') {
+        unlink(cleanupOutputTmpPath);
+    }
+    if (cleanupEspTmpPath[0] != '\0') {
+        unlink(cleanupEspTmpPath);
+    }
+}
+
 int main(int argc, char **argv) {
     Options opt;
     if (parseOptions(argc, argv, &opt) != 0) {
         usage(argv[0]);
         return 1;
     }
+    ensureSbinInPath();
+    atexit(cleanupTmpFiles);
 
     uint64_t totalSectors = (opt.sizeMib * MIB) / SECTOR_SIZE;
+    /* gptLastUsableLba() below computes totalSectors - 1 - GPT_PARTITION_ARRAY_SECTORS - 1; below
+     * this floor that underflows to a huge value instead of erroring, which would make every
+     * check that follows pass against a nonsensical layout (this is also gpt.c's own assert
+     * threshold, gptWriteLayout()'s last line of defense -- checking it here, before any of that
+     * arithmetic runs, gives a real error message instead of an assert/NDEBUG-dependent one). */
+    if (totalSectors < 2 * gptFirstUsableLba()) {
+        fprintf(stderr,
+                "mkimage: --size-mib %llu is too small to hold the GPT metadata (primary + "
+                "backup)\n",
+                (unsigned long long)opt.sizeMib);
+        return 1;
+    }
     uint64_t biosBootSectors = (opt.biosBootMib * MIB) / SECTOR_SIZE;
     uint64_t espSectors = (opt.espMib * MIB) / SECTOR_SIZE;
 
@@ -250,10 +356,18 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    char outputTmpPath[4096];
-    snprintf(outputTmpPath, sizeof(outputTmpPath), "%s.tmp", opt.output);
-    char espTmpPath[4096];
-    snprintf(espTmpPath, sizeof(espTmpPath), "%s.esp.tmp", opt.output);
+    char *outputTmpPath = cleanupOutputTmpPath;
+    if (snprintf(outputTmpPath, sizeof(cleanupOutputTmpPath), "%s.tmp", opt.output) >=
+        (int)sizeof(cleanupOutputTmpPath)) {
+        fprintf(stderr, "mkimage: --output path too long\n");
+        return 1;
+    }
+    char *espTmpPath = cleanupEspTmpPath;
+    if (snprintf(espTmpPath, sizeof(cleanupEspTmpPath), "%s.esp.tmp", opt.output) >=
+        (int)sizeof(cleanupEspTmpPath)) {
+        fprintf(stderr, "mkimage: --output path too long\n");
+        return 1;
+    }
     buildEspImage(&opt, espTmpPath, espSectors, espStart);
 
     FILE *espFile = fopen(espTmpPath, "rb");
@@ -269,6 +383,7 @@ int main(int argc, char **argv) {
     }
     fclose(espFile);
     unlink(espTmpPath);
+    cleanupEspTmpPath[0] = '\0'; /* already gone; don't have atexit try again */
 
     /* Build the full metadata region (protective MBR + primary header/array) plus the backup
      * region in one contiguous in-memory image, same as before; only the final write below
@@ -303,7 +418,10 @@ int main(int argc, char **argv) {
      * for root until then. */
 
     unlink(outputTmpPath);
-    int fd = open(outputTmpPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    /* O_EXCL (the path must not already exist) + O_NOFOLLOW closes the classic symlink race: if
+     * anything recreated outputTmpPath as a symlink between the unlink() above and this open(),
+     * a plain O_CREAT|O_TRUNC would happily write through it to wherever that symlink pointed. */
+    int fd = open(outputTmpPath, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
     if (fd < 0) {
         fprintf(stderr, "mkimage: cannot create %s: %s\n", outputTmpPath, strerror(errno));
         return 1;
@@ -333,6 +451,7 @@ int main(int argc, char **argv) {
                 strerror(errno));
         return 1;
     }
+    cleanupOutputTmpPath[0] = '\0'; /* already renamed into place; don't have atexit unlink it */
 
     printf("mkimage: wrote %s (%llu MiB): BIOS boot [%llu-%llu], ESP [%llu-%llu], root "
            "[%llu-%llu]\n",

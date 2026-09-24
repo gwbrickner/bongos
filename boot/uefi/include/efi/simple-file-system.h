@@ -8,7 +8,7 @@
 #define EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID                                                       \
     {                                                                                              \
         0x964e5b22, 0x6459, 0x11d2, {                                                              \
-            0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3e                                         \
+            0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b                                         \
         }                                                                                          \
     }
 #define EFI_FILE_INFO_ID                                                                           \
@@ -64,8 +64,8 @@ struct EFI_FILE_PROTOCOL {
     EFI_FILE_GET_INFO GetInfo;
     EFI_FILE_SET_INFO SetInfo;
     EFI_FILE_FLUSH Flush;
-    /* OpenEx/ReadEx/WriteEx/FlushEx (async I/O, revision 2) omitted: not used before the async
-     * boot.cfg/kernel/initrd reads that M1.3 adds, and those reads are synchronous. */
+    /* OpenEx/ReadEx/WriteEx/FlushEx (async I/O, revision 2) omitted: the boot.cfg/kernel/initrd
+     * reads M1.3 adds are synchronous, so nothing needs them yet. */
 };
 
 /* §13.5 EFI_FILE_INFO. A variable-length struct: FileName is a NUL-terminated CHAR16[] that

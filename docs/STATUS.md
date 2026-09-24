@@ -18,11 +18,13 @@ M1.2: UEFI headers + hello loader + disk image (`needs-owner`), branch
   `gdb` wired to the existing boot harness (no-op until M1.2 produces a bootable image).
 
 ## Next step
-M1.2's code is written; the `architect` subagent reviewed the on-disk-format pieces (GPT/mkimage,
-D-056, D-057), found 2 Critical + 6 Should-fix issues, and all are fixed (see
-`docs/logs/M1.2.md`'s 11:15 entry). `make image`/`test`/`test-full`/`format-check` all pass;
-`sgdisk -v` reports the rebuilt image clean. Next: run the `reviewer` subagent on the full
-milestone diff, fix any Critical findings, then open the PR (`needs-owner: yes`).
+M1.2 has been through two review rounds: `architect` (2 Critical + 6 Should-fix, on the
+on-disk-format pieces) and `reviewer` (1 Critical -- a wrong UEFI protocol GUID byte -- + 6
+Should-fix, on the full diff). Everything Critical and Should-fix is fixed or explained in
+`docs/logs/M1.2.md` (11:15 and 12:00 entries). `make image`/`test`/`test-full`/`format-check` all
+pass; `sgdisk -v` clean; 13 host tests pass under a non-sanitized build. Next: re-run the
+`reviewer` subagent for a confirmation pass (CLAUDE.md: fix every Critical, then re-review), then
+open the PR (`needs-owner: yes`).
 
 ## Blockers
 _(none)_

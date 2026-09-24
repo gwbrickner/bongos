@@ -11,6 +11,10 @@
 
 #define SECTOR 512
 
+static uint16_t readLE16(const uint8_t *p) {
+    return (uint16_t)(p[0] | (p[1] << 8));
+}
+
 static uint32_t readLE32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
@@ -47,7 +51,9 @@ TEST(gptLayoutProducesValidHeadersAndBackupMirror) {
     /* Protective MBR (LBA 0). */
     ASSERT_EQ(image[510], 0x55);
     ASSERT_EQ(image[511], 0xAA);
-    ASSERT_EQ(image[446 + 4], 0xEE); /* partition type: GPT protective */
+    ASSERT_EQ(image[446 + 4], 0xEE);          /* partition type: GPT protective */
+    ASSERT_EQ(readLE32(image + 446 + 8), 1U); /* StartingLBA */
+    ASSERT_EQ(readLE32(image + 446 + 12), (uint32_t)(totalSectors - 1)); /* SizeInLBA */
 
     const uint8_t *primaryHeader = image + 1 * SECTOR;
     ASSERT_TRUE(memcmp(primaryHeader, "EFI PART", 8) == 0);
@@ -74,9 +80,26 @@ TEST(gptLayoutProducesValidHeadersAndBackupMirror) {
     uint32_t storedArrayCrc = readLE32(primaryHeader + 88);
     ASSERT_EQ(crc32Compute(primaryArray, 128 * 128), storedArrayCrc);
 
-    /* First partition entry decodes back to what was given. */
+    /* First partition entry decodes back to what was given: type GUID (mixed-endian: LE
+     * Data1/Data2/Data3, then 8 raw Data4 bytes), unique GUID, LBAs, and the UTF-16LE name. */
+    ASSERT_EQ(readLE32(primaryArray + 0), GPT_GUID_ESP.data1);
+    ASSERT_EQ(readLE16(primaryArray + 4), GPT_GUID_ESP.data2);
+    ASSERT_EQ(readLE16(primaryArray + 6), GPT_GUID_ESP.data3);
+    ASSERT_TRUE(memcmp(primaryArray + 8, GPT_GUID_ESP.data4, 8) == 0);
+
+    ASSERT_EQ(readLE32(primaryArray + 16), partAGuid.data1);
+    ASSERT_EQ(readLE16(primaryArray + 20), partAGuid.data2);
+    ASSERT_EQ(readLE16(primaryArray + 22), partAGuid.data3);
+    ASSERT_TRUE(memcmp(primaryArray + 24, partAGuid.data4, 8) == 0);
+
     ASSERT_EQ(readLE64(primaryArray + 32), firstUsable);      /* StartingLBA */
     ASSERT_EQ(readLE64(primaryArray + 40), firstUsable + 99); /* EndingLBA */
+
+    static const char partAName[] = "PART_A";
+    for (size_t i = 0; i < sizeof(partAName) - 1; i++) {
+        ASSERT_EQ(readLE16(primaryArray + 56 + 2 * i), (uint16_t)(unsigned char)partAName[i]);
+    }
+    ASSERT_EQ(readLE16(primaryArray + 56 + 2 * (sizeof(partAName) - 1)), 0U); /* NUL terminator */
 
     /* Backup: header at the last LBA, array immediately before it; MyLBA/AlternateLBA and
      * PartitionEntryLBA point the other way from the primary, everything else matches. */

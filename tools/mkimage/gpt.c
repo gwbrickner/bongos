@@ -1,12 +1,24 @@
 #include "gpt.h"
 
-#include <assert.h>
+/* getrandom() is a Linux syscall wrapper, not in plain -std=c17. */
+#define _DEFAULT_SOURCE
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
 
 #include "crc32.h"
+
+/* A caller-contract check that stays active regardless of NDEBUG (unlike assert()) -- gpt.c is a
+ * small library other host tools may link against later, and a bad layout here means writing
+ * past the end of a heap buffer, not just a wrong disk image. */
+static void gptRequire(int condition, const char *message) {
+    if (!condition) {
+        fprintf(stderr, "mkimage: internal error: %s\n", message);
+        abort();
+    }
+}
 
 _Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
                "gpt.c writes on-disk fields with the host's native byte order; the build host "
@@ -26,18 +38,22 @@ const GptGuid GPT_TYPE_GUID_SWAP = {
     0x1FC85B55, 0x4413, 0x4D12, {0x8C, 0x5F, 0xAD, 0x7B, 0xFA, 0xA6, 0xCB, 0x9D}};
 
 void gptRandomGuid(GptGuid *out) {
-    FILE *urandom = fopen("/dev/urandom", "rb");
-    if (urandom == NULL) {
-        fprintf(stderr, "mkimage: cannot open /dev/urandom: %s\n", strerror(errno));
-        exit(1);
-    }
     uint8_t raw[16];
-    if (fread(raw, 1, sizeof(raw), urandom) != sizeof(raw)) {
-        fprintf(stderr, "mkimage: short read from /dev/urandom\n");
-        fclose(urandom);
-        exit(1);
+    size_t got = 0;
+    while (got < sizeof(raw)) {
+        /* getrandom() draws from the same CSPRNG as /dev/urandom, without a file descriptor or
+         * the device node needing to exist (e.g. inside a minimal sandbox). Can return short (or
+         * fail with EINTR) on a signal; keep going rather than treat that as an error. */
+        ssize_t n = getrandom(raw + got, sizeof(raw) - got, 0);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            fprintf(stderr, "mkimage: getrandom failed: %s\n", strerror(errno));
+            exit(1);
+        }
+        got += (size_t)n;
     }
-    fclose(urandom);
 
     memcpy(&out->data1, &raw[0], 4);
     memcpy(&out->data2, &raw[4], 2);
@@ -165,9 +181,9 @@ void gptWriteLayout(uint8_t *image, uint64_t totalSectors, const GptGuid *diskGu
     /* A disk with no room for the primary + backup metadata at all is a caller bug, not a user
      * mistake to report nicely -- main.c's own --size-mib validation is what a bad CLI argument
      * hits first. gptLastUsableLba() would silently underflow past this point. */
-    assert(totalSectors >= 2 * (2 + GPT_PARTITION_ARRAY_SECTORS) &&
-           "totalSectors too small to hold the primary and backup GPT metadata");
-    assert(partitionCount <= GPT_PARTITION_ENTRY_COUNT);
+    gptRequire(totalSectors >= 2 * (2 + GPT_PARTITION_ARRAY_SECTORS),
+               "totalSectors too small to hold the primary and backup GPT metadata");
+    gptRequire(partitionCount <= GPT_PARTITION_ENTRY_COUNT, "too many partitions");
 
     uint64_t primaryArrayLba = 2;
     uint64_t firstUsableLba = gptFirstUsableLba();
@@ -176,13 +192,14 @@ void gptWriteLayout(uint8_t *image, uint64_t totalSectors, const GptGuid *diskGu
     uint64_t lastUsableLba = gptLastUsableLba(totalSectors);
 
     for (size_t i = 0; i < partitionCount; i++) {
-        assert(partitions[i].startLba <= partitions[i].endLba && "partition start after end");
-        assert(partitions[i].startLba >= firstUsableLba && partitions[i].endLba <= lastUsableLba &&
-               "partition outside the usable LBA range");
+        gptRequire(partitions[i].startLba <= partitions[i].endLba, "partition start after end");
+        gptRequire(partitions[i].startLba >= firstUsableLba &&
+                       partitions[i].endLba <= lastUsableLba,
+                   "partition outside the usable LBA range");
         for (size_t j = 0; j < i; j++) {
-            assert((partitions[i].endLba < partitions[j].startLba ||
-                    partitions[i].startLba > partitions[j].endLba) &&
-                   "overlapping partitions");
+            gptRequire(partitions[i].endLba < partitions[j].startLba ||
+                           partitions[i].startLba > partitions[j].endLba,
+                       "overlapping partitions");
         }
     }
 

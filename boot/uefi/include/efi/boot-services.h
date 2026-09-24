@@ -73,11 +73,12 @@ typedef enum { EfiNativeInterface, EfiPcodeInterface } EFI_INTERFACE_TYPE;
 
 typedef VOID(EFIAPI *EFI_EVENT_NOTIFY)(IN EFI_EVENT Event, IN VOID *Context);
 
+/* UEFI Spec §7.3 EFI_OPEN_PROTOCOL_INFORMATION_ENTRY. */
 typedef struct {
-    UINT32 Type;
-    UINTN HeaderSize;
-    UINTN SizeOfInfo;
-    UINT32 ImageDataType;
+    EFI_HANDLE AgentHandle;
+    EFI_HANDLE ControllerHandle;
+    UINT32 Attributes;
+    UINT32 OpenCount;
 } EFI_OPEN_PROTOCOL_INFORMATION_ENTRY; /* only referenced by OpenProtocolInformation's signature
                                           below; not called anywhere yet */
 

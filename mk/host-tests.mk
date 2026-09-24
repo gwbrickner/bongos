@@ -10,10 +10,11 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # Host-testable implementation code that lives with its own tool/subsystem rather than under
 # tests/host/ itself (only the TEST() cases go there) -- grows as more of them get host tests
 # (parsers, bongfs, crypto...). Their own directories are added to the include path so a test
-# file can '#include "gpt.h"' without a relative path.
-HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c
-HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h
-HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage
+# file can '#include "gpt.h"' without a relative path. boot/uefi/guids.c has no freestanding- or
+# cross-target-specific code, so it builds fine with the host's native clang too.
+HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c boot/uefi/guids.c
+HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h $(wildcard boot/uefi/include/efi/*.h)
+HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi
 
 .PHONY: host-tests
 host-tests: $(HOST_TEST_BIN)
