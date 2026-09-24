@@ -1,28 +1,27 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-24 (M1.1 done, PR open)
+**Last updated:** 2026-09-24 (M1.1 merged; M1.2 in progress)
 
 ## Current milestone
-None in progress. M1.1 is done and its PR is open (branch `claude/amazing-hamilton-ck5lbm`; see
-`docs/logs/M1.1.md` for why this session used that branch instead of
-`m1-1-repo-skeleton-build-ci`). **Next: M1.2: UEFI headers + hello loader + disk image**
-(`needs-owner`), once M1.1 merges.
+M1.2: UEFI headers + hello loader + disk image (`needs-owner`), branch
+`m1-2-uefi-hello-loader`. Plan and log in `docs/logs/M1.2.md`.
 
 ## Phase
 1: Acapulco Gold
 
 ## What works
 - Planning docs: ARCHITECTURE, DECISIONS, ROADMAP.
-- M1.1: the ARCHITECTURE §2 directory skeleton, the top-level `Makefile` + `mk/*.mk` fragments,
-  `branding.h` generation, `make format`/`format-check`, the `tests/host/` host-test framework,
-  and `image`/`test`/`test-full`/`run`/`run-bios`/`debug`/`gdb` wired to the existing boot
-  harness (no-op until M1.2 produces a bootable image). Reviewed (2 rounds, see
-  `docs/logs/M1.1.md`); PR open, `needs-owner: yes`.
+- M1.1 (merged, PR #1): the ARCHITECTURE §2 directory skeleton, the top-level `Makefile` +
+  `mk/*.mk` fragments, `branding.h` generation, `make format`/`format-check`, the
+  `tests/host/` host-test framework, and `image`/`test`/`test-full`/`run`/`run-bios`/`debug`/
+  `gdb` wired to the existing boot harness (no-op until M1.2 produces a bootable image).
 
 ## Next step
-Once M1.1's PR is reviewed/merged by the owner, start M1.2 (UEFI headers + hello loader + disk
-image) following the session protocol in CLAUDE.md.
+Continue M1.2 from `docs/logs/M1.2.md`'s plan: write `boot/uefi/include/efi/` headers, then
+`efiMain` (prints `bongOS loader` to ConOut + COM1, halts), then `tools/mkimage`, then wire
+`mk/image.mk` and extend `tests/harness/run-qemu.sh` with a serial-banner-match mode. See the
+log for exact next file/function.
 
 ## Blockers
 _(none)_
