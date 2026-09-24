@@ -10,8 +10,9 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
   build-essential make git python3 ca-certificates xz-utils \
-  clang lld llvm clang-format nasm \
+  clang lld llvm clang-format libclang-rt-18-dev nasm \
   qemu-system-x86 qemu-utils ovmf \
   mtools dosfstools gdisk xorriso e2fsprogs exfatprogs ntfs-3g \
   acpica-tools sbsigntool \
-  openssh-client openssl curl netcat-openbsd
+  openssh-client openssl curl netcat-openbsd \
+  gdb

@@ -39,12 +39,20 @@ jobs:
         run: |
           sudo bash tools/ci/install-deps.sh
           make RELEASE=1 image
-          xz -T0 -k -9 build/bongos.img
+          if [ -f build/bongos.img ]; then
+            xz -T0 -k -9 build/bongos.img
+          else
+            echo "No build/bongos.img yet (the loader arrives in M1.2) -- nothing to compress."
+          fi
       - name: Publish release
         if: steps.m.outputs.go == '1' && hashFiles('Makefile') != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ ! -f build/bongos.img.xz ]; then
+            echo "No image artifact for this milestone; skipping the release publish."
+            exit 0
+          fi
           log="${{ steps.m.outputs.log }}"
           {
             if [ -f "$log" ]; then awk '/^## Summary/{f=1;next} /^## /{f=0} f' "$log"; fi

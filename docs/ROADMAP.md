@@ -56,7 +56,7 @@ accident. Every storage milestone keeps a ktest proving the guard works.
 
 ## Phase 1: Acapulco Gold (bring-up)
 
-### [ ] M1.1 Repo skeleton, build system, CI
+### [x] M1.1 Repo skeleton, build system, CI
 **Needs:** none
 1. Create the directory tree from ARCHITECTURE §2. Add a top-level `Makefile` with per-component `*.mk` fragments, and `branding/` (`name`, `version`, `codename`) exposed to C as `branding.h`.
 2. Add `.clang-format` and the `make format` / `make format-check` targets.

@@ -1,0 +1,1 @@
+Shared loader code: boot.cfg parser, ELF loader, page-table builder, the BootInfo builder and its `include/bootinfo.h` header (ARCHITECTURE §5.3), GPT + FAT32 readers (compiled for both loaders). Arrives in M1.3.

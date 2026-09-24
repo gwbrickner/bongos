@@ -1,0 +1,1 @@
+The host-side unit test framework (a tiny assert-based, constructor-registered runner) and tests for pure logic: allocators' algorithms, bongfs, crypto vectors, and parsers. Wired to `make host-tests` starting in M1.1.
