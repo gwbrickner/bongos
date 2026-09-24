@@ -1,22 +1,22 @@
-/* Definitions for boot/uefi/include/efi/guids.h. Values are from the UEFI 2.10 spec and the
- * ACPI 6.x spec (the EFI_ACPI_20_TABLE_GUID / EFI_ACPI_TABLE_GUID config-table entries). */
+/* Definitions for boot/uefi/include/efi/guids.h. Every protocol GUID is initialized from its
+ * own header's *_GUID macro (D-058 keeps those spec-literal), not retyped here -- two copies of
+ * the same 16 bytes is exactly how a transcription error hides in one and not the other, which
+ * is how EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID's last byte went wrong in this milestone's first
+ * draft (tests/host/uefi_guids_test.c is the check that catches it now). The ACPI config-table
+ * GUIDs have no header macro to share (ACPI 6.x spec, not UEFI), so they're the one place these
+ * bytes are written down. */
 #include "include/efi/base.h"
+#include "include/efi/graphics-output.h"
 #include "include/efi/guids.h"
+#include "include/efi/loaded-image.h"
+#include "include/efi/rng.h"
+#include "include/efi/simple-file-system.h"
 
-const EFI_GUID gEfiLoadedImageProtocolGuid = {
-    0x5b1b31a1, 0x9562, 0x11d2, {0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}};
-
-const EFI_GUID gEfiSimpleFileSystemProtocolGuid = {
-    0x964e5b22, 0x6459, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}};
-
-const EFI_GUID gEfiFileInfoGuid = {
-    0x09576e92, 0x6d3f, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}};
-
-const EFI_GUID gEfiGraphicsOutputProtocolGuid = {
-    0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}};
-
-const EFI_GUID gEfiRngProtocolGuid = {
-    0x3152bca5, 0xeade, 0x433d, {0x86, 0x2e, 0xc0, 0x1c, 0xdc, 0x29, 0x1f, 0x44}};
+const EFI_GUID gEfiLoadedImageProtocolGuid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
+const EFI_GUID gEfiSimpleFileSystemProtocolGuid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
+const EFI_GUID gEfiFileInfoGuid = EFI_FILE_INFO_ID;
+const EFI_GUID gEfiGraphicsOutputProtocolGuid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+const EFI_GUID gEfiRngProtocolGuid = EFI_RNG_PROTOCOL_GUID;
 
 /* EFI_ACPI_20_TABLE_GUID */
 const EFI_GUID gEfiAcpi20TableGuid = {

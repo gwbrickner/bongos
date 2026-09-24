@@ -30,6 +30,23 @@ TEST(crc32MatchesKnownVector) {
     ASSERT_EQ(crc32Compute("123456789", 9), 0xCBF43926U);
 }
 
+/* Checked independently of GPT_GUID_ESP/GPT_GUID_BIOS_BOOT's own values, against the UEFI spec's
+ * raw on-disk bytes -- comparing the array entry back against the same constant that produced it
+ * (as gptLayoutProducesValidHeadersAndBackupMirror below does) can't catch a typo in the constant
+ * itself; that's exactly the class of bug the `reviewer` subagent found in a different GUID
+ * (EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID, boot/uefi/guids.c -- see tests/host/uefi_guids_test.c). */
+TEST(wellKnownPartitionTypeGuidsMatchSpecBytes) {
+    /* C12A7328-F81F-11D2-BA4B-00A0C93EC93B, mixed-endian on-disk. */
+    static const uint8_t espBytes[16] = {0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
+                                         0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B};
+    ASSERT_TRUE(memcmp(&GPT_GUID_ESP, espBytes, 16) == 0);
+
+    /* 21686148-6449-6E6F-744E-656564454649 */
+    static const uint8_t biosBootBytes[16] = {0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6F, 0x6E,
+                                              0x74, 0x4E, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49};
+    ASSERT_TRUE(memcmp(&GPT_GUID_BIOS_BOOT, biosBootBytes, 16) == 0);
+}
+
 TEST(gptLayoutProducesValidHeadersAndBackupMirror) {
     uint64_t totalSectors = 8192; /* 4 MiB: small but big enough for real partitions */
     uint8_t *image = calloc((size_t)totalSectors, SECTOR);

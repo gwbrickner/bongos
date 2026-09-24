@@ -18,13 +18,12 @@ M1.2: UEFI headers + hello loader + disk image (`needs-owner`), branch
   `gdb` wired to the existing boot harness (no-op until M1.2 produces a bootable image).
 
 ## Next step
-M1.2 has been through two review rounds: `architect` (2 Critical + 6 Should-fix, on the
-on-disk-format pieces) and `reviewer` (1 Critical -- a wrong UEFI protocol GUID byte -- + 6
-Should-fix, on the full diff). Everything Critical and Should-fix is fixed or explained in
-`docs/logs/M1.2.md` (11:15 and 12:00 entries). `make image`/`test`/`test-full`/`format-check` all
-pass; `sgdisk -v` clean; 13 host tests pass under a non-sanitized build. Next: re-run the
-`reviewer` subagent for a confirmation pass (CLAUDE.md: fix every Critical, then re-review), then
-open the PR (`needs-owner: yes`).
+M1.2 is reviewed and passing: `architect` (2 Critical + 6 Should-fix) and two `reviewer` rounds
+(1 Critical + 6 Should-fix, then a re-review with 1 more Should-fix) -- final verdict **PASS**,
+everything fixed or explained (see `docs/logs/M1.2.md`). `make image`/`test`/`test-full`/
+`format-check` all pass; `sgdisk -v` clean; 14 host tests pass under a non-sanitized build (ASan
+runtime still missing in this environment, pre-existing). Next: check the ROADMAP box, write the
+milestone Summary, and open the PR (`needs-owner: yes`).
 
 ## Blockers
 _(none)_

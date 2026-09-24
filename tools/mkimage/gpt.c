@@ -1,7 +1,9 @@
+/* getrandom() is a Linux syscall wrapper, not in plain -std=c17; must be defined before the
+ * first system header pulls in features.h (gpt.h's own <stdint.h> would do that), or it has no
+ * effect. */
+#define _DEFAULT_SOURCE
 #include "gpt.h"
 
-/* getrandom() is a Linux syscall wrapper, not in plain -std=c17. */
-#define _DEFAULT_SOURCE
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>

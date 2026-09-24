@@ -5,6 +5,7 @@
 /* -std=c17 alone hides glibc's POSIX declarations (setenv, pwrite, ftruncate); this is host
  * tooling, not the freestanding kernel/loader C17 subset ARCHITECTURE §4 restricts. */
 #define _DEFAULT_SOURCE
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -29,6 +30,11 @@
  * error message. ARCHITECTURE §5.1's 256 MiB default stays comfortably above it. */
 #define MIN_ESP_MIB 33ULL
 
+/* Where boot.cfg/kernel.elf/initrd.img live on the ESP, ARCHITECTURE §5.1 -- one literal, since
+ * it shows up in the usage text, the mtools directory name, and the mcopy destinations below. */
+#define LOADER_DIR_NAME "bong"
+#define ESP_LOADER_DIR  "::/" LOADER_DIR_NAME
+
 typedef struct {
     const char *output;
     const char *efi;
@@ -47,16 +53,18 @@ static void usage(const char *argv0) {
             "  --output PATH        disk image to write (default 2 GiB, GPT: BIOS boot + ESP + "
             "root, ARCHITECTURE §5.1)\n"
             "  --efi PATH            BOOTX64.EFI to place at /EFI/BOOT/BOOTX64.EFI on the ESP\n"
-            "  --boot-cfg/--kernel/--initrd PATH   placed at /bong/{boot.cfg,kernel.elf,"
+            "  --boot-cfg/--kernel/--initrd PATH   placed at /" LOADER_DIR_NAME
+            "/{boot.cfg,kernel.elf,"
             "initrd.img} on the ESP (M1.3+; omit if they don't exist yet)\n",
             argv0);
 }
 
 static uint64_t parseUint(const char *s, const char *argName) {
-    /* strtoull silently accepts a leading '-' (wrapping a negative value into a huge unsigned
-     * one, e.g. "-1" -> UINT64_MAX) -- reject it outright rather than let that reach the size
-     * math below. */
-    if (s[0] == '-') {
+    /* strtoull silently accepts (and skips) leading whitespace, then a leading '-', wrapping a
+     * negative value into a huge unsigned one (e.g. "-1" -> UINT64_MAX, but so does " -1" or
+     * "\t-1"). Requiring the first character to be a digit rejects all of that in one check,
+     * rather than trying to enumerate every whitespace character strtoull skips. */
+    if (!isdigit((unsigned char)s[0])) {
         fprintf(stderr, "mkimage: %s must be a positive integer, got \"%s\"\n", argName, s);
         exit(1);
     }
@@ -149,26 +157,54 @@ static int parseOptions(int argc, char **argv, Options *opt) {
     return 0;
 }
 
+/* Whether `component` (e.g. "/sbin") appears as a whole ':'-separated segment of `path` -- a
+ * plain substring test would also match "/usr/local/sbin" or "~/sbin" against "/sbin" without
+ * actually putting /sbin itself on the search path. */
+static int pathHasComponent(const char *path, const char *component) {
+    size_t componentLen = strlen(component);
+    const char *p = path;
+    while (*p != '\0') {
+        const char *end = strchr(p, ':');
+        size_t segLen = end != NULL ? (size_t)(end - p) : strlen(p);
+        if (segLen == componentLen && strncmp(p, component, componentLen) == 0) {
+            return 1;
+        }
+        if (end == NULL) {
+            break;
+        }
+        p = end + 1;
+    }
+    return 0;
+}
+
 /* mkfs.fat and friends install to /usr/sbin or /sbin, which aren't on a non-root interactive
  * shell's PATH on Debian/Ubuntu (only on a login shell's, or root's) -- execvp() would then fail
- * to find them even though they're right there. Append both if missing, once, rather than making
- * every runCommand() caller guess the full path. */
+ * to find them even though they're right there. Append whichever of the two is missing, once,
+ * rather than making every runCommand() caller guess the full path. An empty/unset PATH falls
+ * back to a plain default first (mtools lives in /usr/bin, not one of the sbin dirs this adds --
+ * replacing an unset PATH with only "/usr/sbin:/sbin" would make those unfindable instead). */
 static void ensureSbinInPath(void) {
-    const char *path = getenv("PATH");
-    const char *extra = "/usr/sbin:/sbin";
-    if (path == NULL) {
-        setenv("PATH", extra, 1);
-        return;
+    const char *envPath = getenv("PATH");
+    const char *basePath = (envPath != NULL && envPath[0] != '\0') ? envPath : "/usr/bin:/bin";
+    static const char *const sbinDirs[] = {"/usr/sbin", "/sbin"};
+
+    size_t len = strlen(basePath) + 1;
+    for (size_t i = 0; i < 2; i++) {
+        if (!pathHasComponent(basePath, sbinDirs[i])) {
+            len += 1 + strlen(sbinDirs[i]);
+        }
     }
-    if (strstr(path, "/usr/sbin") != NULL || strstr(path, "/sbin") != NULL) {
-        return;
-    }
-    size_t newLen = strlen(path) + 1 + strlen(extra) + 1;
-    char *newPath = malloc(newLen);
+    char *newPath = malloc(len);
     if (newPath == NULL) {
         return; /* best-effort; execvp will just fail with a clear error if this was needed */
     }
-    snprintf(newPath, newLen, "%s:%s", path, extra);
+    strcpy(newPath, basePath);
+    for (size_t i = 0; i < 2; i++) {
+        if (!pathHasComponent(basePath, sbinDirs[i])) {
+            strcat(newPath, ":");
+            strcat(newPath, sbinDirs[i]);
+        }
+    }
     setenv("PATH", newPath, 1);
     free(newPath);
 }
@@ -206,11 +242,12 @@ static const char *normalizePath(const char *path, char *buf, size_t bufSize) {
     if (path[0] == '/' || (path[0] == '.' && path[1] == '/')) {
         return path;
     }
-    snprintf(buf, bufSize, "./%s", path);
+    if (snprintf(buf, bufSize, "./%s", path) >= (int)bufSize) {
+        fprintf(stderr, "mkimage: path too long: %s\n", path);
+        exit(1);
+    }
     return buf;
 }
-
-#define ESP_LOADER_DIR "::/bong" /* M1.3+: boot.cfg, kernel.elf, initrd.img (ARCHITECTURE §5.1) */
 
 /* Builds a FAT32 ESP image at `espPath`, `espSectors` sectors, containing /EFI/BOOT/BOOTX64.EFI
  * (from opt->efi) and, if given, ESP_LOADER_DIR/{boot.cfg,kernel.elf,initrd.img}. `espStart`
