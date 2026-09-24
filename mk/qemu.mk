@@ -16,6 +16,9 @@ debug: image
 
 gdb: image
 	@[ -f $(IMAGE) ] || { echo "gdb: no image yet -- run 'make image' once M1.2 lands (see ROADMAP.md)"; exit 1; }
-	tests/harness/run-qemu.sh --image $(IMAGE) --fw uefi --interactive --extra "-s -S" & \
-	sleep 1; \
-	gdb -ex "target remote :1234"
+	@tests/harness/run-qemu.sh --image $(IMAGE) --fw uefi --gdb --name gdb-session
+	@pid=$$(cat build/run/gdb-session.pid 2>/dev/null); \
+	trap 'kill $$pid 2>/dev/null' EXIT INT TERM; \
+	for i in $$(seq 1 50); do nc -z localhost 1234 2>/dev/null && break; sleep 0.1; done; \
+	gdb -ex "target remote :1234"; \
+	kill $$pid 2>/dev/null; rm -f build/run/gdb-session.pid

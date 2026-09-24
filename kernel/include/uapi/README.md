@@ -1,1 +1,1 @@
-Headers shared with userspace: `syscalls.def` (X-macro syscall list), `status.h`, object/rights ids, and `bootinfo.h` (ARCHITECTURE §5.3, §10).
+Headers shared with userspace: `syscalls.def` (X-macro syscall list, M5.3), `status.h` (M1.3), and object/rights ids (M5.1). `bootinfo.h`, the boot handoff ABI, lives in `boot/common/include/` instead (ARCHITECTURE §5.3), since it's shared with the loaders, not with userspace.

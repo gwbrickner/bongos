@@ -13,17 +13,19 @@ usage: run-qemu.sh [options]
   --name NAME       log name (default <fw>-<cpus>cpu)
   --debug           add -d int,cpu_reset logging to build/logs/NAME.qemu.log
   --interactive     show a window / serial on stdio, no timeout (for humans)
+  --gdb             start paused with -s -S, serial to a log file, and return immediately;
+                     writes its pid to build/run/NAME.pid so a caller can gdb it and kill it
   --extra "ARGS"    extra QEMU arguments (devices, netdev, audio, iommu...)
 Monitor socket: build/run/NAME.monitor (screendump, sendkey, system_powerdown).
 Serial log:     build/logs/NAME.serial.log
 USAGE
 }
-IMAGE=build/bongos.img FW=uefi CPUS=1 MEM=512 TIMEOUT=120 NAME="" DEBUG=0 INTERACTIVE=0 EXTRA=""
+IMAGE=build/bongos.img FW=uefi CPUS=1 MEM=512 TIMEOUT=120 NAME="" DEBUG=0 INTERACTIVE=0 GDBMODE=0 EXTRA=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --image) IMAGE=$2; shift 2 ;; --fw) FW=$2; shift 2 ;; --cpus) CPUS=$2; shift 2 ;;
         --mem) MEM=$2; shift 2 ;; --timeout) TIMEOUT=$2; shift 2 ;; --name) NAME=$2; shift 2 ;;
-        --debug) DEBUG=1; shift ;; --interactive) INTERACTIVE=1; shift ;;
+        --debug) DEBUG=1; shift ;; --interactive) INTERACTIVE=1; shift ;; --gdb) GDBMODE=1; shift ;;
         --extra) EXTRA=$2; shift 2 ;; -h|--help) usage; exit 0 ;;
         *) echo "unknown option $1"; usage; exit 2 ;;
     esac
@@ -67,6 +69,15 @@ BASE=(qemu-system-x86_64 -M q35 -cpu max -smp "$CPUS" -m "$MEM" "${ACCEL[@]}" "$
       -drive "file=$OVERLAY,format=qcow2,if=none,id=bootdisk" -device ide-hd,drive=bootdisk,bus=ide.0
       -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot
       -monitor "unix:build/run/$NAME.monitor,server,nowait" "${DBG[@]}")
+
+if [ "$GDBMODE" = 1 ]; then
+    # shellcheck disable=SC2086
+    "${BASE[@]}" -display none -serial "file:$LOG" -s -S $EXTRA < /dev/null &
+    pid=$!
+    echo "$pid" > "build/run/$NAME.pid"
+    echo "QEMU started (pid $pid), paused, listening for gdb on :1234; serial log: $LOG"
+    exit 0
+fi
 
 if [ "$INTERACTIVE" = 1 ]; then
     # shellcheck disable=SC2086

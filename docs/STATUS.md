@@ -28,7 +28,11 @@ _(none)_
 _(none)_
 
 ## Waiting on owner (hardware checks and other owner-only steps)
-_(none)_
+- M1.1 added `libclang-rt-18-dev` (host-test sanitizers) and `gdb` (`make gdb`) to
+  `tools/ci/install-deps.sh`. The cloud environment's cached setup script needs re-running
+  once (Environment settings -> re-run setup, or it picks it up on the next cache
+  invalidation) for `make host-tests`/`make gdb` to work in a fresh session without CI's
+  own `sudo bash tools/ci/install-deps.sh` step.
 
 ## Parallel lanes (informational; updated by the main line when lanes merge)
 | Milestone | Branch | State |

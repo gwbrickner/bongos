@@ -5,6 +5,10 @@
 #include <stdio.h>
 
 int main(void) {
+    /* Unbuffered so RUN/PASS/FAIL interleave in order under CI's non-tty stdout, and so a
+     * crashing test doesn't take its output down with it. */
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     int total = 0;
     int failedTests = 0;
 
@@ -19,6 +23,11 @@ int main(void) {
         } else {
             printf("PASS %s\n", tc->name);
         }
+    }
+
+    if (total == 0) {
+        fprintf(stderr, "no tests registered\n");
+        return 1;
     }
 
     printf("%d/%d tests passed\n", total - failedTests, total);
