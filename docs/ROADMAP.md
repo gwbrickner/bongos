@@ -67,7 +67,7 @@ accident. Every storage milestone keeps a ktest proving the guard works.
 **Done when:** `make host-tests` and `make format-check` pass locally and in CI, and the
 workflow is green on the PR.
 
-### [ ] M1.2 UEFI headers + hello loader + disk image `needs-owner`
+### [x] M1.2 UEFI headers + hello loader + disk image `needs-owner`
 **Needs:** M1.1
 1. Add `boot/uefi/include/efi/`: our own minimal headers from the UEFI spec (base types, `EFI_SYSTEM_TABLE`, Boot Services, Simple Text Output, Loaded Image, Simple File System + File Protocol, GOP, RNG, the config-table GUIDs).
 2. Add a UEFI loader entry `efiMain` that prints `bongOS loader` to ConOut **and** to COM1 (port I/O is fine in the loader), then halts.
