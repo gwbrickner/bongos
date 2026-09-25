@@ -19,9 +19,19 @@ KERNEL_CFLAGS := --target=x86_64-unknown-elf -std=c17 -ffreestanding -nostdlib -
                  -Ikernel/include -Ikernel/arch/x86_64/include -Ikernel -Iboot/common/include \
                  -I$(BUILD)/include -MMD -MP \
                  -Wall -Wextra -Werror
-# Debug (default, RELEASE=0): -O1, no sanitizers yet (UBSan's runtime arrives in M2.1). Release:
-# -O2, same otherwise (ARCHITECTURE §3).
+# Debug (default, RELEASE=0): -O1 + UBSan. Release: -O2, no UBSan (ARCHITECTURE §3).
 KERNEL_CFLAGS += $(if $(filter 1,$(RELEASE)),-O2,-O1)
+
+# UBSan (D-076), debug builds only: an explicit check list, never the bare `-fsanitize=undefined`
+# group -- confirmed by direct compiler probe that clang 18 folds `function` into that group for
+# C, which prefixes every function with an 8-byte type-hash checked on indirect calls; the kernel's
+# hand-written asm entry points (kernelEntry, the trap stubs, ...) carry no such prefix, so an
+# indirect call into one would read unmapped memory just before it. `local-bounds` is excluded too
+# (emits a bare `ud2`, bypassing the handler entirely). kernel/core/ubsan.c (the handlers
+# themselves) is compiled with -fno-sanitize=all instead, via its own override rule below --
+# self-instrumenting the runtime that reports UBSan trips would be circular.
+KERNEL_UBSAN_CHECKS := alignment,bool,builtin,bounds,enum,integer-divide-by-zero,nonnull-attribute,null,object-size,pointer-overflow,returns-nonnull-attribute,shift,signed-integer-overflow,unreachable,vla-bound
+KERNEL_UBSAN_FLAGS := $(if $(filter 1,$(RELEASE)),,-fsanitize=$(KERNEL_UBSAN_CHECKS) -DKERNEL_UBSAN=1)
 
 # fbcon (kernel/drivers/fbcon) links boot/common/fbtext.c's glyph-blit primitive and
 # boot-status.c (for logging BootStatus failures), plus mk/font.mk's generated font data --
@@ -39,9 +49,16 @@ KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD)/%.o,$(KERNEL_C_SOURCES))
 KERNEL_ASM_OBJECTS := $(patsubst %.asm,$(KERNEL_BUILD)/%.o,$(KERNEL_ASM_SOURCES))
 KERNEL_OBJECTS := $(KERNEL_C_OBJECTS) $(KERNEL_ASM_OBJECTS)
 
+# ubsan.c's own override must come before the generic pattern rule below it (Make prefers a more
+# specific/explicit rule over a pattern rule for the same target) -- it can't be built with the
+# very sanitizer flags it implements the handlers for.
+$(KERNEL_BUILD)/kernel/core/ubsan.o: kernel/core/ubsan.c $(BRANDING_HDR)
+	@mkdir -p $(dir $@)
+	$(KERNEL_CC) $(KERNEL_CFLAGS) -fno-sanitize=all -c -o $@ $<
+
 $(KERNEL_BUILD)/%.o: %.c $(BRANDING_HDR)
 	@mkdir -p $(dir $@)
-	$(KERNEL_CC) $(KERNEL_CFLAGS) -c -o $@ $<
+	$(KERNEL_CC) $(KERNEL_CFLAGS) $(KERNEL_UBSAN_FLAGS) -c -o $@ $<
 -include $(KERNEL_C_OBJECTS:.o=.d)
 
 $(KERNEL_BUILD)/%.o: %.asm
