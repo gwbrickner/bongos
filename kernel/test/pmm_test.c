@@ -35,8 +35,8 @@ KTEST(pmm_alloc_free_stress) {
     int liveCount = 0;
 
     for (int op = 0; op < 100000; op++) {
-        bool doAlloc = (liveCount == 0) ||
-                       (liveCount < PMM_STRESS_LIVE_CAP && (pmmTestNextRand() & 1) != 0);
+        bool doAlloc =
+            (liveCount == 0) || (liveCount < PMM_STRESS_LIVE_CAP && (pmmTestNextRand() & 1) != 0);
         if (doAlloc) {
             uint32_t order = (uint32_t)(pmmTestNextRand() % (PMM_STRESS_MAX_ORDER + 1));
             PmmFlags flags = (pmmTestNextRand() & 4) != 0 ? PMM_FLAG_DMA32 : 0;

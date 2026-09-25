@@ -124,12 +124,15 @@ workflow is green on the PR.
 
 **Done when:** those ktests pass, and panic output includes a symbolized backtrace.
 
-### [ ] M2.2 Physical memory manager `needs-owner`
+### [x] M2.2 Physical memory manager `needs-owner`
 **Needs:** M2.1
 1. Early bump allocator over the BootInfo map.
 2. The `Page` array at the metadata region (§6.1). Buddy allocator orders 0-10 with `DMA32` and `NORMAL` zones.
 3. A per-CPU page cache (BSP-only for now, with the per-CPU API already in place).
-4. Reclaim `LOADER_RECLAIM` memory after switching stacks.
+4. ~~Reclaim `LOADER_RECLAIM` memory after switching stacks.~~ **Moved to M2.3 step 6 (D-083):**
+   reclaiming it here would free the *live* page tables (and the loader's identity-mapped
+   trampoline page) the CPU is still using for address translation, since the kernel doesn't have
+   its own page tables to switch to until M2.3.
 5. ktests: an alloc/free stress test (100k ops, random orders); a no-leak check (free count restored); zone correctness; a double-free is detected in debug builds.
 
 **Done when:** the ktests pass, and `/proc/meminfo`-style totals printed at boot match the BootInfo map.
@@ -144,6 +147,11 @@ workflow is green on the PR.
 3. PAT setup (WB/WC/UC). Remap the framebuffer as WC.
 4. Enable SMEP/SMAP/UMIP when present. Add the `vmmMapKernel`/`vmmUnmapKernel` APIs and the kernel virtual area allocator.
 5. ktests: a write to the text segment faults; executing from a data page faults; the framebuffer mapping is WC (read the PAT bits back).
+6. Reclaim `LOADER_RECLAIM` memory (moved from M2.2 step 4, D-083), after switching to the
+   kernel's own page tables and toggling CR4.PGE, via `pmmAddFreeRange()` over the pmm's own
+   `PmmMap.loaderReclaim[]` -- no second bump-then-buddy pass. Stop using `kernelBootInfo()`'s live
+   pointer/the loader's memory-map array once this runs. Keep the `BootInfo` page itself reserved
+   until M2.6 wipes the (by then consumed) random seed and frees it.
 
 **Done when:** the ktests pass, and the boot log shows W^X verified.
 

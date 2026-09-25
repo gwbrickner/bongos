@@ -53,8 +53,8 @@ typedef struct {
     PmmReclaimRange loaderReclaim[PMM_MAX_RECLAIM_RANGES];
     uint32_t loaderReclaimCount;
 
-    uint64_t lowReservedPages; /* USABLE below 1 MiB */
-    uint64_t unmappedPages;    /* USABLE at/beyond the HHDM window */
+    uint64_t lowReservedPages;                    /* USABLE below 1 MiB */
+    uint64_t unmappedPages;                       /* USABLE at/beyond the HHDM window */
     uint64_t typePages[BOOT_MEM_FRAMEBUFFER + 1]; /* raw map totals, in pages, by BootMemType */
 } PmmMap;
 

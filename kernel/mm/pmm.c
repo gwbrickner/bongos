@@ -145,36 +145,36 @@ static void pmmValidateForFree(Page *page, uint32_t order, uint64_t *outPfn) {
     }
 
     switch (page->state) {
-    case PAGE_STATE_ALLOCATED:
-        if (page->order != order) {
-            pmmBug(PMM_BUG_ORDER_MISMATCH, pfn);
-        }
-        *outPfn = pfn;
-        return;
-    case PAGE_STATE_BUDDY:
-    case PAGE_STATE_PCP:
-        pmmBug(PMM_BUG_DOUBLE_FREE, pfn);
-    case PAGE_STATE_TAIL: {
-        /* Is `pfn` covered by some block that's *already* free? For every alignment k, the
-         * k-aligned floor of `pfn` is a multiple of 2^k; if that candidate head is a free BUDDY
-         * block of order >= k, then (both being multiples of 2^k) pfn must lie inside
-         * [candidate, candidate + 2^order) -- i.e. this exact frame was already returned to the
-         * allocator, so freeing it again is a double free. If no k finds such a block, `pfn` is
-         * simply an interior page of a still-live ALLOCATED block -- a caller bug, but not (yet)
-         * a double free. */
-        for (uint32_t k = 0; k <= PMM_MAX_ORDER; k++) {
-            uint64_t headPfn = pfn & ~(((uint64_t)1 << k) - 1);
-            Page *head = pageFromPfn(headPfn);
-            if (head->state == PAGE_STATE_BUDDY && head->order >= k) {
-                pmmBug(PMM_BUG_DOUBLE_FREE, pfn);
+        case PAGE_STATE_ALLOCATED:
+            if (page->order != order) {
+                pmmBug(PMM_BUG_ORDER_MISMATCH, pfn);
             }
+            *outPfn = pfn;
+            return;
+        case PAGE_STATE_BUDDY:
+        case PAGE_STATE_PCP:
+            pmmBug(PMM_BUG_DOUBLE_FREE, pfn);
+        case PAGE_STATE_TAIL: {
+            /* Is `pfn` covered by some block that's *already* free? For every alignment k, the
+             * k-aligned floor of `pfn` is a multiple of 2^k; if that candidate head is a free BUDDY
+             * block of order >= k, then (both being multiples of 2^k) pfn must lie inside
+             * [candidate, candidate + 2^order) -- i.e. this exact frame was already returned to the
+             * allocator, so freeing it again is a double free. If no k finds such a block, `pfn` is
+             * simply an interior page of a still-live ALLOCATED block -- a caller bug, but not
+             * (yet) a double free. */
+            for (uint32_t k = 0; k <= PMM_MAX_ORDER; k++) {
+                uint64_t headPfn = pfn & ~(((uint64_t)1 << k) - 1);
+                Page *head = pageFromPfn(headPfn);
+                if (head->state == PAGE_STATE_BUDDY && head->order >= k) {
+                    pmmBug(PMM_BUG_DOUBLE_FREE, pfn);
+                }
+            }
+            pmmBug(PMM_BUG_NOT_HEAD, pfn);
         }
-        pmmBug(PMM_BUG_NOT_HEAD, pfn);
-    }
-    case PAGE_STATE_RESERVED:
-        pmmBug(PMM_BUG_RESERVED_FRAME, pfn);
-    default:
-        pmmBug(PMM_BUG_CORRUPT_STATE, pfn);
+        case PAGE_STATE_RESERVED:
+            pmmBug(PMM_BUG_RESERVED_FRAME, pfn);
+        default:
+            pmmBug(PMM_BUG_CORRUPT_STATE, pfn);
     }
 }
 
@@ -273,7 +273,7 @@ Status pmmAllocPages(uint32_t order, PmmFlags flags, Page **outPage) {
     bool ok = false;
     for (uint32_t i = 0; i < zoneCount && !ok; i++) {
         ok = (order == 0) ? pmmCacheAllocLocked(zoneList[i], &pfn)
-                           : buddyAllocBlock(&pmmZones[zoneList[i]], order, &pfn);
+                          : buddyAllocBlock(&pmmZones[zoneList[i]], order, &pfn);
     }
     if (!ok) {
         pmmUnlock(irqFlags);
@@ -352,8 +352,8 @@ Status pmmAddFreeRange(uint64_t physBase, uint64_t length) {
         }
         PmmZone *zone = &pmmZones[pmmZoneOfPfn(pfn)];
         zone->managedPages += (uint64_t)1 << order; /* this range is entering the zone for the
-                                                       * first time -- ordinary frees never do
-                                                       * this (buddyFreeBlock's own contract) */
+                                                     * first time -- ordinary frees never do
+                                                     * this (buddyFreeBlock's own contract) */
         buddyFreeBlock(zone, pfn, order);
         pfn += (uint64_t)1 << order;
     }
@@ -397,8 +397,10 @@ void pmmPrintMeminfo(void) {
     klogWrite(KLOG_INFO, "meminfo", "PageArray:   %llu kB (array %llu kB + tables %llu kB)",
               (unsigned long long)s.earlyPages * 4, (unsigned long long)s.pageArrayPages * 4,
               (unsigned long long)s.pageTablePages * 4);
-    klogWrite(KLOG_INFO, "meminfo", "LowReserved: %llu kB", (unsigned long long)s.lowReservedPages * 4);
-    klogWrite(KLOG_INFO, "meminfo", "Unmapped:    %llu kB", (unsigned long long)s.unmappedPages * 4);
+    klogWrite(KLOG_INFO, "meminfo", "LowReserved: %llu kB",
+              (unsigned long long)s.lowReservedPages * 4);
+    klogWrite(KLOG_INFO, "meminfo", "Unmapped:    %llu kB",
+              (unsigned long long)s.unmappedPages * 4);
     for (uint32_t t = BOOT_MEM_USABLE; t <= BOOT_MEM_FRAMEBUFFER; t++) {
         if (t == BOOT_MEM_USABLE || s.typePages[t] == 0) {
             continue;
@@ -506,7 +508,8 @@ void pmmInit(const BootInfo *bi) {
     pmmEarlySeal();
     pmmPageTablePages = pmmEarlyUsedPages() - pmmPageArrayPages;
 
-    klogWrite(KLOG_INFO, "pmm", "Page array: %llu KiB (%llu KiB page tables), %u span(s), maxPfn=0x%llx",
+    klogWrite(KLOG_INFO, "pmm",
+              "Page array: %llu KiB (%llu KiB page tables), %u span(s), maxPfn=0x%llx",
               (unsigned long long)pmmPageArrayPages * 4, (unsigned long long)pmmPageTablePages * 4,
               pmmMap.spanCount, (unsigned long long)pmmMap.maxPfn);
 

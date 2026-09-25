@@ -17,14 +17,14 @@
 
 bool pmmMapTypeIsManaged(uint32_t type) {
     switch (type) {
-    case BOOT_MEM_USABLE:
-    case BOOT_MEM_LOADER_RECLAIM:
-    case BOOT_MEM_KERNEL:
-    case BOOT_MEM_INITRD:
-    case BOOT_MEM_ACPI_RECLAIM:
-        return true;
-    default:
-        return false;
+        case BOOT_MEM_USABLE:
+        case BOOT_MEM_LOADER_RECLAIM:
+        case BOOT_MEM_KERNEL:
+        case BOOT_MEM_INITRD:
+        case BOOT_MEM_ACPI_RECLAIM:
+            return true;
+        default:
+            return false;
     }
 }
 

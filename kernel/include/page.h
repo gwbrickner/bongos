@@ -30,17 +30,17 @@ typedef enum {
  * are declared now (ARCHITECTURE §6.2) but unused until VmObject exists (M4+); `privateWord` is
  * free for an owner to use (M2.4's slab allocator stores a `Slab*` there). */
 typedef struct Page {
-    uint8_t state;          /* 0  PageState */
-    uint8_t order;          /* 1  valid for BUDDY/ALLOCATED heads */
-    uint16_t flags;         /* 2  PAGE_F_* */
-    uint32_t reserved0;     /* 4  must be 0 */
-    int32_t refcount;       /* 8  1 on an allocated head, 0 when free; M4 owns real semantics */
-    int32_t mapcount;       /* 12 0 until M4 */
-    ListNode lru;           /* 16 free-list / per-CPU-cache link while free; LRU link later */
+    uint8_t state;           /* 0  PageState */
+    uint8_t order;           /* 1  valid for BUDDY/ALLOCATED heads */
+    uint16_t flags;          /* 2  PAGE_F_* */
+    uint32_t reserved0;      /* 4  must be 0 */
+    int32_t refcount;        /* 8  1 on an allocated head, 0 when free; M4 owns real semantics */
+    int32_t mapcount;        /* 12 0 until M4 */
+    ListNode lru;            /* 16 free-list / per-CPU-cache link while free; LRU link later */
     struct VmObject *object; /* 32 NULL until M4 (incomplete type: no definition needed yet) */
-    uint64_t objectIndex;   /* 40 page index within object; 0 until M4 */
-    uint64_t privateWord;   /* 48 owner-private (M2.4: Slab*) */
-    uint64_t reserved1;     /* 56 must be 0; spare */
+    uint64_t objectIndex;    /* 40 page index within object; 0 until M4 */
+    uint64_t privateWord;    /* 48 owner-private (M2.4: Slab*) */
+    uint64_t reserved1;      /* 56 must be 0; spare */
 } Page;
 _Static_assert(sizeof(Page) == 64, "Page must be exactly 64 bytes (ARCHITECTURE §6.2)");
 

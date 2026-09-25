@@ -43,9 +43,9 @@ update-refs: image imgdiff
 # printFrame format), confirmed against a real serial log before being pinned down here.
 _check-ktest-pass:
 	@status=0; \
-	while read -r fw cpus rest; do \
+	while read -r fw cpus mem; do \
 	    case "$$fw" in ''|\#*) continue ;; esac; \
-	    name="$${fw}-$${cpus}cpu"; \
+	    if [ -n "$$mem" ]; then name="$${fw}-$${cpus}cpu-$${mem}m"; else name="$${fw}-$${cpus}cpu"; fi; \
 	    log="build/logs/$$name.serial.log"; \
 	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF 'KTEST PASS bootinfo_valid'; then \
 	        echo "make test: $$log does not contain 'KTEST PASS bootinfo_valid' (ROADMAP Done-when guarantee not met)"; \

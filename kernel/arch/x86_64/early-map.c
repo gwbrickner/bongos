@@ -22,7 +22,7 @@ static inline uint64_t *tableAt(uint64_t phys) {
  * the caller rather than something to route around. Non-leaf entries are always P|W only (SDM Vol
  * 3A §4.6: W is ANDed and XD is ORed down the walk, so only the leaf's own flags matter). */
 static Status getOrAllocTable(uint64_t *table, uint32_t idx, ArchEarlyTableAllocFn allocTable,
-                               uint64_t **outNext) {
+                              uint64_t **outNext) {
     uint64_t entry = table[idx];
     if (entry & X86_PTE_P) {
         if (entry & X86_PTE_PS) {

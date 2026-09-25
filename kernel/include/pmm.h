@@ -30,14 +30,14 @@ typedef uint32_t PmmFlags;
 #define PMM_FLAGS_VALID (PMM_FLAG_DMA32 | PMM_FLAG_ZERO)
 
 typedef struct {
-    uint64_t usablePages;   /* BootInfo USABLE total */
-    uint64_t managedPages;  /* handed to the buddy allocator via pmmAddFreeRange */
-    uint64_t freePages;     /* managedPages currently free: buddy free lists + every cache */
-    uint64_t cachedPages;   /* subset of freePages sitting in the (BSP) per-CPU cache */
+    uint64_t usablePages;  /* BootInfo USABLE total */
+    uint64_t managedPages; /* handed to the buddy allocator via pmmAddFreeRange */
+    uint64_t freePages;    /* managedPages currently free: buddy free lists + every cache */
+    uint64_t cachedPages;  /* subset of freePages sitting in the (BSP) per-CPU cache */
     uint64_t allocatedPages;
-    uint64_t earlyPages;      /* consumed by the bump allocator (Page array + its page tables) */
-    uint64_t pageArrayPages;  /* subset of earlyPages: the Page array itself */
-    uint64_t pageTablePages;  /* subset of earlyPages: page tables mapping the Page array */
+    uint64_t earlyPages;       /* consumed by the bump allocator (Page array + its page tables) */
+    uint64_t pageArrayPages;   /* subset of earlyPages: the Page array itself */
+    uint64_t pageTablePages;   /* subset of earlyPages: page tables mapping the Page array */
     uint64_t lowReservedPages; /* USABLE below 1 MiB, withheld from the buddy allocator */
     uint64_t unmappedPages;    /* USABLE at or beyond the 64 TiB HHDM window */
     uint64_t zoneManagedPages[PMM_ZONE_COUNT];

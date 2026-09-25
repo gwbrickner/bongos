@@ -20,13 +20,13 @@ TEST(pmmMapScanQemuLike) {
     /* A typical q35/512 MiB boot: low USABLE RAM, the kernel/loader-reclaim block, some
      * reserved/ACPI space, a framebuffer BAR. */
     BootMemRegion regions[] = {
-        region(0, 0x100000, BOOT_MEM_RESERVED),                    /* [0, 1 MiB) */
-        region(0x100000, 0x700000, BOOT_MEM_USABLE),                /* [1 MiB, 8 MiB) */
-        region(0x800000, 0x200000, BOOT_MEM_KERNEL),                /* [8 MiB, 10 MiB) */
-        region(0xA00000, 0x100000, BOOT_MEM_LOADER_RECLAIM),        /* [10 MiB, 11 MiB) */
-        region(0xB00000, 0x1F500000, BOOT_MEM_USABLE),              /* [11 MiB, 512 MiB) */
-        region(0xFEC00000, 0x1000, BOOT_MEM_RESERVED),              /* IOAPIC MMIO hole */
-        region(0xFD000000, 0x1000000, BOOT_MEM_FRAMEBUFFER),        /* GPU BAR */
+        region(0, 0x100000, BOOT_MEM_RESERVED),              /* [0, 1 MiB) */
+        region(0x100000, 0x700000, BOOT_MEM_USABLE),         /* [1 MiB, 8 MiB) */
+        region(0x800000, 0x200000, BOOT_MEM_KERNEL),         /* [8 MiB, 10 MiB) */
+        region(0xA00000, 0x100000, BOOT_MEM_LOADER_RECLAIM), /* [10 MiB, 11 MiB) */
+        region(0xB00000, 0x1F500000, BOOT_MEM_USABLE),       /* [11 MiB, 512 MiB) */
+        region(0xFEC00000, 0x1000, BOOT_MEM_RESERVED),       /* IOAPIC MMIO hole */
+        region(0xFD000000, 0x1000000, BOOT_MEM_FRAMEBUFFER), /* GPU BAR */
     };
     PmmMap map;
     ASSERT_EQ(pmmMapScan(regions, 7, &map), STATUS_OK);
@@ -51,7 +51,7 @@ TEST(pmmMapScanQemuLike) {
 
 TEST(pmmMapScanRegionStraddling4Gib) {
     BootMemRegion regions[] = {
-        region(0x100000, 0x0FFF00000ull, BOOT_MEM_USABLE), /* [1 MiB, 4 GiB) */
+        region(0x100000, 0x0FFF00000ull, BOOT_MEM_USABLE),      /* [1 MiB, 4 GiB) */
         region(0x100000000ull, 0x40000000ull, BOOT_MEM_USABLE), /* [4 GiB, 5 GiB) */
     };
     PmmMap map;
@@ -91,8 +91,8 @@ TEST(pmmMapScanBeyondHhdmWindow) {
 
 TEST(pmmMapScanAdjacentManagedTypesMergeIntoOneSpan) {
     BootMemRegion regions[] = {
-        region(0x100000, 0x100000, BOOT_MEM_USABLE),        /* [1, 2 MiB) */
-        region(0x200000, 0x100000, BOOT_MEM_KERNEL),        /* [2, 3 MiB) */
+        region(0x100000, 0x100000, BOOT_MEM_USABLE),         /* [1, 2 MiB) */
+        region(0x200000, 0x100000, BOOT_MEM_KERNEL),         /* [2, 3 MiB) */
         region(0x300000, 0x100000, BOOT_MEM_LOADER_RECLAIM), /* [3, 4 MiB) */
     };
     PmmMap map;

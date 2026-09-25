@@ -137,7 +137,7 @@ static struct {
 #define TRAP_CATCH_FORBIDDEN_MASK (TRAP_CATCH_VEC(2) | TRAP_CATCH_VEC(8) | TRAP_CATCH_VEC(18))
 /* Every bit archTrapCatch actually knows how to honor: vectors 0-31, plus the three software
  * kinds. */
-#define TRAP_CATCH_VALID_MASK                                                                     \
+#define TRAP_CATCH_VALID_MASK                                                                      \
     (0xFFFFFFFFULL | TRAP_CATCH_STACK_SMASH | TRAP_CATCH_UBSAN | TRAP_CATCH_KERNEL_BUG)
 
 /* Disarms any in-progress catch without resuming anywhere -- used by the panic path (trap.c below)

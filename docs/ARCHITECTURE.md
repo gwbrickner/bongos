@@ -144,6 +144,12 @@ hand-written assembly entry points carry no such prefix, so an indirect call int
 unmapped memory just before it. `local-bounds` is also excluded (emits a bare `ud2`, bypassing
 the handler entirely). Every check always panics; there is no log-and-continue mode.
 
+**`KERNEL_DEBUG` (debug builds, D-082):** a second, coarser debug-build define alongside
+`KERNEL_UBSAN`, gating extra-cost invariant checks that aren't sanitizer instrumentation -- today,
+the pmm's write-after-free poisoning (§6.2) and `list.h`'s NULL-the-links-on-remove hardening.
+Misuse that's cheap enough to detect unconditionally (the pmm's double-free/misuse state machine)
+stays on in release builds too; `KERNEL_DEBUG` is only for checks with a real per-operation cost.
+
 **Make targets:** `all`, `image` (-> `build/bongos.img`), `test` (quick matrix), `test-full`,
 `host-tests`, `debug`, `run`, `run-bios`, `gdb`, `format`, `lint`, `clean`.
 
@@ -369,18 +375,38 @@ The PML4 entries 256-511 (the kernel half) are allocated at boot and shared by e
 space, so kernel mappings never need to be synced between them.
 
 ### 6.2 Physical memory
-1. **Early:** a bump allocator over the BootInfo map, used until the buddy allocator is up.
-2. **Buddy allocator:** orders 0-10 (4 KiB to 4 MiB), in zones `DMA32` (below 4 GiB, for
-   devices that need it) and `NORMAL`. Each CPU has a page cache in front of it (batch refill
-   and drain).
-3. **`Page` struct (64 bytes max):** flags, refcount, mapcount, the owning `VmObject` and
-   offset, LRU links, and a private word.
-4. **Slab allocator:** named object caches with per-CPU magazines. `kmalloc` has size classes
+1. **`Page` array (M2.2, D-079):** one 64-byte `Page` per managed physical frame (state/order/
+   flags/refcount/mapcount/an intrusive free-list `ListNode`/the owning `VmObject`+offset once M4
+   exists/a private word M2.4's slab allocator uses), at the §6.1 metadata VA region, indexed by
+   pfn with plain integer arithmetic. Backing is **sparse**: only pfn ranges the BootInfo map
+   reports as USABLE/LOADER_RECLAIM/KERNEL/INITRD/ACPI_RECLAIM (clipped to the HHDM window) get
+   Page entries, widened to 1024-frame (order-10) envelopes and merged -- a free block is always
+   naturally aligned and at most order 10, so a buddy merge never needs a separate validity check.
+   A zero-filled entry is `PAGE_STATE_RESERVED` by construction.
+2. **Early (M2.2, D-080):** a bump allocator over the BootInfo USABLE ranges (top-down, highest
+   range first), used only to back the Page array and its own page tables before the buddy
+   allocator exists; sealed once `pmmInit()` finishes. USABLE memory below 1 MiB is withheld from
+   the buddy allocator entirely (reserved for the M3.5 SMP trampoline / BIOS-area safety).
+3. **Buddy allocator (M2.2, D-081):** orders 0-10 (4 KiB to 4 MiB), in zones `DMA32` (below 4 GiB,
+   fixed by address) and `NORMAL`, with block state living entirely in the Page array (no separate
+   bitmap). `pmmAddFreeRange()` is the only way memory enters a zone -- used for BootInfo's USABLE
+   ranges at boot, and reused as-is for `LOADER_RECLAIM` (M2.3), `ACPI_RECLAIM` (M3.1), and
+   `INITRD` (M5.5). A BSP-only per-CPU page cache (order 0 only, one free list per zone) fronts
+   every order-0 request through a single accessor M3.5 replaces with real per-CPU state.
+4. **Misuse detection (M2.2, D-082):** `pmmFreePages()` validates every call against the Page
+   state machine *before* mutating anything -- a double free, a wrong order, or freeing an
+   interior/reserved page panics via `panicBug()` (always on, not just debug builds). `KERNEL_DEBUG`
+   builds (§3) additionally poison a freed block's content and verify it on the next allocation,
+   catching a write-after-free.
+5. **Slab allocator:** named object caches with per-CPU magazines. `kmalloc` has size classes
    from 16 to 8192 bytes. Anything larger goes to `vmalloc`, which is page-granular and has
    guard pages.
-5. **Kernel stacks:** 16 KiB plus a guard page, in the kernel virtual area.
-6. **Reclaim:** `LOADER_RECLAIM` and `ACPI_RECLAIM` memory is handed to the buddy allocator
-   once it's no longer needed.
+6. **Kernel stacks:** 16 KiB plus a guard page, in the kernel virtual area.
+7. **Reclaim:** `LOADER_RECLAIM` is handed to the buddy allocator once the kernel switches to its
+   own page tables and no longer needs the loader's (M2.3, D-083 -- superseding this section's
+   earlier "after switching stacks" wording, which predates the kernel having its own page tables
+   at all); `ACPI_RECLAIM` once ACPI tables are parsed (M3.1); `INITRD` once it's no longer needed
+   (M5.5).
 
 ### 6.3 Paging
 - 4-level paging. Kernel mappings are marked global.
@@ -1068,18 +1094,20 @@ serial. The run ends by writing to the `isa-debug-exit` port (0xF4): `0x10` mean
 a reset to CRASH.
 
 **Deliberately faulting a ktest (M2.1, D-078):** a ktest that needs to prove the kernel *detects*
-a real fault (a deliberate #PF, #UD) or a software-checked violation (a stack smash, a UBSan trip)
-without ending the whole test run calls `archTrapCatch(mask, fn, arg, &info)`, which runs `fn`
-with a saved callee-saved-register context. A matching **hardware fault** (vector 0-31) prints the
-normal report first (still exercising the symbolized backtrace) before redirecting execution back
-to `archTrapCatch`'s caller; a matching **software trip** (`TRAP_CATCH_STACK_SMASH`/
-`TRAP_CATCH_UBSAN`, offered by `__stack_chk_fail()`/the UBSan handlers via
-`archTrapCatchSoftware()`) is deliberately silent on serial and redirects immediately -- the ktest
-itself reports PASS/FAIL, and the point of catching it there is to *avoid* the loud panic report a
-real, uncaught trip still prints. Either way, `*info` is filled in with what was caught. One-shot,
-non-nesting, ktest-only (`archTrapCatch` itself panics if called outside a ktest run), and it can
-never catch NMI/#DF/#MC or #BP -- those stay always-fatal, or (#BP) already resume unconditionally
-before archTrapCatch ever sees them (§7.2).
+a real fault (a deliberate #PF, #UD) or a software-checked violation (a stack smash, a UBSan trip,
+or -- M2.2, D-082 -- a `panicBug()`-reported kernel-internal invariant violation like a pmm double
+free, via `TRAP_CATCH_KERNEL_BUG`) without ending the whole test run calls `archTrapCatch(mask,
+fn, arg, &info)`, which runs `fn` with a saved callee-saved-register context. A matching
+**hardware fault** (vector 0-31) prints the normal report first (still exercising the symbolized
+backtrace) before redirecting execution back to `archTrapCatch`'s caller; a matching **software
+trip** (`TRAP_CATCH_STACK_SMASH`/`TRAP_CATCH_UBSAN`/`TRAP_CATCH_KERNEL_BUG`, offered by
+`__stack_chk_fail()`/the UBSan handlers/`panicBug()` via `archTrapCatchSoftware()`) is deliberately
+silent on serial and redirects immediately -- the ktest itself reports PASS/FAIL, and the point of
+catching it there is to *avoid* the loud panic report a real, uncaught trip still prints. Either
+way, `*info` is filled in with what was caught. One-shot, non-nesting, ktest-only (`archTrapCatch`
+itself panics if called outside a ktest run), and it can never catch NMI/#DF/#MC or #BP -- those
+stay always-fatal, or (#BP) already resume unconditionally before archTrapCatch ever sees them
+(§7.2).
 
 ---
 

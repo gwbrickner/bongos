@@ -11,7 +11,8 @@
 
 static PmmMap *earlyMap;
 static uint64_t earlyHhdmBase;
-static uint64_t earlyCursor[PMM_MAX_USABLE_RANGES]; /* per-range: pfn boundary of what's still free */
+static uint64_t
+    earlyCursor[PMM_MAX_USABLE_RANGES]; /* per-range: pfn boundary of what's still free */
 static bool earlySealed;
 static uint64_t earlyUsedPages;
 

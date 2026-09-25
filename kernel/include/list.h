@@ -78,7 +78,7 @@ static inline ListNode *listPopTail(ListNode *head) {
 }
 
 /* Recovers the containing struct of a ListNode member -- e.g. LIST_CONTAINER(node, Page, lru). */
-#define LIST_CONTAINER(nodePtr, type, member)                                                     \
-    ((type *)(void *)((char *)(nodePtr)-offsetof(type, member)))
+#define LIST_CONTAINER(nodePtr, type, member)                                                      \
+    ((type *)(void *)((char *)(nodePtr) - offsetof(type, member)))
 
 #endif
