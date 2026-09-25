@@ -135,9 +135,10 @@ static struct {
  * "forbidden" vector in the same sense -- trapDispatch() just resumes it before archTrapCatch ever
  * gets a look, so a catch for it could never fire). */
 #define TRAP_CATCH_FORBIDDEN_MASK (TRAP_CATCH_VEC(2) | TRAP_CATCH_VEC(8) | TRAP_CATCH_VEC(18))
-/* Every bit archTrapCatch actually knows how to honor: vectors 0-31, plus the two software kinds.
- */
-#define TRAP_CATCH_VALID_MASK (0xFFFFFFFFULL | TRAP_CATCH_STACK_SMASH | TRAP_CATCH_UBSAN)
+/* Every bit archTrapCatch actually knows how to honor: vectors 0-31, plus the three software
+ * kinds. */
+#define TRAP_CATCH_VALID_MASK                                                                      \
+    (0xFFFFFFFFULL | TRAP_CATCH_STACK_SMASH | TRAP_CATCH_UBSAN | TRAP_CATCH_KERNEL_BUG)
 
 /* Disarms any in-progress catch without resuming anywhere -- used by the panic path (trap.c below)
  * so a fatal fault that isn't itself a match can't leave a stale armed catch around to wrongly

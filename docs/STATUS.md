@@ -1,27 +1,44 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M2.1 done, reviewer PASS, [PR #5](https://github.com/gwbrickner/bongos/pull/5) open; M2.2 is next)
+**Last updated:** 2026-09-25 (M2.1 merged (PR #5); M2.2 Physical memory manager done, [PR #6](https://github.com/gwbrickner/bongos/pull/6) open; M2.3 is next)
 
 ## Current milestone
-None in progress. **M2.1 GDT, IDT, exceptions, hardening runtime** is done -- see `docs/logs/
-M2.1.md` for the full writeup and its Summary section for the release notes. ROADMAP.md's M2.1 box
-is checked. The `reviewer` subagent found no Critical findings on the full milestone diff; all 8
-Should-fix items it raised were fixed (see the log's reviewer-round entry) -- a `ubsanReporting`
-recursion-guard ordering bug, a UBSan RIP that resolved to the wrong function, a still-armed-catch
-race that could misattribute an unrelated later fault, incomplete RFLAGS clearing on a caught-fault
-resume, an `archTrapCatchResume` that depended on stack memory the very mechanism under test could
-corrupt (fixed at the root, not just worked around), a missing automated check that a panic
-report's backtrace is actually symbolized, and a missing contract comment on `trapDispatch`. PR
-open against `main`, `needs-owner: yes` (D-045/§25 -- interrupts, security-sensitive stack-
-protector/UBSan runtimes, and a boot-ABI change to the kernel ELF's PT_LOAD count, D-073).
+None in progress. **M2.2 Physical memory manager** is done -- see `docs/logs/M2.2.md` for the full
+writeup and its Summary section for the release notes. ROADMAP.md's M2.2 box is checked. The
+`reviewer` subagent's first pass found one Critical finding (a real double-free bug: freeing the
+*upper* half of a buddy pair could abandon its own head page in a stale allocated state, letting a
+second free through undetected) and 8 Should-fix items; the Critical and 7 of the 8 Should-fix
+items were fixed, the 8th recorded as a deliberate deferral (D-085, not a real risk within this
+milestone's single-CPU/IF=0 scope). A second `reviewer` pass on the fixes found no further Critical
+findings (VERDICT: PASS) and only minor nits, all addressed. `make test`/`make test-full` (21/21
+ktests, including a new memory-diversity row exercising the NORMAL zone, D-084) pass clean with no
+boot errors. [PR #6](https://github.com/gwbrickner/bongos/pull/6) open against `main`,
+`needs-owner: yes` (D-045/§25 -- memory management,
+the boot-time page mapper in `kernel/arch/x86_64/early-map.c`, a new interrupt-catch kind, and a
+ROADMAP milestone-steps change, D-083).
 
-**Next milestone: M2.2 Physical memory manager** (`needs-owner`, ROADMAP.md). Needs M2.1, now
-done. Steps: an early bump allocator over the BootInfo map; the `Page` array at the metadata
-region (ARCHITECTURE §6.1); a buddy allocator (orders 0-10, DMA32/NORMAL zones); a per-CPU page
-cache (BSP-only for now); reclaiming `LOADER_RECLAIM` memory after switching stacks (see "Questions
-for owner" below -- this step's wording may need an owner decision before it starts). Consult the
-`architect` subagent first (memory management is on CLAUDE.md's consult-first list).
+**M2.1 GDT, IDT, exceptions, hardening runtime**: merged to `main` via
+[PR #5](https://github.com/gwbrickner/bongos/pull/5). ROADMAP.md's M2.1 box is checked. The
+`reviewer` subagent found no Critical findings on the full milestone diff; all 8 Should-fix items
+it raised were fixed (see the log's reviewer-round entry) -- a `ubsanReporting` recursion-guard
+ordering bug, a UBSan RIP that resolved to the wrong function, a still-armed-catch race that could
+misattribute an unrelated later fault, incomplete RFLAGS clearing on a caught-fault resume, an
+`archTrapCatchResume` that depended on stack memory the very mechanism under test could corrupt
+(fixed at the root, not just worked around), a missing automated check that a panic report's
+backtrace is actually symbolized, and a missing contract comment on `trapDispatch`. Merged against
+`main`, was `needs-owner: yes` (D-045/§25 -- interrupts, security-sensitive stack-protector/UBSan
+runtimes, and a boot-ABI change to the kernel ELF's PT_LOAD count, D-073).
+
+**Next milestone: M2.3 Kernel paging** (`needs-owner`, ROADMAP.md). Needs M2.2, now done. Steps:
+build the kernel's own PML4 (HHDM, per-section kernel image permissions, pre-allocated kernel-half
+PML4 entries 256-511); switch to it and remove the loader identity mapping; PAT setup (remap the
+framebuffer WC); SMEP/SMAP/UMIP; `vmmMapKernel`/`vmmUnmapKernel` and the kernel virtual area
+allocator; and step 6 (moved from M2.2, D-083): reclaim `LOADER_RECLAIM` memory via
+`pmmAddFreeRange()` over the pmm's own `PmmMap.loaderReclaim[]`, once the kernel's own page tables
+are live and CR4.PGE has been toggled -- and stop using `kernelBootInfo()`'s live pointer/the
+loader's memory-map array once that reclaim runs. Consult the `architect` subagent first (paging is
+on CLAUDE.md's consult-first list).
 
 ## Phase
 1: Acapulco Gold
@@ -75,7 +92,7 @@ for owner" below -- this step's wording may need an owner decision before it sta
   identical) -- all 9 fixed, verified individually and then together (`make format-check`,
   `make host-tests` 131/131, `make image`, `make test` including regenerated GUI references), see
   `docs/logs/M1.4.md`'s reviewer-round entries. PR #4 merged.
-- M2.1 ([PR #5](https://github.com/gwbrickner/bongos/pull/5) open, `needs-owner: yes`): bongOS has a real GDT/TSS with dedicated IST stacks for
+- M2.1 (merged, [PR #5](https://github.com/gwbrickner/bongos/pull/5)): bongOS has a real GDT/TSS with dedicated IST stacks for
   #DF/NMI/#MC and a full 256-vector IDT (D-072/D-074) -- every exception is reported with
   registers/CR2/control registers and a **symbolized** backtrace, then panics, except #BP, which
   resumes cleanly. Symbolization comes from a new embedded KSYM v1 symbol table (D-075,
@@ -94,29 +111,54 @@ for owner" below -- this step's wording may need an owner decision before it sta
   race, incomplete RFLAGS clearing, the resume-depends-on-stack-memory issue fixed at its root
   this time rather than just bounded around, a missing automated symbolized-backtrace check, a
   missing contract comment) -- all fixed, see `docs/logs/M2.1.md`'s reviewer-round entry.
+- M2.2 ([PR #6](https://github.com/gwbrickner/bongos/pull/6) open, `needs-owner: yes`): bongOS has a real physical memory manager. A sparse
+  `Page` metadata array (D-079, one 64-byte entry per BootInfo-managed frame, widened to order-10
+  envelopes) is bootstrapped by a one-shot bump allocator (D-080) that also verifies the loader
+  actually kept its D-059 HHDM promise, region by region, before trusting it. A buddy allocator on
+  top (D-081: orders 0-10, `DMA32`/`NORMAL` zones, block state living entirely in the Page array)
+  has a BSP-only per-CPU page cache in front of it for order-0 allocations, plus always-on
+  double-free/misuse detection (D-082) that extends `archTrapCatch` with a third catch kind,
+  `TRAP_CATCH_KERNEL_BUG`. `LOADER_RECLAIM`'s reclaim moves to M2.3 (D-083). Designed with the
+  `architect` subagent (D-079 through D-083); implementing it against real QEMU (not just host
+  tests) caught two real bugs beyond the design itself -- an HHDM-check bug that hung the boot on
+  the legacy VGA/BIOS memory hole (walked the *widened* Page-array spans instead of the raw
+  BootInfo regions), and a buddy-allocator bookkeeping leak (`managedPages` was bumped on every
+  free, not just a range's first-ever one). The `reviewer` subagent's first pass then caught a
+  third, more serious bug beyond either of those: freeing the *upper* half of a buddy pair could
+  abandon its own head page in a stale ALLOCATED state (since `buddyFreeBlock()` only ever writes
+  the *final merged* head's Page), letting a second free of it through completely undetected --
+  fixed, with a rewritten `pmm_double_free` ktest that deterministically reproduces exactly that
+  scenario rather than relying on luck. 7 more Should-fix items were fixed (full-page write-after-
+  free poison verification, a PAT-bit masking bug in the boot-time page mapper's large-page
+  lookups, per-page stress-test tagging so an overlapping-block bug can't hide, NORMAL-zone-
+  preference and `PMM_FLAG_ZERO` test coverage, harness greps naming each required ktest, and
+  assorted stale/garbled contract comments); the 8th (validating outside the lock ahead of real
+  concurrency, and a caller-trust gap in `pmmAddFreeRange`) recorded as a deliberate deferral,
+  D-085, since M2.2 itself runs single-CPU with IF=0 and cannot trigger either risk. A second
+  `reviewer` pass on the fixes found no further Critical findings (VERDICT: PASS); its remaining
+  nits (a page leak in the new poison ktest, a missing LIFO-determinism assertion, comment
+  wording) were also fixed. `make test`/`make test-full`: 21/21 ktests pass in both the default
+  512 MiB config and a new memory-diversity row (D-084, `uefi 1 3072`) that's the only
+  configuration in the harness actually exercising the NORMAL zone -- see `docs/logs/M2.2.md`.
 
 ## Next step
-M2.1's PR is being opened now (title `M2.1: GDT, IDT, exceptions, hardening runtime`, body from
-`.github/pull_request_template.md`, `Reviewer: PASS`, `needs-owner: yes`). Once it's open: a fresh
-session (or this one, if continuing) starts M2.2 following the normal session protocol -- create
-branch `m2-2-<slug>`, copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.2.md`, consult the `architect`
-subagent for the physical memory manager's design (buddy allocator layout, the `Page` array's
-exact placement in the metadata region, per-CPU page cache API shape), then implement incrementally
-per the session protocol (build+test+commit after every working step). See the M2.2 summary above
-and ROADMAP.md's own M2.2 section for the full step list.
+M2.2's [PR #6](https://github.com/gwbrickner/bongos/pull/6) is open against `main`
+(`Reviewer: PASS`, `needs-owner: yes`) and waiting on the owner's review. A fresh session (or this
+one, if continuing) starts M2.3 following the normal session protocol -- create a branch, copy
+`docs/logs/TEMPLATE.md` to `docs/logs/M2.3.md`, consult the `architect` subagent for the kernel
+paging design (own PML4 layout, PAT reprogramming, the kernel virtual area allocator's API shape,
+and the LOADER_RECLAIM reclaim step moved here from M2.2 per D-083), then implement incrementally
+per the session protocol. See this file's "Next milestone" section above and ROADMAP.md's own
+M2.3 section for the full step list.
 
 ## Blockers
 _(none)_
 
 ## Questions for owner
-- ROADMAP.md's M2.2 step 4 says to reclaim `LOADER_RECLAIM` memory "after switching stacks", but
-  that memory holds the *live* page tables (and the loader's identity-mapped trampoline page)
-  until the kernel builds and switches to its own CR3 in M2.3. Reclaiming it that early would free
-  memory the CPU is still using for address translation. Flagged by the `architect` subagent while
-  designing M1.3's handoff; proposed fix is to move that reclaim to M2.3 (after the kernel's own
-  page tables are live and CR4.PGE has been toggled, which M2.3 needs anyway since the loader's
-  HHDM/kernel mappings are marked Global). No code changed yet -- this needs an owner decision on
-  updating ROADMAP.md's M2.2 wording before that milestone starts.
+- ~~ROADMAP.md's M2.2 step 4 LOADER_RECLAIM-timing question~~ -- design resolved by M2.2's
+  `architect` consultation: the reclaim moved to M2.3 (D-083), ROADMAP.md's M2.2/M2.3 sections
+  updated in the same PR. Still pending the owner's actual sign-off through that PR's
+  `needs-owner: yes` review (a ROADMAP milestone-steps change), not yet a closed item.
 - `BootInfo.bootDiskGuid`/`bootPartGuid` (D-056) still have no milestone assigned to fill them;
   M1.4 didn't touch this (it wasn't part of the architect's D-068 design or ROADMAP's M1.4 steps),
   so both remain zero. Still suggest a UEFI PartitionInfo protocol + BlockIo GPT-header read,

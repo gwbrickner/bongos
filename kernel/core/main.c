@@ -15,19 +15,22 @@
 
 #include "drivers/fbcon/fbcon.h"
 #include "drivers/serial/uart16550.h"
+#include "pmm.h"
 
 /* Copies of the loader's handoff data, in kernel .data rather than the loader's LOADER_RECLAIM
  * pages (ARCHITECTURE §5.5 design note: LOADER_RECLAIM is reclaimed once the kernel no longer
- * needs it, M2.2). The memory map array itself is left where the loader put it -- copying
- * thousands of regions into a fixed kernel buffer isn't worth it before M2.2 exists to reclaim the
- * space it currently lives in anyway. */
+ * needs it -- M2.3, D-083, after the kernel switches to its own page tables). The memory map
+ * array itself is left where the loader put it -- copying thousands of regions into a fixed
+ * kernel buffer isn't worth it before M2.3 exists to reclaim the space it currently lives in
+ * anyway. */
 static BootInfo bootInfoCopy;
 static char cmdlineCopy[BOOTINFO_CMDLINE_MAX];
 /* The pointer kernelMain actually received, kept for kernelBootInfo(): bootInfoCopy lives in the
  * kernel image's own .data, outside the HHDM window, so bootInfoValidate() would reject *it* on
  * the pointer-range check alone (that check is about where a real BootInfo must live, per
  * ARCHITECTURE §5.4) even though its contents are byte-for-byte identical. The original page is
- * still LOADER_RECLAIM (not yet reclaimed -- that's M2.2), so it stays valid to read here. */
+ * still LOADER_RECLAIM (not yet reclaimed -- that's M2.3, D-083), so it stays valid to read here.
+ */
 static const BootInfo *liveBootInfo;
 
 const BootInfo *kernelBootInfo(void) {
@@ -123,6 +126,8 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
     klogWrite(KLOG_INFO, "boot", "cmdline: \"%s\"", cmdlineCopy);
 
     kernelPrintMemoryMapSummary(&bootInfoCopy);
+
+    pmmInit(&bootInfoCopy); /* D-079..D-082: Page array, buddy allocator, BSP page cache */
 
     ktestRunFromCmdline(cmdlineCopy); /* never returns if ktest= was present */
 

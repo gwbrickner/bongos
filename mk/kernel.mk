@@ -22,6 +22,11 @@ KERNEL_CFLAGS := --target=x86_64-unknown-elf -std=c17 -ffreestanding -nostdlib -
 # Debug (default, RELEASE=0): -O1 + UBSan. Release: -O2, no UBSan (ARCHITECTURE §3).
 KERNEL_CFLAGS += $(if $(filter 1,$(RELEASE)),-O2,-O1)
 
+# KERNEL_DEBUG (D-082), debug builds only: gates the pmm's extra write-after-free poisoning on top
+# of its always-on double-free/misuse state-machine checks (kernel/mm/pmm.c), and
+# kernel/include/list.h's NULL-the-links-on-remove hardening.
+KERNEL_CFLAGS += $(if $(filter 1,$(RELEASE)),,-DKERNEL_DEBUG=1)
+
 # UBSan (D-076), debug builds only: an explicit check list, never the bare `-fsanitize=undefined`
 # group -- confirmed by direct compiler probe that clang 18 folds `function` into that group for
 # C, which prefixes every function with an 8-byte type-hash checked on indirect calls; the kernel's
@@ -42,6 +47,7 @@ KERNEL_UBSAN_FLAGS := $(if $(filter 1,$(RELEASE)),,-fsanitize=$(KERNEL_UBSAN_CHE
 KERNEL_C_SOURCES := $(sort $(wildcard kernel/core/*.c) $(wildcard kernel/drivers/serial/*.c) \
                            $(wildcard kernel/drivers/fbcon/*.c) $(wildcard kernel/test/*.c) \
                            $(wildcard kernel/arch/x86_64/*.c) $(wildcard kernel/arch/x86_64/test/*.c) \
+                           $(wildcard kernel/mm/*.c) \
                            boot/common/fbtext.c boot/common/boot-status.c) $(CONSOLE_FONT_C)
 KERNEL_ASM_SOURCES := $(sort $(wildcard kernel/arch/x86_64/*.asm))
 

@@ -25,4 +25,13 @@ bool panicEnter(void);
 _Noreturn void panicNested(void);
 _Noreturn void panicFinish(const char *message);
 
+/* For a detected kernel-internal invariant violation (D-082: the pmm's misuse checks, e.g. a
+ * double free) rather than a CPU-reported fault: offers the bug to a ktest-armed
+ * archTrapCatch(TRAP_CATCH_KERNEL_BUG, ...) first (same pattern as __stack_chk_fail() and the
+ * UBSan handlers) -- if one is armed and claims it, execution redirects back to that ktest's call
+ * site and this never returns; otherwise it formats `fmt` and panics as usual. Caller contract:
+ * no lock held and no shared state left half-mutated, since a claimed catch resumes by longjmp.
+ * No locks; never returns. */
+_Noreturn __attribute__((noinline)) void panicBug(const char *fmt, ...);
+
 #endif

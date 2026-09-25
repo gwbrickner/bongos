@@ -24,16 +24,24 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # tools/ksyms/ksyms-encode.c: the encoder, so ksyms_test.c can round-trip encode->decode without a
 # real ELF file (elf-read.c itself isn't needed here -- only its header, for the ElfFuncSymList
 # type the encoder's API takes).
+# kernel/mm/pmm-map.c and kernel/mm/buddy.c: the pmm's two pure cores (D-079..D-082, ROADMAP
+# M2.2) -- no klog/panic/arch calls, so they host-test the same way as the rest of this list.
+# -DHOSTED switches kernel/include/page.h's Page-array base to `hostPageArrayBase`
+# (kernel_buddy_test.c), since host tests have no real HHDM/page-array VA region to point into.
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c boot/uefi/guids.c \
                         $(wildcard boot/common/*.c) $(CONSOLE_FONT_C) \
                         $(filter-out tools/imgdiff/main.c,$(wildcard tools/imgdiff/*.c)) \
-                        kernel/drivers/fbcon/fbcon.c kernel/core/ksym.c tools/ksyms/ksyms-encode.c
+                        kernel/drivers/fbcon/fbcon.c kernel/core/ksym.c tools/ksyms/ksyms-encode.c \
+                        kernel/mm/pmm-map.c kernel/mm/buddy.c
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h $(wildcard boot/uefi/include/efi/*.h) \
                         $(wildcard boot/common/include/*.h) $(wildcard tools/imgdiff/*.h) \
                         kernel/drivers/fbcon/fbcon.h $(wildcard kernel/include/uapi/*.h) \
-                        kernel/include/ksym.h tools/ksyms/elf-read.h tools/ksyms/ksyms-encode.h
+                        kernel/include/ksym.h tools/ksyms/elf-read.h tools/ksyms/ksyms-encode.h \
+                        kernel/include/list.h kernel/include/page.h kernel/include/pmm.h \
+                        kernel/mm/pmm-internal.h
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
-                            -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms
+                            -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms \
+                            -Ikernel/mm
 
 .PHONY: host-tests
 host-tests: $(HOST_TEST_BIN)
@@ -43,5 +51,5 @@ $(HOST_TEST_BIN): $(HOST_TEST_SRCS) $(HOST_TEST_HDRS) $(HOST_TEST_EXTRA_SRCS) \
                   $(HOST_TEST_EXTRA_HDRS) $(BRANDING_HDR) Makefile mk/host-tests.mk
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -std=c17 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
-		-fno-sanitize-recover=all -I$(HOST_TEST_DIR) -I$(BUILD)/include \
+		-fno-sanitize-recover=all -DHOSTED -I$(HOST_TEST_DIR) -I$(BUILD)/include \
 		$(HOST_TEST_EXTRA_INCLUDES) -o $@ $(HOST_TEST_SRCS) $(HOST_TEST_EXTRA_SRCS)
