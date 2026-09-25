@@ -1,7 +1,7 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M2.1 merged (PR #5); M2.2 Physical memory manager done, PR opening; M2.3 is next)
+**Last updated:** 2026-09-25 (M2.1 merged (PR #5); M2.2 Physical memory manager done, [PR #6](https://github.com/gwbrickner/bongos/pull/6) open; M2.3 is next)
 
 ## Current milestone
 None in progress. **M2.2 Physical memory manager** is done -- see `docs/logs/M2.2.md` for the full
@@ -13,7 +13,8 @@ items were fixed, the 8th recorded as a deliberate deferral (D-085, not a real r
 milestone's single-CPU/IF=0 scope). A second `reviewer` pass on the fixes found no further Critical
 findings (VERDICT: PASS) and only minor nits, all addressed. `make test`/`make test-full` (21/21
 ktests, including a new memory-diversity row exercising the NORMAL zone, D-084) pass clean with no
-boot errors. PR opening now against `main`, `needs-owner: yes` (D-045/§25 -- memory management,
+boot errors. [PR #6](https://github.com/gwbrickner/bongos/pull/6) open against `main`,
+`needs-owner: yes` (D-045/§25 -- memory management,
 the boot-time page mapper in `kernel/arch/x86_64/early-map.c`, a new interrupt-catch kind, and a
 ROADMAP milestone-steps change, D-083).
 
@@ -110,7 +111,7 @@ on CLAUDE.md's consult-first list).
   race, incomplete RFLAGS clearing, the resume-depends-on-stack-memory issue fixed at its root
   this time rather than just bounded around, a missing automated symbolized-backtrace check, a
   missing contract comment) -- all fixed, see `docs/logs/M2.1.md`'s reviewer-round entry.
-- M2.2 (PR opening, `needs-owner: yes`): bongOS has a real physical memory manager. A sparse
+- M2.2 ([PR #6](https://github.com/gwbrickner/bongos/pull/6) open, `needs-owner: yes`): bongOS has a real physical memory manager. A sparse
   `Page` metadata array (D-079, one 64-byte entry per BootInfo-managed frame, widened to order-10
   envelopes) is bootstrapped by a one-shot bump allocator (D-080) that also verifies the loader
   actually kept its D-059 HHDM promise, region by region, before trusting it. A buddy allocator on
@@ -141,14 +142,14 @@ on CLAUDE.md's consult-first list).
   configuration in the harness actually exercising the NORMAL zone -- see `docs/logs/M2.2.md`.
 
 ## Next step
-M2.2's PR is being opened now (title `M2.2: Physical memory manager`, body from
-`.github/pull_request_template.md`, `Reviewer: PASS`, `needs-owner: yes`). Once it's open: a fresh
-session (or this one, if continuing) starts M2.3 following the normal session protocol -- create a
-branch, copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.3.md`, consult the `architect` subagent for
-the kernel paging design (own PML4 layout, PAT reprogramming, the kernel virtual area allocator's
-API shape, and the LOADER_RECLAIM reclaim step moved here from M2.2 per D-083), then implement
-incrementally per the session protocol. See this file's "Next milestone" section above and
-ROADMAP.md's own M2.3 section for the full step list.
+M2.2's [PR #6](https://github.com/gwbrickner/bongos/pull/6) is open against `main`
+(`Reviewer: PASS`, `needs-owner: yes`) and waiting on the owner's review. A fresh session (or this
+one, if continuing) starts M2.3 following the normal session protocol -- create a branch, copy
+`docs/logs/TEMPLATE.md` to `docs/logs/M2.3.md`, consult the `architect` subagent for the kernel
+paging design (own PML4 layout, PAT reprogramming, the kernel virtual area allocator's API shape,
+and the LOADER_RECLAIM reclaim step moved here from M2.2 per D-083), then implement incrementally
+per the session protocol. See this file's "Next milestone" section above and ROADMAP.md's own
+M2.3 section for the full step list.
 
 ## Blockers
 _(none)_
