@@ -16,6 +16,12 @@
 #define PMM_MAX_ORDER   10
 #define PMM_ORDER_COUNT (PMM_MAX_ORDER + 1)
 
+/* The Page array (VM_PAGE_ARRAY_BASE..VM_PAGE_ARRAY_END, page.h) must be able to hold one Page
+ * per frame across the entire 64 TiB HHDM window -- confirms the fixed VA region ARCHITECTURE
+ * §6.1 sets aside for it is actually big enough (1 TiB needed, 16 TiB available). */
+_Static_assert((BOOTINFO_HHDM_SIZE >> 12) * sizeof(Page) <= VM_PAGE_ARRAY_END - VM_PAGE_ARRAY_BASE,
+               "the Page-array VA region is too small for the full HHDM window");
+
 typedef enum { PMM_ZONE_DMA32 = 0, PMM_ZONE_NORMAL = 1, PMM_ZONE_COUNT = 2 } PmmZoneId;
 
 typedef uint32_t PmmFlags;

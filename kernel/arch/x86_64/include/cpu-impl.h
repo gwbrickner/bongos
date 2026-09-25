@@ -17,6 +17,26 @@ static inline void archDisableInterrupts(void) {
     __asm__ volatile("cli" ::: "memory");
 }
 
+/* Saves RFLAGS and disables interrupts, returning the saved flags for archIrqRestore() -- the
+ * building block for IRQ-safe critical sections (D-081: the pmm's lock is IRQ-disable-only until
+ * a real spinlock exists, M3.4). IF stays 0 until M3.2 wires up the first IRQ source, so this is a
+ * no-op in practice today, but every pmm entry point is written against the contract now so
+ * turning IF on later needs no rewrite. No locks; safe from any context; "memory" clobber for the
+ * same reordering reason as archDisableInterrupts(). */
+static inline uint64_t archIrqSave(void) {
+    uint64_t flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(flags) : : "memory");
+    return flags;
+}
+
+/* Restores interrupts to the state archIrqSave() captured (re-enables only if IF was set then).
+ * No locks; safe from any context. */
+static inline void archIrqRestore(uint64_t flags) {
+    if (flags & (1ULL << 9)) {
+        __asm__ volatile("sti" ::: "memory");
+    }
+}
+
 /* No locks; never returns. */
 static inline _Noreturn void archHaltForever(void) {
     for (;;) {

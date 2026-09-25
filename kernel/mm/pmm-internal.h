@@ -65,6 +65,13 @@ typedef struct {
  * panics either way). Pure: no allocation, no I/O, no globals. No locks. */
 Status pmmMapScan(const BootMemRegion *regions, uint32_t count, PmmMap *out);
 
+/* True for the BootMemType values pmmMapScan() backs with Page entries (USABLE, LOADER_RECLAIM,
+ * KERNEL, INITRD, ACPI_RECLAIM). Exposed so pmm.c's HHDM coverage check can walk the exact same
+ * raw regions pmmMapScan() folded into spans -- never the *widened* spans themselves, whose
+ * order-10 alignment padding can cover physical holes (e.g. the legacy 0xA0000-0x100000 VGA/BIOS
+ * range) that never appeared in the BootInfo map at all and so carry no HHDM-mapping guarantee. */
+bool pmmMapTypeIsManaged(uint32_t type);
+
 /* --- early.c: the bump allocator (boot-time only, sealed before the buddy allocator opens) --- */
 
 /* Initializes the bump allocator over `map->usable` (top-down per range, so NORMAL memory is

@@ -15,7 +15,7 @@
  * buddy merge never needs to check whether the far side actually has a Page entry. */
 #define PMM_SPAN_ALIGN_PFN (1ull << PMM_MAX_ORDER)
 
-static bool pmmTypeIsManaged(uint32_t type) {
+bool pmmMapTypeIsManaged(uint32_t type) {
     switch (type) {
     case BOOT_MEM_USABLE:
     case BOOT_MEM_LOADER_RECLAIM:
@@ -108,7 +108,7 @@ Status pmmMapScan(const BootMemRegion *regions, uint32_t count, PmmMap *out) {
             }
         }
 
-        if (pmmTypeIsManaged(r->type)) {
+        if (pmmMapTypeIsManaged(r->type)) {
             uint64_t clipEnd = minU64(endPfn, PMM_HHDM_LIMIT_PFN);
             if (startPfn < clipEnd) {
                 Status st = pmmAddSpan(out, startPfn, clipEnd);

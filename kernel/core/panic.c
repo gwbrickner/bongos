@@ -8,6 +8,7 @@
 
 #include <arch/cpu.h>
 #include <arch/qemu.h>
+#include <arch/trap.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -64,5 +65,24 @@ _Noreturn void panic(const char *fmt, ...) {
      * or once rbp strays outside every known kernel stack. */
     backtracePrint(0, archFramePointer());
 
+    panicFinish(message);
+}
+
+__attribute__((noinline)) _Noreturn void panicBug(const char *fmt, ...) {
+    char message[200];
+    va_list ap;
+    va_start(ap, fmt);
+    kvsnprintf(message, sizeof(message), fmt, ap);
+    va_end(ap);
+
+    archTrapCatchSoftware(TRAP_CATCH_KERNEL_BUG, (uint64_t)(uintptr_t)__builtin_return_address(0));
+
+    if (!panicEnter()) {
+        panicNested();
+    }
+    char banner[256];
+    ksnprintf(banner, sizeof(banner), "\r\nPANIC: %s\n", message);
+    klogRaw(banner);
+    backtracePrint(0, archFramePointer());
     panicFinish(message);
 }

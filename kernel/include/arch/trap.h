@@ -31,6 +31,8 @@ typedef struct {
 #define TRAP_CATCH_VEC(v)      (1ULL << (v)) /* v < 32: a raw CPU exception vector */
 #define TRAP_CATCH_STACK_SMASH (1ULL << 32)  /* __stack_chk_fail() */
 #define TRAP_CATCH_UBSAN       (1ULL << 33)  /* any __ubsan_handle_* trip */
+#define TRAP_CATCH_KERNEL_BUG  (1ULL << 34)  /* panicBug() (D-082): a detected kernel-internal
+                                               * invariant violation, e.g. the pmm's misuse checks */
 
 /* Runs `fn(arg)` with `mask` armed (a bitmask of TRAP_CATCH_VEC(v)/TRAP_CATCH_STACK_SMASH/
  * TRAP_CATCH_UBSAN): if a matching fault/trip happens before `fn` returns, execution is redirected

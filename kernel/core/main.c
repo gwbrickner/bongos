@@ -15,6 +15,7 @@
 
 #include "drivers/fbcon/fbcon.h"
 #include "drivers/serial/uart16550.h"
+#include "pmm.h"
 
 /* Copies of the loader's handoff data, in kernel .data rather than the loader's LOADER_RECLAIM
  * pages (ARCHITECTURE §5.5 design note: LOADER_RECLAIM is reclaimed once the kernel no longer
@@ -123,6 +124,8 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
     klogWrite(KLOG_INFO, "boot", "cmdline: \"%s\"", cmdlineCopy);
 
     kernelPrintMemoryMapSummary(&bootInfoCopy);
+
+    pmmInit(&bootInfoCopy); /* D-079..D-082: Page array, buddy allocator, BSP page cache */
 
     ktestRunFromCmdline(cmdlineCopy); /* never returns if ktest= was present */
 

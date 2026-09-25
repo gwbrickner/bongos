@@ -19,8 +19,12 @@ static void resetPageArray(void) {
 }
 
 /* Frees [startPfn, endPfn) into `zone` as the largest aligned blocks it decomposes into --
- * mirrors what kernel/mm/pmm.c's pmmAddFreeRange() does over real BootInfo ranges. */
+ * mirrors what kernel/mm/pmm.c's pmmAddFreeRange() does over real BootInfo ranges, including that
+ * function's own bookkeeping: buddyFreeBlock() itself deliberately never touches
+ * `zone->managedPages` (it can't tell a range's first-ever free from an ordinary one), so the
+ * caller bumps it -- exactly once per range, here -- the same way pmmAddFreeRange() does. */
 static void freeRangeAsBlocks(PmmZone *zone, uint64_t startPfn, uint64_t endPfn) {
+    zone->managedPages += endPfn - startPfn;
     uint64_t pfn = startPfn;
     while (pfn < endPfn) {
         uint32_t order = pfn == 0 ? PMM_MAX_ORDER : (uint32_t)__builtin_ctzll(pfn);
@@ -190,6 +194,9 @@ TEST(buddyRandomStressMatchesReferenceModel) {
         buddyFreeBlock(&zone, b.pfn, b.order);
     }
     ASSERT_EQ(zone.freePages, totalManaged);
+    /* Regression check: ordinary alloc/free cycling (everything this loop just did, on top of the
+     * one-time freeRangeAsBlocks() population) must never change managedPages. */
+    ASSERT_EQ(zone.managedPages, totalManaged);
     ASSERT_EQ(zone.freeBlocks[10], (uint64_t)(TEST_FRAMES / 1024));
     for (uint32_t k = 0; k < PMM_MAX_ORDER; k++) {
         ASSERT_EQ(zone.freeBlocks[k], 0u);

@@ -16,7 +16,10 @@ void buddyZoneInit(PmmZone *zone, const char *name, uint64_t startPfn, uint64_t 
 }
 
 void buddyFreeBlock(PmmZone *zone, uint64_t pfn, uint32_t order) {
-    zone->managedPages += (uint64_t)1 << order;
+    /* `managedPages` is deliberately NOT touched here: this function runs both the first time a
+     * range enters the zone (pmmAddFreeRange, which bumps managedPages itself) and every ordinary
+     * pmmFreePages()/cache-drain afterward -- bumping it here too would make managedPages grow
+     * without bound as pages simply cycle through alloc/free. */
     zone->freePages += (uint64_t)1 << order;
 
     while (order < PMM_MAX_ORDER) {
