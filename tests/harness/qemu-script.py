@@ -141,6 +141,27 @@ class SerialLog:
         self.buf += text
         return True
 
+    def drain_until_closed(self, deadline):
+        """Keeps draining (teeing into logf, same as drain()) until the peer closes the socket
+        (a real EOF) or `deadline` (a time.monotonic() value) passes -- unlike drain(), a plain
+        select() timeout with no data yet available does NOT stop this early. Used after a
+        script's own steps finish, to keep capturing whatever the guest still prints (e.g. the
+        rest of a `ktest=all` run) instead of losing it the moment there's a brief lull."""
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            r, _, _ = select.select([self.sock], [], [], min(remaining, 0.5))
+            if not r:
+                continue
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                return  # EOF: the peer (QEMU) closed the socket
+            text = chunk.decode("utf-8", errors="replace")
+            self.logf.write(text)
+            self.logf.flush()
+            self.buf += text
+
     def expect(self, literal, timeout):
         deadline = time.monotonic() + timeout
         while True:
@@ -213,13 +234,13 @@ def run_script(script_path, serial_sock_path, qmp_sock_path, log_path, shots_dir
                 print(f"qemu-script.py: {script_path}:{lineno}: {e}", file=sys.stderr)
                 return 1
 
-        # Keep draining a little longer so the log captures whatever the guest prints right after
-        # the last step (e.g. a kernel banner following the final menu selection), then let the
-        # caller (run-qemu.sh) manage the QEMU process's own lifetime/exit-code handling.
-        end = time.monotonic() + 2
-        while time.monotonic() < end:
-            if not serial.drain(0.2):
-                break
+        # Keep draining until the serial socket closes (QEMU exits) or the timeout budget runs
+        # out -- not just for a fixed ~2s -- so the log captures everything the guest prints after
+        # the last step (e.g. the rest of a `ktest=all` run following the final menu selection).
+        # A fixed short drain would otherwise lose a downstream failure's KTEST FAIL lines
+        # entirely, showing up as "0 failing ktests" with nothing to grep for. The caller
+        # (run-qemu.sh) still separately manages the QEMU process's own lifetime/exit-code.
+        serial.drain_until_closed(time.monotonic() + timeout)
     return 0
 
 
