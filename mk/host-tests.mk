@@ -14,12 +14,16 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # cross-target-specific code, so it builds fine with the host's native clang too.
 # $(CONSOLE_FONT_C) (mk/font.mk): fbtext.c links against the generated font data (fontConsolePsf),
 # not a wildcard match under boot/common/*.c, so it's listed explicitly; Make builds it first since
-# it's its own target with its own rule.
+# it's its own target with its own rule. tools/imgdiff/*.c minus main.c (which defines its own
+# `main`, conflicting with tests/host/main.c's): imgdiff's PPM/PNG/DEFLATE codec is host-testable
+# logic living outside tests/host/, same reasoning as gpt.c/bootcfg.c below.
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c boot/uefi/guids.c \
-                        $(wildcard boot/common/*.c) $(CONSOLE_FONT_C)
+                        $(wildcard boot/common/*.c) $(CONSOLE_FONT_C) \
+                        $(filter-out tools/imgdiff/main.c,$(wildcard tools/imgdiff/*.c))
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h $(wildcard boot/uefi/include/efi/*.h) \
-                        $(wildcard boot/common/include/*.h)
-HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common
+                        $(wildcard boot/common/include/*.h) $(wildcard tools/imgdiff/*.h)
+HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
+                            -Itools/imgdiff
 
 .PHONY: host-tests
 host-tests: $(HOST_TEST_BIN)

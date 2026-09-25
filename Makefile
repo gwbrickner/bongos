@@ -11,6 +11,7 @@ include mk/branding.mk
 include mk/font.mk
 include mk/format.mk
 include mk/host-tests.mk
+include mk/imgdiff.mk
 include mk/kernel.mk
 include mk/image.mk
 include mk/qemu.mk
