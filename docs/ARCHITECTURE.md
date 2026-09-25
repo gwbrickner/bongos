@@ -1080,7 +1080,7 @@ Every milestone ships with tests, and `make test` must pass before any PR.
 |---|---|---|
 | Host unit tests | pure logic: allocators' algorithms, bongfs core, crypto (official vectors), parsers (ELF, GPT, FAT, AML, HTML, CSS, fonts, PNG) | `make host-tests`, runs natively on Linux, fast |
 | In-kernel tests (ktest) | `KTEST(name) { ... }` registered in a section; run at boot when `cmdline` has `ktest=all` or a pattern | `kernel/test/` |
-| Boot matrix | UEFI × BIOS × 1 CPU × 4 CPUs | `make test` (quick), `make test-full` (with swap, IOMMU, all devices) |
+| Boot matrix | UEFI × BIOS × 1 CPU × 4 CPUs × an optional memory size (D-084) | `make test` (quick), `make test-full` (with swap, IOMMU, all devices, and a >4 GiB row to exercise the pmm's NORMAL zone) |
 | Userspace tests | test binaries in the test initrd, run by `svcd` in test mode | `tests/user/` |
 | Filesystem interop | create images with Linux tools, mutate in bongOS, verify with Linux `fsck` | `tests/fs/` |
 | Network interop | from the host: `ping`, OpenSSH `ssh`, `curl`, `openssl s_server`, via QEMU user networking + `hostfwd` | `tests/net/` |

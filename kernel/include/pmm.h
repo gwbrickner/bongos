@@ -69,9 +69,10 @@ void pmmInit(const BootInfo *bi);
 /* On success: `*outPage` is the head of a naturally-aligned, contiguous 2^order-frame block (state
  * ALLOCATED, refcount 1) and this returns STATUS_OK. On failure: `*outPage` is NULL and this
  * returns STATUS_ERR_INVALID (order > PMM_MAX_ORDER, an unknown flag, or outPage == NULL) or
- * STATUS_ERR_NO_MEMORY (no eligible zone has a free block of that order). Order 0 without
- * PMM_FLAG_DMA32 goes through the local per-CPU cache first. Locks: pmmLock (M2.2: IRQ-disable
- * only, single CPU; a real lock arrives with SMP, M3.4/M3.5). IRQ-safe: yes. May sleep: no. */
+ * STATUS_ERR_NO_MEMORY (no eligible zone has a free block of that order). Every order-0 request
+ * (DMA32-flagged included -- the per-CPU cache has one free list per zone) goes through the local
+ * per-CPU cache first. Locks: pmmLock (M2.2: IRQ-disable only, single CPU; a real lock arrives
+ * with SMP, M3.4/M3.5). IRQ-safe: yes. May sleep: no. */
 Status pmmAllocPages(uint32_t order, PmmFlags flags, Page **outPage);
 
 /* Returns a block pmmAllocPages handed out, with the same `order` it was allocated at. Cannot
@@ -103,7 +104,8 @@ Page *pmmPhysToPage(uint64_t phys);
 static inline uint64_t pmmPageToPhys(const Page *page) {
     return pageToPfn(page) << 12;
 }
-uint64_t pmmHhdmBase(void); /* the BootInfo.hhdmBase pmmInit() was given */
+/* The BootInfo.hhdmBase pmmInit() was given. No locks; IRQ-safe; pure. */
+uint64_t pmmHhdmBase(void);
 static inline void *pmmPageToVirt(const Page *page) {
     return (void *)(uintptr_t)(pmmHhdmBase() + pmmPageToPhys(page));
 }

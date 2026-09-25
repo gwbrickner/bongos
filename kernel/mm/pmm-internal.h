@@ -69,31 +69,34 @@ Status pmmMapScan(const BootMemRegion *regions, uint32_t count, PmmMap *out);
  * KERNEL, INITRD, ACPI_RECLAIM). Exposed so pmm.c's HHDM coverage check can walk the exact same
  * raw regions pmmMapScan() folded into spans -- never the *widened* spans themselves, whose
  * order-10 alignment padding can cover physical holes (e.g. the legacy 0xA0000-0x100000 VGA/BIOS
- * range) that never appeared in the BootInfo map at all and so carry no HHDM-mapping guarantee. */
+ * range) that never appeared in the BootInfo map at all and so carry no HHDM-mapping guarantee.
+ * No locks; IRQ-safe; pure. */
 bool pmmMapTypeIsManaged(uint32_t type);
 
 /* --- early.c: the bump allocator (boot-time only, sealed before the buddy allocator opens) --- */
 
 /* Initializes the bump allocator over `map->usable` (top-down per range, so NORMAL memory is
- * consumed before DMA32) and takes ownership of `map` for the rest of pmmInit(); zeroBase is the
- * HHDM base used to zero each allocation. Boot-time only, not reentrant. */
+ * consumed before DMA32) and takes ownership of `map` for the rest of pmmInit(); `hhdmBase` is the
+ * HHDM base used to zero each allocation. No locks; not IRQ-safe; may not sleep. Boot-time only
+ * (BSP, IF=0), not reentrant. */
 void pmmEarlyInit(PmmMap *map, uint64_t hhdmBase);
 
 /* Allocates `count` contiguous, 4 KiB-aligned, zeroed physical pages from the highest-remaining
  * usable range with enough room, walking to progressively lower ranges as each is exhausted.
- * Returns STATUS_ERR_NO_MEMORY if no range (nor concatenation of a NEW lower range) has `count`
- * contiguous pages left -- callers only ever ask for 1 page at a time (the Page array is mapped
- * one 4 KiB leaf/table page at a time), so this never needs to search across a range boundary.
- * Boot-time only. */
+ * Returns STATUS_ERR_NO_MEMORY if no single range has `count` contiguous pages left -- callers
+ * only ever ask for 1 page at a time (the Page array is mapped one 4 KiB leaf/table page at a
+ * time), so this never needs to search *across* a range boundary for a multi-page run. No locks;
+ * not IRQ-safe; may not sleep. Boot-time only (BSP, IF=0). */
 Status pmmEarlyAllocPages(uint64_t count, uint64_t *outPhys);
 
 /* Seals the bump allocator: every further pmmEarlyAllocPages() call panics. Also snapshots how
  * much of `map->usable` the bump allocator consumed, so pmmInit() can free the untouched
  * remainder via pmmAddFreeRange() and count `earlyPages`/`lowReservedPages`/`unmappedPages`
- * correctly. Boot-time only, idempotent. */
+ * correctly. No locks; not IRQ-safe; may not sleep. Boot-time only (BSP, IF=0), idempotent. */
 void pmmEarlySeal(void);
 
-/* The number of pages the bump allocator has handed out so far (== earlyPages once sealed). */
+/* The number of pages the bump allocator has handed out so far (== earlyPages once sealed). No
+ * locks; IRQ-safe; pure. */
 uint64_t pmmEarlyUsedPages(void);
 
 /* --- buddy.c: pure buddy-allocator core (host-tested by tests/host/kernel_buddy_test.c) --- */
@@ -102,7 +105,9 @@ typedef struct {
     ListNode freeList[PMM_ORDER_COUNT]; /* freeList[k]: heads of free 2^k-frame blocks */
     uint64_t freeBlocks[PMM_ORDER_COUNT];
     uint64_t freePages;    /* pages currently on this zone's free lists (excludes cached pages) */
-    uint64_t managedPages; /* pages ever handed to this zone via buddyFreeBlock's initial free */
+    uint64_t managedPages; /* pages ever handed to this zone via pmmAddFreeRange -- NOT touched by
+                            * buddyFreeBlock() itself, which runs on every ordinary free too and
+                            * can't tell that apart from a range's first-ever entry */
     uint64_t startPfn, endPfn;
     const char *name;
 } PmmZone;
@@ -113,9 +118,13 @@ void buddyZoneInit(PmmZone *zone, const char *name, uint64_t startPfn, uint64_t 
 /* Frees a 2^order-frame block starting at `pfn` (must be a multiple of 2^order, and every page of
  * the block -- head included -- must currently be PAGE_STATE_TAIL) into `zone`, merging with its
  * buddy at each order while the buddy is itself a free PAGE_STATE_BUDDY head of the same order.
- * Increments `zone->managedPages` and `zone->freePages` by 2^order. No locks; pure (touches only
- * the Page array and `zone`). Caller's responsibility: validate the block before calling (this
- * trusts its precondition and does not re-check it). */
+ * Increments `zone->freePages` by 2^order -- deliberately never touches `zone->managedPages` (see
+ * that field's own comment above); the caller bumps it, exactly once per range, only when the
+ * memory is entering the zone for the first time (pmmAddFreeRange). No locks; pure (touches only
+ * the Page array and `zone`). Caller's responsibility: validate the block before calling AND
+ * ensure every page of it, head included, is already PAGE_STATE_TAIL first -- this trusts both
+ * preconditions and does not re-check them (a still-ALLOCATED head merging into a lower buddy
+ * would otherwise be abandoned mid-array with stale state, not overwritten). */
 void buddyFreeBlock(PmmZone *zone, uint64_t pfn, uint32_t order);
 
 /* Takes the smallest available block of order >= `order` off `zone`'s free lists, splitting it

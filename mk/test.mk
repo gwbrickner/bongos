@@ -41,6 +41,13 @@ update-refs: image imgdiff
 # "?" -- so also grep for the exact frame #0 line trapPrintReport's backtracePrint call prints for
 # that test (kernel/arch/x86_64/test/trap_test.c's trapUdTrigger, kernel/core/backtrace.c's
 # printFrame format), confirmed against a real serial log before being pinned down here.
+#
+# Same reasoning again for M2.2's Done-when clauses (ROADMAP.md): exit 33 alone only proves *some*
+# ktest passed, so if kernel/test/pmm_test.c ever got dropped from the build, a matrix row would
+# still silently report PASS. Grep for each of its 4 required ktests (D-079..D-082) by name, plus
+# the meminfo self-check's "OK" line (pmmPrintMeminfo(), kernel/mm/pmm.c) confirming the printed
+# totals actually matched the BootInfo map rather than just having printed *something*.
+PMM_REQUIRED_KTESTS := pmm_alloc_free_stress pmm_no_leak pmm_zone_correctness pmm_double_free
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus mem; do \
@@ -53,6 +60,16 @@ _check-ktest-pass:
 	    fi; \
 	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^  #0 0x[0-9a-f]{16} trapUdTrigger\+0x'; then \
 	        echo "make test: $$log does not contain a symbolized 'trapUdTrigger+0x...' backtrace frame (ROADMAP Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
+	    for t in $(PMM_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M2.2 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF '[info] meminfo: check: MemTotal == MemManaged + PageArray + LowReserved + Unmapped: OK'; then \
+	        echo "make test: $$log does not contain a passing meminfo self-check (ROADMAP M2.2 Done-when guarantee not met)"; \
 	        status=1; \
 	    fi; \
 	done < "$(MATRIX)"; \

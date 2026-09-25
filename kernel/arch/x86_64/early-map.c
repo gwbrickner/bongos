@@ -85,7 +85,10 @@ Status archEarlyLookup(uint64_t va, uint64_t *outPa, uint64_t *outLeafSize) {
         return STATUS_ERR_NOT_FOUND;
     }
     if (e & X86_PTE_PS) {
-        *outPa = (e & X86_PTE_ADDR_MASK) | (va & (X86_PTE_SIZE_1G - 1));
+        /* SDM Vol 3A Table 4-15: for a 1 GiB leaf, bit 12 is PAT, not an address bit (bits 29:13
+         * are reserved/must-be-0) -- masking with the plain 4 KiB X86_PTE_ADDR_MASK alone would
+         * fold a set PAT bit into the computed physical address. */
+        *outPa = (e & X86_PTE_ADDR_MASK & ~(X86_PTE_SIZE_1G - 1)) | (va & (X86_PTE_SIZE_1G - 1));
         *outLeafSize = X86_PTE_SIZE_1G;
         return STATUS_OK;
     }
@@ -96,7 +99,8 @@ Status archEarlyLookup(uint64_t va, uint64_t *outPa, uint64_t *outLeafSize) {
         return STATUS_ERR_NOT_FOUND;
     }
     if (e & X86_PTE_PS) {
-        *outPa = (e & X86_PTE_ADDR_MASK) | (va & (X86_PTE_SIZE_2M - 1));
+        /* Same PAT-bit reasoning as the 1 GiB case above (SDM Vol 3A Table 4-13). */
+        *outPa = (e & X86_PTE_ADDR_MASK & ~(X86_PTE_SIZE_2M - 1)) | (va & (X86_PTE_SIZE_2M - 1));
         *outLeafSize = X86_PTE_SIZE_2M;
         return STATUS_OK;
     }

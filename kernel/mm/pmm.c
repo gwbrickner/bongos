@@ -90,8 +90,13 @@ static void pmmCheckAndClearPoison(Page *page) {
         return;
     }
     uint64_t *p = (uint64_t *)(uintptr_t)(pmmHhdmBaseValue + pmmPageToPhys(page));
-    if (p[0] != PMM_POISON || p[4096 / sizeof(uint64_t) - 1] != PMM_POISON) {
-        pmmBug(PMM_BUG_POISON, pageToPfn(page));
+    /* Every qword, not just the first/last: a write-after-free that only touches an interior
+     * offset (the common case -- a struct field, not the whole page) must still be caught. Same
+     * per-page cost as pmmPoisonPage()'s own fill loop. */
+    for (uint64_t i = 0; i < 4096 / sizeof(uint64_t); i++) {
+        if (p[i] != PMM_POISON) {
+            pmmBug(PMM_BUG_POISON, pageToPfn(page));
+        }
     }
     page->flags = (uint16_t)(page->flags & ~PAGE_F_POISONED);
 }
@@ -224,6 +229,8 @@ static void pmmCacheFreeLocked(PmmZoneId zone, uint64_t pfn) {
     PmmPcpList *cache = pmmLocalCache(zone);
     Page *p = pageFromPfn(pfn);
     p->state = PAGE_STATE_PCP;
+    p->order = 0;
+    p->refcount = 0;
     listPushHead(&cache->pages, &p->lru);
     cache->count++;
     if (cache->count > PMM_PCP_HIGH) {
@@ -316,6 +323,19 @@ void pmmFreePages(Page *page, uint32_t order) {
     if (order == 0) {
         pmmCacheFreeLocked(pmmZoneOfPfn(pfn), pfn);
     } else {
+        /* buddyFreeBlock()'s precondition is that every page of the block -- head included -- is
+         * already PAGE_STATE_TAIL (pmm-internal.h). The head is the one page that isn't: it's
+         * still PAGE_STATE_ALLOCATED from pmmAllocPages(). If this block merges with its buddy and
+         * the merge moves the block's base *down* to the buddy's pfn (i.e. this block was the
+         * upper half), buddyFreeBlock only ever writes the *final* merged head's Page -- it never
+         * touches this original pfn again, leaving it stuck at ALLOCATED with a stale order. A
+         * second pmmFreePages() on that stale page would then pass validation (state ALLOCATED,
+         * order still matches) and corrupt the free lists. Reset it here, unconditionally, before
+         * the merge walk ever runs. */
+        Page *head = pageFromPfn(pfn);
+        head->state = PAGE_STATE_TAIL;
+        head->order = 0;
+        head->refcount = 0;
         buddyFreeBlock(&pmmZones[pmmZoneOfPfn(pfn)], pfn, order);
     }
     pmmUnlock(irqFlags);
@@ -330,6 +350,9 @@ Status pmmAddFreeRange(uint64_t physBase, uint64_t length) {
     }
     uint64_t startPfn = physBase >> 12;
     uint64_t endPfn = startPfn + (length >> 12);
+    if (endPfn <= startPfn) {
+        return STATUS_ERR_INVALID; /* pfn range wrapped: reject rather than silently do nothing */
+    }
 
     for (uint64_t p = startPfn; p < endPfn; p++) {
         if (!pmmPfnValid(p) || pageFromPfn(p)->state != PAGE_STATE_RESERVED) {

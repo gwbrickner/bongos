@@ -105,14 +105,9 @@ orders 0-10) -> BSP page cache -> the 4 ktests -> `/proc/meminfo`-style boot tot
 _(none)_
 
 ## Questions for owner
-- ROADMAP.md's M2.2 step 4 says to reclaim `LOADER_RECLAIM` memory "after switching stacks", but
-  that memory holds the *live* page tables (and the loader's identity-mapped trampoline page)
-  until the kernel builds and switches to its own CR3 in M2.3. Reclaiming it that early would free
-  memory the CPU is still using for address translation. Flagged by the `architect` subagent while
-  designing M1.3's handoff; proposed fix is to move that reclaim to M2.3 (after the kernel's own
-  page tables are live and CR4.PGE has been toggled, which M2.3 needs anyway since the loader's
-  HHDM/kernel mappings are marked Global). No code changed yet -- this needs an owner decision on
-  updating ROADMAP.md's M2.2 wording before that milestone starts.
+- ~~ROADMAP.md's M2.2 step 4 LOADER_RECLAIM-timing question~~ -- **resolved** by M2.2's `architect`
+  consultation: the reclaim moved to M2.3 (D-083), ROADMAP.md's M2.2/M2.3 sections updated in the
+  same PR.
 - `BootInfo.bootDiskGuid`/`bootPartGuid` (D-056) still have no milestone assigned to fill them;
   M1.4 didn't touch this (it wasn't part of the architect's D-068 design or ROADMAP's M1.4 steps),
   so both remain zero. Still suggest a UEFI PartitionInfo protocol + BlockIo GPT-header read,

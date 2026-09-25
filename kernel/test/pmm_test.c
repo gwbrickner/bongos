@@ -18,6 +18,26 @@ static uint64_t pmmTestNextRand(void) {
     return pmmTestRng;
 }
 
+/* Writes/checks a distinct tag (derived from `tag` and the page's own index within the block)
+ * into the first qword of *every* 4 KiB page of the block, not just its head -- a block wrongly
+ * overlapping another live block (exactly what a buddy-bookkeeping bug like the one this
+ * milestone's reviewer pass found can produce) is only guaranteed to be caught if every page is
+ * checked, not just the one the head happens to sit on. */
+static void pmmTestTagBlock(Page *page, uint32_t order, uint64_t tag) {
+    uint64_t base = pmmPageToPhys(page);
+    for (uint64_t i = 0; i < ((uint64_t)1 << order); i++) {
+        Page *p = pmmPhysToPage(base + (i << 12));
+        *(volatile uint64_t *)pmmPageToVirt(p) = tag ^ i;
+    }
+}
+static void pmmTestCheckBlock(KtestCtx *ktestCtx, Page *page, uint32_t order, uint64_t tag) {
+    uint64_t base = pmmPageToPhys(page);
+    for (uint64_t i = 0; i < ((uint64_t)1 << order); i++) {
+        Page *p = pmmPhysToPage(base + (i << 12));
+        KTEST_ASSERT_EQ(*(volatile uint64_t *)pmmPageToVirt(p), tag ^ i);
+    }
+}
+
 KTEST(pmm_alloc_free_stress) {
     pmmTestRng = 0x9E3779B97F4A7C15ULL;
     pmmDrainLocalCache();
@@ -49,7 +69,7 @@ KTEST(pmm_alloc_free_stress) {
                     KTEST_ASSERT(phys + ((((uint64_t)1 << order)) << 12) <= 0x100000000ULL);
                 }
                 uint64_t tag = pmmTestNextRand();
-                *(volatile uint64_t *)pmmPageToVirt(page) = tag;
+                pmmTestTagBlock(page, order, tag);
                 live[liveCount] = page;
                 liveOrder[liveCount] = order;
                 liveTag[liveCount] = tag;
@@ -61,7 +81,7 @@ KTEST(pmm_alloc_free_stress) {
             int idx = (int)(pmmTestNextRand() % (uint64_t)liveCount);
             Page *page = live[idx];
             uint32_t order = liveOrder[idx];
-            KTEST_ASSERT_EQ(*(volatile uint64_t *)pmmPageToVirt(page), liveTag[idx]);
+            pmmTestCheckBlock(ktestCtx, page, order, liveTag[idx]);
             live[idx] = live[liveCount - 1];
             liveOrder[idx] = liveOrder[liveCount - 1];
             liveTag[idx] = liveTag[liveCount - 1];
@@ -71,6 +91,7 @@ KTEST(pmm_alloc_free_stress) {
     }
 
     for (int i = 0; i < liveCount; i++) {
+        pmmTestCheckBlock(ktestCtx, live[i], liveOrder[i], liveTag[i]);
         pmmFreePages(live[i], liveOrder[i]);
     }
     pmmDrainLocalCache();
@@ -154,6 +175,50 @@ KTEST(pmm_zone_correctness) {
     }
     pmmDrainLocalCache();
 
+    PmmStats mid;
+    pmmGetStats(&mid);
+    KTEST_ASSERT_EQ(mid.zoneFreePages[PMM_ZONE_DMA32], before.zoneFreePages[PMM_ZONE_DMA32]);
+    KTEST_ASSERT_EQ(mid.zoneFreePages[PMM_ZONE_NORMAL], before.zoneFreePages[PMM_ZONE_NORMAL]);
+    KTEST_ASSERT_EQ(mid.freePages, before.freePages);
+
+    /* When this machine actually has NORMAL-zone memory (test-full's 3072 MiB row, D-084), an
+     * unflagged allocation must come from NORMAL first, leaving DMA32 untouched -- the plain
+     * 512 MiB `make test` config can't exercise this (NORMAL is always empty there), so this
+     * whole block is conditional on it actually having something to allocate from. */
+    if (mid.zoneManagedPages[PMM_ZONE_NORMAL] > 0) {
+        Page *page;
+        KTEST_ASSERT_EQ(pmmAllocPages(2, 0, &page), STATUS_OK);
+        PmmStats afterNormalAlloc;
+        pmmGetStats(&afterNormalAlloc);
+        KTEST_ASSERT_EQ(afterNormalAlloc.zoneFreePages[PMM_ZONE_DMA32],
+                        mid.zoneFreePages[PMM_ZONE_DMA32]);
+        KTEST_ASSERT_EQ(afterNormalAlloc.zoneFreePages[PMM_ZONE_NORMAL],
+                        mid.zoneFreePages[PMM_ZONE_NORMAL] - 4);
+        pmmFreePages(page, 2);
+        pmmDrainLocalCache();
+    }
+
+    /* PMM_FLAG_ZERO: dirty a page, free it, re-allocate with ZERO, and confirm it comes back
+     * clean (not just "whatever the allocator happened to hand back"). */
+    {
+        Page *page;
+        KTEST_ASSERT_EQ(pmmAllocPages(0, 0, &page), STATUS_OK);
+        uint64_t *p = (uint64_t *)pmmPageToVirt(page);
+        for (int i = 0; i < 4096 / 8; i++) {
+            p[i] = 0xDEADBEEFDEADBEEFULL;
+        }
+        pmmFreePages(page, 0);
+
+        Page *page2;
+        KTEST_ASSERT_EQ(pmmAllocPages(0, PMM_FLAG_ZERO, &page2), STATUS_OK);
+        uint64_t *p2 = (uint64_t *)pmmPageToVirt(page2);
+        for (int i = 0; i < 4096 / 8; i++) {
+            KTEST_ASSERT_EQ(p2[i], 0);
+        }
+        pmmFreePages(page2, 0);
+        pmmDrainLocalCache();
+    }
+
     PmmStats after;
     pmmGetStats(&after);
     KTEST_ASSERT_EQ(after.zoneFreePages[PMM_ZONE_DMA32], before.zoneFreePages[PMM_ZONE_DMA32]);
@@ -193,18 +258,55 @@ KTEST(pmm_double_free) {
         KTEST_ASSERT_EQ(pmmLastBug(), PMM_BUG_DOUBLE_FREE);
     }
 
-    /* 2: order-3, freed twice -- the second free either finds a free BUDDY head directly, or (if
-     * this block's pfn happened to merge into its buddy's, becoming an interior page) is caught
-     * by the TAIL-state coverage probe instead. Both are PMM_BUG_DOUBLE_FREE. */
+    /* 2: order-3, specifically the *upper* half of a genuine buddy pair, freed twice. This
+     * exercises the exact bug class this milestone's `reviewer` pass caught here:
+     * `buddyFreeBlock()` only ever writes the Page state of the *final merged* head, so a live
+     * ALLOCATED block that merges *into* its lower buddy on free needs its own original head
+     * reset to TAIL by `pmmFreePages()` before the merge walk runs -- otherwise that page is
+     * abandoned mid-array still holding a stale ALLOCATED state, and a second free of it wrongly
+     * passes validation instead of being caught here. Searches a small batch of order-3
+     * allocations for a genuine buddy pair (pfn_a ^ pfn_b == 8) rather than assuming any
+     * particular pfn -- the zone's exact free-list layout at this point in the ktest run isn't
+     * otherwise guaranteed. A fresh split off a larger free block always hands out such a pair
+     * within the first couple of allocations (buddyAllocBlock's own split-then-return order), so
+     * this batch is generous headroom, not a real risk of not finding one. */
     {
-        Page *page;
-        KTEST_ASSERT_EQ(pmmAllocPages(3, 0, &page), STATUS_OK);
-        pmmFreePages(page, 3);
-        PmmFreeTrigger t = {page, 3};
+        enum { PMM_TEST_BUDDY_SEARCH_CAP = 64 };
+        static Page *batch[PMM_TEST_BUDDY_SEARCH_CAP];
+        int batchCount = 0;
+        Page *lower = NULL;
+        Page *upper = NULL;
+        while (batchCount < PMM_TEST_BUDDY_SEARCH_CAP && lower == NULL) {
+            Page *p;
+            KTEST_ASSERT_EQ(pmmAllocPages(3, 0, &p), STATUS_OK);
+            batch[batchCount++] = p;
+            for (int j = 0; j < batchCount - 1; j++) {
+                uint64_t a = pageToPfn(batch[j]);
+                uint64_t b = pageToPfn(p);
+                if ((a ^ b) == 8) {
+                    lower = a < b ? batch[j] : p;
+                    upper = a < b ? p : batch[j];
+                    break;
+                }
+            }
+        }
+        KTEST_ASSERT(lower != NULL);
+
+        pmmFreePages(lower, 3); /* lower becomes a free BUDDY head at order 3 */
+        pmmFreePages(upper, 3); /* legitimate first free: merges into lower (order 4+) */
+
+        PmmFreeTrigger t = {upper, 3};
         TrapCatchInfo info;
         bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, pmmTriggerFree, &t, &info);
         KTEST_ASSERT(caught);
+        KTEST_ASSERT_EQ(info.kind, TRAP_CATCH_KERNEL_BUG);
         KTEST_ASSERT_EQ(pmmLastBug(), PMM_BUG_DOUBLE_FREE);
+
+        for (int i = 0; i < batchCount; i++) {
+            if (batch[i] != lower && batch[i] != upper) {
+                pmmFreePages(batch[i], 3);
+            }
+        }
     }
 
     /* 3: a live order-2 block freed with the wrong order -> ORDER_MISMATCH, nothing mutated, so
@@ -216,6 +318,7 @@ KTEST(pmm_double_free) {
         TrapCatchInfo info;
         bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, pmmTriggerFree, &t, &info);
         KTEST_ASSERT(caught);
+        KTEST_ASSERT_EQ(info.kind, TRAP_CATCH_KERNEL_BUG);
         KTEST_ASSERT_EQ(pmmLastBug(), PMM_BUG_ORDER_MISMATCH);
         pmmFreePages(page, 2);
     }
@@ -229,6 +332,7 @@ KTEST(pmm_double_free) {
         TrapCatchInfo info;
         bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, pmmTriggerFree, &t, &info);
         KTEST_ASSERT(caught);
+        KTEST_ASSERT_EQ(info.kind, TRAP_CATCH_KERNEL_BUG);
         KTEST_ASSERT_EQ(pmmLastBug(), PMM_BUG_NOT_HEAD);
         pmmFreePages(page, 1);
     }
@@ -243,6 +347,7 @@ KTEST(pmm_double_free) {
         TrapCatchInfo info;
         bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, pmmTriggerFree, &t, &info);
         KTEST_ASSERT(caught);
+        KTEST_ASSERT_EQ(info.kind, TRAP_CATCH_KERNEL_BUG);
         KTEST_ASSERT_EQ(pmmLastBug(), PMM_BUG_RESERVED_FRAME);
     }
 
@@ -252,3 +357,34 @@ KTEST(pmm_double_free) {
     KTEST_ASSERT_EQ(after.freePages, before.freePages);
     KTEST_ASSERT_EQ(after.allocatedPages, before.allocatedPages);
 }
+
+#if KERNEL_DEBUG
+static void pmmTriggerAllocOrder0(void *arg) {
+    Page **out = (Page **)arg;
+    Status st = pmmAllocPages(0, 0, out);
+    (void)st; /* the allocation itself is expected to panic via the poison check before
+               * returning here on a real trip; a non-panicking failure just fails the assert
+               * below in the (unreachable on success) normal-return path */
+}
+
+/* KERNEL_DEBUG-only (D-082): a freed page's content is poisoned, and a write through a stale
+ * pointer after the free (simulating a use-after-free bug) must be caught on the next allocation
+ * of that exact page. The per-CPU cache is LIFO and this test frees only one page before
+ * reallocating, so the very next order-0 allocation with the same flags is guaranteed to return
+ * this same page, whichever zone it happened to come from. */
+KTEST(pmm_poison_detects_write_after_free) {
+    Page *page;
+    KTEST_ASSERT_EQ(pmmAllocPages(0, 0, &page), STATUS_OK);
+    pmmFreePages(page, 0); /* poisons the whole page */
+
+    uint64_t *p = (uint64_t *)pmmPageToVirt(page);
+    p[7] = 0x1234ULL; /* corrupt one interior qword through the still-valid HHDM mapping */
+
+    Page *reAlloc = NULL;
+    TrapCatchInfo info;
+    bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, pmmTriggerAllocOrder0, &reAlloc, &info);
+    KTEST_ASSERT(caught);
+    KTEST_ASSERT_EQ(info.kind, TRAP_CATCH_KERNEL_BUG);
+    KTEST_ASSERT_EQ(pmmLastBug(), PMM_BUG_POISON);
+}
+#endif /* KERNEL_DEBUG */
