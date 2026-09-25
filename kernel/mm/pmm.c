@@ -351,7 +351,11 @@ Status pmmAddFreeRange(uint64_t physBase, uint64_t length) {
     uint64_t startPfn = physBase >> 12;
     uint64_t endPfn = startPfn + (length >> 12);
     if (endPfn <= startPfn) {
-        return STATUS_ERR_INVALID; /* pfn range wrapped: reject rather than silently do nothing */
+        /* Defensive only: `physBase`/`length` are already validated 4 KiB-aligned uint64_t
+         * values, so this can't actually overflow with any address this platform can produce --
+         * but reject explicitly rather than silently doing nothing if that ever changes, instead
+         * of relying on the per-frame pmmPfnValid() loop below to happen to catch it too. */
+        return STATUS_ERR_INVALID;
     }
 
     for (uint64_t p = startPfn; p < endPfn; p++) {

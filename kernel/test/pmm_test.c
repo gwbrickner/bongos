@@ -211,6 +211,10 @@ KTEST(pmm_zone_correctness) {
 
         Page *page2;
         KTEST_ASSERT_EQ(pmmAllocPages(0, PMM_FLAG_ZERO, &page2), STATUS_OK);
+        /* The per-CPU cache is LIFO and nothing else ran between the free and this alloc, so this
+         * must be the exact same page that was just dirtied -- assert it rather than just trusting
+         * it, so this test provably zeroes the page it wrote garbage into. */
+        KTEST_ASSERT_EQ((uint64_t)(uintptr_t)page2, (uint64_t)(uintptr_t)page);
         uint64_t *p2 = (uint64_t *)pmmPageToVirt(page2);
         for (int i = 0; i < 4096 / 8; i++) {
             KTEST_ASSERT_EQ(p2[i], 0);
@@ -267,9 +271,13 @@ KTEST(pmm_double_free) {
      * passes validation instead of being caught here. Searches a small batch of order-3
      * allocations for a genuine buddy pair (pfn_a ^ pfn_b == 8) rather than assuming any
      * particular pfn -- the zone's exact free-list layout at this point in the ktest run isn't
-     * otherwise guaranteed. A fresh split off a larger free block always hands out such a pair
-     * within the first couple of allocations (buddyAllocBlock's own split-then-return order), so
-     * this batch is generous headroom, not a real risk of not finding one. */
+     * otherwise guaranteed. A fresh split off a larger free block hands out such a pair within its
+     * first couple of same-order allocations (buddyAllocBlock's own split-then-return order); the
+     * batch cap is generous headroom against that, not protection against a zone whose order-3
+     * free list already has many *unpaired* blocks sitting on it before this test even starts (the
+     * search would still fail loudly via the assert below, not silently skip the scenario, but it
+     * assumes the earlier tests in this run left the zone in something close to its fully-coalesced
+     * state, which pmm_no_leak/pmm_zone_correctness's own cleanup should guarantee). */
     {
         enum { PMM_TEST_BUDDY_SEARCH_CAP = 64 };
         static Page *batch[PMM_TEST_BUDDY_SEARCH_CAP];
@@ -358,7 +366,7 @@ KTEST(pmm_double_free) {
     KTEST_ASSERT_EQ(after.allocatedPages, before.allocatedPages);
 }
 
-#if KERNEL_DEBUG
+#ifdef KERNEL_DEBUG
 static void pmmTriggerAllocOrder0(void *arg) {
     Page **out = (Page **)arg;
     Status st = pmmAllocPages(0, 0, out);
@@ -375,6 +383,7 @@ static void pmmTriggerAllocOrder0(void *arg) {
 KTEST(pmm_poison_detects_write_after_free) {
     Page *page;
     KTEST_ASSERT_EQ(pmmAllocPages(0, 0, &page), STATUS_OK);
+    uint64_t phys = pmmPageToPhys(page);
     pmmFreePages(page, 0); /* poisons the whole page */
 
     uint64_t *p = (uint64_t *)pmmPageToVirt(page);
@@ -386,5 +395,13 @@ KTEST(pmm_poison_detects_write_after_free) {
     KTEST_ASSERT(caught);
     KTEST_ASSERT_EQ(info.kind, TRAP_CATCH_KERNEL_BUG);
     KTEST_ASSERT_EQ(pmmLastBug(), PMM_BUG_POISON);
+
+    /* pmmAllocPages() had already committed this page to PAGE_STATE_ALLOCATED (under its own
+     * lock, before the post-unlock poison check that just panicked) but never got to return it
+     * through `reAlloc` -- free it back by its known physical address so this ktest doesn't leak
+     * a page out of the pmm's own accounting for whatever runs after it. */
+    Page *leaked = pmmPhysToPage(phys);
+    KTEST_ASSERT(leaked != NULL);
+    pmmFreePages(leaked, 0);
 }
 #endif /* KERNEL_DEBUG */
