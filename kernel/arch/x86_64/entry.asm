@@ -66,3 +66,13 @@ nullIdtr:
 ; is unmapped, turning a boot-stack overflow into a #PF instead of silent .bss corruption.
 section .bootstack nobits alloc write noexec align=4096
     resb 16384
+
+; IST stacks (ARCHITECTURE §7.1, D-073): #DF/NMI/#MC each get their own 16 KiB stack, each with
+; its own unmapped guard page below it (kernel.ld), so a severe fault that overflows the very
+; stack it's being reported on #PFs instead of corrupting an adjacent one.
+section .ist1stack nobits alloc write noexec align=4096
+    resb 16384
+section .ist2stack nobits alloc write noexec align=4096
+    resb 16384
+section .ist3stack nobits alloc write noexec align=4096
+    resb 16384

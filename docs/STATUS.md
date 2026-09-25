@@ -1,14 +1,27 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M1.4 done, reviewed, PR open)
+**Last updated:** 2026-09-25 (M2.1 done, reviewer PASS, [PR #5](https://github.com/gwbrickner/bongos/pull/5) open; M2.2 is next)
 
 ## Current milestone
-None in progress. M1.4 is done and reviewed (see `docs/logs/M1.4.md`); PR #4
-(https://github.com/gwbrickner/bongos/pull/4) open, `Reviewer: PASS`, `needs-owner: yes` (D-068
-touches the boot handoff ABI, memory management/PAT, and an on-disk format). **Next: M2.1 GDT,
-IDT, exceptions, hardening runtime**, once M1.4 merges. Needs the `architect` subagent first
-(paging/interrupts per CLAUDE.md).
+None in progress. **M2.1 GDT, IDT, exceptions, hardening runtime** is done -- see `docs/logs/
+M2.1.md` for the full writeup and its Summary section for the release notes. ROADMAP.md's M2.1 box
+is checked. The `reviewer` subagent found no Critical findings on the full milestone diff; all 8
+Should-fix items it raised were fixed (see the log's reviewer-round entry) -- a `ubsanReporting`
+recursion-guard ordering bug, a UBSan RIP that resolved to the wrong function, a still-armed-catch
+race that could misattribute an unrelated later fault, incomplete RFLAGS clearing on a caught-fault
+resume, an `archTrapCatchResume` that depended on stack memory the very mechanism under test could
+corrupt (fixed at the root, not just worked around), a missing automated check that a panic
+report's backtrace is actually symbolized, and a missing contract comment on `trapDispatch`. PR
+open against `main`, `needs-owner: yes` (D-045/§25 -- interrupts, security-sensitive stack-
+protector/UBSan runtimes, and a boot-ABI change to the kernel ELF's PT_LOAD count, D-073).
+
+**Next milestone: M2.2 Physical memory manager** (`needs-owner`, ROADMAP.md). Needs M2.1, now
+done. Steps: an early bump allocator over the BootInfo map; the `Page` array at the metadata
+region (ARCHITECTURE §6.1); a buddy allocator (orders 0-10, DMA32/NORMAL zones); a per-CPU page
+cache (BSP-only for now); reclaiming `LOADER_RECLAIM` memory after switching stacks (see "Questions
+for owner" below -- this step's wording may need an owner decision before it starts). Consult the
+`architect` subagent first (memory management is on CLAUDE.md's consult-first list).
 
 ## Phase
 1: Acapulco Gold
@@ -39,7 +52,7 @@ IDT, exceptions, hardening runtime**, once M1.4 merges. Needs the `architect` su
   rounds -- the first found and fixed one Critical, an ELF-loader integer-overflow bug; the second
   passed clean after fixing 3 more Should-fix items -- see `docs/logs/M1.3.md`); PR open,
   `needs-owner: yes`.
-- M1.4 (PR open): bongOS boots into a real graphical boot menu. The UEFI loader picks a
+- M1.4 (merged, PR #4): bongOS boots into a real graphical boot menu. The UEFI loader picks a
   GOP mode (auto or `resolution=`), draws an interactive menu (arrow keys/Enter/digits, mirrored
   to serial) driven by a new pure boot-menu state machine, and hands the kernel a real HHDM-mapped
   framebuffer (D-068: the one exception to D-059's "MMIO is never HHDM-mapped", 4 KiB/UC-/NX/
@@ -61,12 +74,36 @@ IDT, exceptions, hardening runtime**, once M1.4 merges. Needs the `architect` su
   serial-drain bug that could hide a failing ktest's output, and a font glyph collision ('S'/'5'
   identical) -- all 9 fixed, verified individually and then together (`make format-check`,
   `make host-tests` 131/131, `make image`, `make test` including regenerated GUI references), see
-  `docs/logs/M1.4.md`'s reviewer-round entries. PR #4 open, `Reviewer: PASS`, `needs-owner: yes`.
+  `docs/logs/M1.4.md`'s reviewer-round entries. PR #4 merged.
+- M2.1 ([PR #5](https://github.com/gwbrickner/bongos/pull/5) open, `needs-owner: yes`): bongOS has a real GDT/TSS with dedicated IST stacks for
+  #DF/NMI/#MC and a full 256-vector IDT (D-072/D-074) -- every exception is reported with
+  registers/CR2/control registers and a **symbolized** backtrace, then panics, except #BP, which
+  resumes cleanly. Symbolization comes from a new embedded KSYM v1 symbol table (D-075,
+  `tools/ksyms`, a two-pass kernel link) wired into every backtrace frame. Debug builds gained a
+  from-scratch UBSan runtime (all 16 `__ubsan_handle_*` checks, D-076) and a stack-protector canary
+  reseeded from `BootInfo.randomSeed` (D-077). The centerpiece is `archTrapCatch` (D-078): a
+  ktest-only mechanism that deliberately triggers a real #PF/#UD/stack-smash/UBSan-trip and proves
+  the kernel detects it, without ending the whole test run -- unlocking the milestone's 6
+  prescribed ktests. Designed with the `architect` subagent (D-072 through D-078); implemented in
+  5 independently-committed, independently-verified steps (`docs/logs/M2.1.md`). Building and
+  testing it caught several real bugs beyond the architect's own design (a GDTR limit off-by-one,
+  a frame-lifetime/tail-call bug in the backtrace ktest, an overflow bound that reached past its
+  intended frame and corrupted the catch mechanism's own resume dependency). The `reviewer`
+  subagent found no Critical findings on the full diff but 8 legitimate Should-fix items (a
+  recursion-guard ordering bug, a UBSan RIP resolving to the wrong function, a still-armed-catch
+  race, incomplete RFLAGS clearing, the resume-depends-on-stack-memory issue fixed at its root
+  this time rather than just bounded around, a missing automated symbolized-backtrace check, a
+  missing contract comment) -- all fixed, see `docs/logs/M2.1.md`'s reviewer-round entry.
 
 ## Next step
-Once M1.4's PR is reviewed/merged by the owner, start M2.1 (GDT, IDT, exceptions, hardening
-runtime) following the session protocol in CLAUDE.md -- consult the `architect` subagent first
-(interrupts/exceptions are on CLAUDE.md's consult-first list).
+M2.1's PR is being opened now (title `M2.1: GDT, IDT, exceptions, hardening runtime`, body from
+`.github/pull_request_template.md`, `Reviewer: PASS`, `needs-owner: yes`). Once it's open: a fresh
+session (or this one, if continuing) starts M2.2 following the normal session protocol -- create
+branch `m2-2-<slug>`, copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.2.md`, consult the `architect`
+subagent for the physical memory manager's design (buddy allocator layout, the `Page` array's
+exact placement in the metadata region, per-CPU page cache API shape), then implement incrementally
+per the session protocol (build+test+commit after every working step). See the M2.2 summary above
+and ROADMAP.md's own M2.2 section for the full step list.
 
 ## Blockers
 _(none)_

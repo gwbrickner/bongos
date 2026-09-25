@@ -135,6 +135,15 @@ docs/              ARCHITECTURE, DECISIONS, ROADMAP, STATUS, logs/, specs/
   poisoned freed memory, and extra asserts.
 - `make RELEASE=1` uses `-O2` and keeps stack canaries and NX. Heavy checks are off.
 
+**Kernel UBSan (debug builds, D-076):** an explicit check list, never the bare
+`-fsanitize=undefined` group -- `alignment,bool,builtin,bounds,enum,integer-divide-by-zero,
+nonnull-attribute,null,object-size,pointer-overflow,returns-nonnull-attribute,shift,
+signed-integer-overflow,unreachable,vla-bound`. The bare group pulls in `function` for C under
+clang 18, which prefixes every function with an 8-byte type-hash checked on indirect calls --
+hand-written assembly entry points carry no such prefix, so an indirect call into one reads
+unmapped memory just before it. `local-bounds` is also excluded (emits a bare `ud2`, bypassing
+the handler entirely). Every check always panics; there is no log-and-continue mode.
+
 **Make targets:** `all`, `image` (-> `build/bongos.img`), `test` (quick matrix), `test-full`,
 `host-tests`, `debug`, `run`, `run-bios`, `gdb`, `format`, `lint`, `clean`.
 
@@ -421,14 +430,22 @@ space, so kernel mappings never need to be synced between them.
 - **User ASLR:** the PIE base, mmap base, stack, and heap are randomized, with at least 28
   bits of entropy for mmap.
 - **Kernel RNG:** an entropy pool fed by RDSEED/RDRAND, `BootInfo.randomSeed`, and interrupt
-  timing, feeding a ChaCha20-based CSPRNG (`randomGetBytes`). Stack canaries are seeded from
-  it at boot.
+  timing, feeding a ChaCha20-based CSPRNG (`randomGetBytes`), from M2.6 onward.
+- **Stack canaries (M2.1, D-077):** `__stack_chk_guard` is set exactly once, very early in
+  `kernelMain`, from a splitmix64-style fold of all 8 qwords of `BootInfo.randomSeed` mixed with
+  one `rdtsc` reading (the CSPRNG doesn't exist yet at this point) -- never reseeded afterward.
+  The reseed function is both `noinline` and `no_stack_protector`, called from a
+  `no_stack_protector` `kernelMain`, so the store itself is never inside a canary-checked frame.
 
 ---
 
 ## 7. CPU, SMP, interrupts, time
 
 ### 7.1 Per-CPU data and CPU setup
+- **BSP-only through M3.4 (D-072):** SMP bring-up is M3.5. From M2.1 through M3.4 there is one
+  static `ArchCpuTables` (GDT+TSS) built and loaded for the BSP only; the `CpuLocal`/per-CPU
+  design below is the target M3.5 moves to, not what exists yet. `gdtBuild`/`tssBuild` already
+  take an explicit struct pointer so that move needs no rewrite.
 - **Per-CPU data:** each CPU's GS base points to a `CpuLocal` struct. It holds `self`,
   `cpuId`, `apicId`, `currentThread`, `idleThread`, `runQueue`, `preemptCount`, `irqDepth`,
   the TSS, the GDT, scratch space for syscall entry, and stats. The kernel uses `swapgs` on
@@ -438,12 +455,29 @@ space, so kernel mappings never need to be synced between them.
 - **FPU/SIMD:** saved and restored eagerly on context switch, with XSAVE/XSAVEOPT (or FXSAVE
   as a fallback). Kernel code never uses FP or SIMD, except inside explicit
   `fpuBegin()`/`fpuEnd()` sections (AES-NI, fast memcpy later).
-- **GDT (one per CPU):** null, kernel code, kernel data, user code32 (placeholder, needed for
-  the STAR layout), user data, user code64, then the TSS.
-- **IDT:** shared by all CPUs. Each CPU gets 16 KiB IST stacks: IST1 for #DF, IST2 for NMI,
-  IST3 for #MC.
+- **GDT (one per CPU):** null (0x00), kernel code (0x08), kernel data (0x10), user code32
+  (0x18, placeholder for the STAR layout -- **not present**, since SYSRET never reads this
+  descriptor and a present compat-mode descriptor is needless attack surface before userspace
+  exists), user data (0x20), user code64 (0x28), then the TSS (0x30, 16 bytes). All descriptors
+  have the Accessed bit preset (D-062). `GDT_USER_CS64_RPL3`=0x2B/`GDT_USER_DS_RPL3`=0x23 are
+  reserved for STAR once syscalls exist.
+- **TSS:** RSP0=0 until per-thread kernel stacks exist (M4/M5) -- a stray privilege transition
+  before then #PFs near-null instead of corrupting memory silently. No I/O permission bitmap
+  (`iomapBase` = TSS limit + 1), so all ring-3 port I/O is denied by construction.
+- **IDT:** shared by all CPUs, all 256 entries populated (D-074) so a stray vector gets a
+  diagnosable #GP/#DF chain instead of a triple fault off a not-present gate. Each CPU gets three
+  16 KiB IST stacks, each behind its own unmapped guard page (D-073, superseding D-061's
+  "exactly four `PT_LOAD`s"): IST1 for #DF, IST2 for NMI, IST3 for #MC. Every other vector uses
+  the normal kernel stack. IF stays 0 until the first IRQ source is wired up (M3.2).
 
 ### 7.2 Interrupt vectors
+All 256 IDT gates are populated (interrupt gates, DPL0 except vector 3's DPL3); an unregistered
+vector still reports a diagnosable panic rather than triple-faulting. #BP (int3) resumes normally
+(a trap, not a fault: the saved RIP already points past the `int3` byte); every other exception
+panics unless a ktest has armed `archTrapCatch()` for it (§23) -- NMI/#DF/#MC can never be caught
+this way and always panic, since M2.1 has no legitimate source for any of them and CR4.MCE isn't
+set until M3.6.
+
 | Vectors | Use |
 |---|---|
 | 0-31 | CPU exceptions |
@@ -1033,14 +1067,29 @@ serial. The run ends by writing to the `isa-debug-exit` port (0xF4): `0x10` mean
 (QEMU exits 33), `0x11` means failure (QEMU exits 35). The harness maps a timeout to HANG and
 a reset to CRASH.
 
+**Deliberately faulting a ktest (M2.1, D-078):** a ktest that needs to prove the kernel *detects*
+a real fault (a deliberate #PF, #UD) or a software-checked violation (a stack smash, a UBSan trip)
+without ending the whole test run calls `archTrapCatch(mask, fn, arg, &info)`, which runs `fn`
+with a saved callee-saved-register context. A matching **hardware fault** (vector 0-31) prints the
+normal report first (still exercising the symbolized backtrace) before redirecting execution back
+to `archTrapCatch`'s caller; a matching **software trip** (`TRAP_CATCH_STACK_SMASH`/
+`TRAP_CATCH_UBSAN`, offered by `__stack_chk_fail()`/the UBSan handlers via
+`archTrapCatchSoftware()`) is deliberately silent on serial and redirects immediately -- the ktest
+itself reports PASS/FAIL, and the point of catching it there is to *avoid* the loud panic report a
+real, uncaught trip still prints. Either way, `*info` is filled in with what was caught. One-shot,
+non-nesting, ktest-only (`archTrapCatch` itself panics if called outside a ktest run), and it can
+never catch NMI/#DF/#MC or #BP -- those stay always-fatal, or (#BP) already resume unconditionally
+before archTrapCatch ever sees them (§7.2).
+
 ---
 
 ## 24. Debugging and observability
 - **klog:** levels (error, warn, info, debug, trace), per-subsystem tags, and output to serial
   plus fbcon plus a ring buffer (`dmesg`).
 - **Panic screen:** reason, registers, CPU number, current thread, and a **symbolized
-  backtrace**. Frame pointers are kept, and the kernel embeds a compressed symbol table. Other
-  CPUs are stopped by IPI.
+  backtrace**. Frame pointers are kept, and the kernel embeds a compressed symbol table (KSYM v1,
+  `docs/specs/ksyms.md`, D-075 -- built by a two-pass link + `tools/ksyms`, looked up by
+  `ksymSymbolize()`). Other CPUs are stopped by IPI (once SMP exists, M3.5).
 - **Debugger:** `make gdb` runs QEMU's gdbstub with symbols loaded. `make debug` adds
   `-d int,cpu_reset` logging.
 - **Userspace crashes:** the crashing process's registers and backtrace go to `logd`, and

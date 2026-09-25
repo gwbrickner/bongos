@@ -19,15 +19,21 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # logic living outside tests/host/, same reasoning as gpt.c/bootcfg.c below. kernel/drivers/fbcon/
 # fbcon.c: pure C on top of fbtext.c's primitive (no hardware I/O, no locks yet), so it's just as
 # host-testable as fbtext.c itself -- only needs kernel/include on the path for uapi/status.h.
+# kernel/core/ksym.c: the KSYM v1 decoder (D-075) is deliberately pure (no sections.h/ksnprintf
+# dependency -- that split lives in ksym-symbolize.c, kernel-only), so it host-tests the same way.
+# tools/ksyms/ksyms-encode.c: the encoder, so ksyms_test.c can round-trip encode->decode without a
+# real ELF file (elf-read.c itself isn't needed here -- only its header, for the ElfFuncSymList
+# type the encoder's API takes).
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c boot/uefi/guids.c \
                         $(wildcard boot/common/*.c) $(CONSOLE_FONT_C) \
                         $(filter-out tools/imgdiff/main.c,$(wildcard tools/imgdiff/*.c)) \
-                        kernel/drivers/fbcon/fbcon.c
+                        kernel/drivers/fbcon/fbcon.c kernel/core/ksym.c tools/ksyms/ksyms-encode.c
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h $(wildcard boot/uefi/include/efi/*.h) \
                         $(wildcard boot/common/include/*.h) $(wildcard tools/imgdiff/*.h) \
-                        kernel/drivers/fbcon/fbcon.h $(wildcard kernel/include/uapi/*.h)
+                        kernel/drivers/fbcon/fbcon.h $(wildcard kernel/include/uapi/*.h) \
+                        kernel/include/ksym.h tools/ksyms/elf-read.h tools/ksyms/ksyms-encode.h
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
-                            -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include
+                            -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms
 
 .PHONY: host-tests
 host-tests: $(HOST_TEST_BIN)

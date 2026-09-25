@@ -44,4 +44,54 @@ static inline __attribute__((always_inline)) uint64_t archFramePointer(void) {
     return rbp;
 }
 
+/* Loads the Task Register (SDM Vol 3A `LTR`) with a GDT selector -- must name a present TSS
+ * descriptor (D-072: GDT_SEL_TSS) or this takes #GP. Sets the descriptor's busy bit; loading it
+ * twice without an intervening jump/call through it takes #GP too (cpu-init.c guards against a
+ * repeat call). No locks, boot-time-only, not IRQ-safe (changes privileged CPU state). */
+static inline void archLoadTss(uint16_t selector) {
+    __asm__ volatile("ltr %0" : : "r"(selector) : "memory");
+}
+
+/* SDM Vol 3A `LIDT`: loads the IDTR from a 10-byte pseudo-descriptor (gdt.h's X86DescriptorPtr).
+ * No locks, boot-time-only, not IRQ-safe. */
+static inline void archLoadIdt(const void *idtr) {
+    __asm__ volatile("lidt %0" : : "m"(*(const uint8_t(*)[10])idtr) : "memory");
+}
+
+/* CR2 holds the faulting linear address after a #PF (SDM Vol 3A §4.7) -- only meaningful for
+ * vector 14, and only until the *next* fault, so trapDispatch() reads this before anything else
+ * that could itself fault. No locks, IRQ-safe (a single read, no shared state), pure with respect
+ * to visible kernel state (CR2 itself is set by the CPU's fault delivery, not by this read). */
+static inline uint64_t archReadCr2(void) {
+    uint64_t cr2;
+    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+    return cr2;
+}
+
+/* CR0/CR3/CR4 for panic/trap register dumps (ARCHITECTURE §24). No locks, IRQ-safe, pure. */
+static inline uint64_t archReadCr0(void) {
+    uint64_t cr0;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    return cr0;
+}
+static inline uint64_t archReadCr3(void) {
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    return cr3;
+}
+static inline uint64_t archReadCr4(void) {
+    uint64_t cr4;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    return cr4;
+}
+
+/* SDM Vol 2 `RDTSC`: used only as an entropy stir-in for the one-time stack-canary derivation
+ * (D-077) before the real CSPRNG exists -- not a timekeeping API (ARCHITECTURE §7.5 owns that,
+ * M2.6+). No locks, IRQ-safe, boot-time. */
+static inline uint64_t archReadTsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 #endif
