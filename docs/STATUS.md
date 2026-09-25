@@ -5,15 +5,15 @@ _Main-line status. Parallel-lane sessions don't edit this file; they track progr
 
 ## Current milestone
 **M2.1 GDT, IDT, exceptions, hardening runtime** -- in progress (see `docs/logs/M2.1.md`).
-Architect design received (D-072 through D-078). Steps 1 (GDT+TSS+IDT+trapDispatch,
-`trap_int3_resumes` ktest), 2 (KSYM v1 symbol table -- `tools/ksyms`, a two-pass kernel link,
-`ksymSymbolize()` wired into every backtrace frame, `ksym_lookup`/`backtrace_symbolized` ktests --
-the latter had two real bugs found and fixed by hand with `objdump`/debug-log evidence), and 3
-(UBSan runtime, all 16 `__ubsan_handle_*` entry points, debug-build-only explicit check list) are
-built and confirmed working under real QEMU with no regressions (`make test`:
-`KTEST DONE passed=9 failed=0`, all GUI screenshots byte-for-byte). Stack-protector reseed
-(D-077) and the ktest fault-catch mechanism (`archTrapCatch`, D-078, needed to prove UBSan/#PF/
-#UD/stack-smash detection without ending the ktest run) are still to come.
+Architect design received (D-072 through D-078). Steps 1 (GDT+TSS+IDT+trapDispatch), 2 (KSYM v1
+symbol table -- `tools/ksyms`, a two-pass kernel link, `ksymSymbolize()` wired into every
+backtrace frame), 3 (UBSan runtime, all 16 `__ubsan_handle_*` entry points), and 4
+(stack-protector reseed from `BootInfo.randomSeed`, `kernelMain`/`stackGuardInit` both
+`no_stack_protector`) are all built and confirmed working under real QEMU with no regressions
+(`make test`: `KTEST DONE passed=10 failed=0`, all GUI screenshots byte-for-byte). Only
+`archTrapCatch` (D-078) and the ktests it unlocks (`trap_pf_read_cr2`, `trap_pf_write_error_code`,
+`stack_guards_unmapped`, `trap_ud_caught`, `stack_protector_detects_smash`,
+`ubsan_catches_signed_overflow`) remain before the milestone moves to the `reviewer` pass.
 
 ## Phase
 1: Acapulco Gold

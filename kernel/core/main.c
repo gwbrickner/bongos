@@ -6,6 +6,7 @@
 #include "klog.h"
 #include "ktest.h"
 #include "panic.h"
+#include "stack-protector.h"
 
 #include <arch/cpu-init.h>
 #include <arch/cpu.h>
@@ -62,11 +63,14 @@ static void kernelPrintMemoryMapSummary(const BootInfo *bi) {
 }
 
 /* No locks; boot-time only (called exactly once, from entry.asm, on the kernel's own boot stack);
- * never returns. */
-_Noreturn void kernelMain(const BootInfo *bi) {
-    /* First: installs the real GDT/TSS (ARCHITECTURE §7.1, D-072), replacing entry.asm's
-     * temporary boot GDT, so every fault from here on (once the IDT joins this same init
-     * sequence in the next M2.1 step) is reported rather than triple-faulting. */
+ * never returns. `no_stack_protector`: stackGuardInit() below must run before any *other*
+ * protected frame outlives it, so this function's own frame (which calls it) can't be one either
+ * (D-077 -- confirmed by compiler probe that `no_stack_protector` alone doesn't stop a callee
+ * from being inlined into a protected caller, which would defeat the point). */
+__attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi) {
+    /* First: installs the real GDT/TSS/IDT (ARCHITECTURE §7.1/§7.2, D-072/D-074), replacing
+     * entry.asm's temporary boot GDT and null IDT, so every fault from here on is reported rather
+     * than triple-faulting. */
     archCpuInitBsp();
 
     serialInit();
@@ -83,13 +87,19 @@ _Noreturn void kernelMain(const BootInfo *bi) {
         panic("bootinfo: %s", why);
     }
 
+    /* Immediately after validation, before anything else: every protected function that ran
+     * earlier already returned and checked the old fixed-constant guard, and nothing from here on
+     * should run with a canary an attacker could predict from source (D-077). */
+    stackGuardInit(bi);
+
     liveBootInfo = bi;
     bootInfoCopy = *bi;
-    /* Nothing reads randomSeed out of bootInfoCopy (only the live BootInfo page matters, and only
-     * once a real consumer such as M2.1's CSPRNG init reads it there); don't keep a second
-     * permanent copy of key material sitting around in kernel .data. A plain write here would be a
-     * dead store an optimizing compiler is free to elide (nothing ever reads the field back), so
-     * this goes through a volatile pointer the same way the loader wipes its own stack copy. */
+    /* Nothing reads randomSeed out of bootInfoCopy: the only consumer so far, stackGuardInit()
+     * above, already read it from the live `bi` pointer before this copy was even made, and
+     * M2.6's CSPRNG init will do the same from the live page later. Don't keep a second permanent
+     * copy of key material sitting around in kernel .data. A plain write here would be a dead
+     * store an optimizing compiler is free to elide (nothing ever reads the field back), so this
+     * goes through a volatile pointer the same way the loader wipes its own stack copy. */
     volatile uint8_t *seedWipe = bootInfoCopy.randomSeed;
     for (size_t i = 0; i < sizeof(bootInfoCopy.randomSeed); i++) {
         seedWipe[i] = 0;
