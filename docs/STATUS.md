@@ -1,13 +1,13 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M1.4 done, PR being opened)
+**Last updated:** 2026-09-25 (M1.4 done, reviewed, PR open)
 
 ## Current milestone
-None in progress. M1.4 is done (see `docs/logs/M1.4.md`); its PR is about to be opened,
-`needs-owner: yes` (D-068 touches the boot handoff ABI). **Next: M2.1 GDT, IDT, exceptions,
-hardening runtime**, once M1.4 merges. Needs the `architect` subagent first (paging/interrupts
-per CLAUDE.md).
+None in progress. M1.4 is done and reviewed (see `docs/logs/M1.4.md`); PR open,
+`needs-owner: yes` (D-068 touches the boot handoff ABI, memory management/PAT, and an on-disk
+format). **Next: M2.1 GDT, IDT, exceptions, hardening runtime**, once M1.4 merges. Needs the
+`architect` subagent first (paging/interrupts per CLAUDE.md).
 
 ## Phase
 1: Acapulco Gold
@@ -38,7 +38,7 @@ per CLAUDE.md).
   rounds -- the first found and fixed one Critical, an ELF-loader integer-overflow bug; the second
   passed clean after fixing 3 more Should-fix items -- see `docs/logs/M1.3.md`); PR open,
   `needs-owner: yes`.
-- M1.4 (PR about to open): bongOS boots into a real graphical boot menu. The UEFI loader picks a
+- M1.4 (PR open): bongOS boots into a real graphical boot menu. The UEFI loader picks a
   GOP mode (auto or `resolution=`), draws an interactive menu (arrow keys/Enter/digits, mirrored
   to serial) driven by a new pure boot-menu state machine, and hands the kernel a real HHDM-mapped
   framebuffer (D-068: the one exception to D-059's "MMIO is never HHDM-mapped", 4 KiB/UC-/NX/
@@ -52,8 +52,15 @@ per CLAUDE.md).
   subagent (D-067 through D-070); implemented and verified in 7 independently-committed steps.
   Actually running the finished GUI harness against live QEMU caught and fixed two real bugs (a
   font-generation aliasing mistake, and a loader `ConIn->Reset()` ordering bug that could swallow
-  a fast keypress) -- see `docs/logs/M1.4.md` for details. `make test`/`make host-tests`
-  (128/128) both pass; PR about to open, `needs-owner: yes`.
+  a fast keypress) -- see `docs/logs/M1.4.md` for details. The `reviewer` subagent then found no
+  Critical findings but 9 legitimate Should-fix items (an unverified PAT-cacheability assumption
+  and a shallow framebuffer conflict scan, a real fbcon tab-handler hang at 1-column consoles,
+  scroll/pixel-write performance, the menu wrongly skipping outright with no framebuffer, an
+  ARCHITECTURE doc/behavior mismatch, 5 undocumented local decisions now D-071, a test-harness
+  serial-drain bug that could hide a failing ktest's output, and a font glyph collision ('S'/'5'
+  identical) -- all 9 fixed, verified individually and then together (`make format-check`,
+  `make host-tests` 131/131, `make image`, `make test` including regenerated GUI references), see
+  `docs/logs/M1.4.md`'s reviewer-round entries. PR open, `Reviewer: PASS`, `needs-owner: yes`.
 
 ## Next step
 Once M1.4's PR is reviewed/merged by the owner, start M2.1 (GDT, IDT, exceptions, hardening
