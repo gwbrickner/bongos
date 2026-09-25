@@ -1,12 +1,13 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M1.4 in progress)
+**Last updated:** 2026-09-25 (M1.4 done, PR being opened)
 
 ## Current milestone
-M1.4: Framebuffer console + boot menu, in progress (see `docs/logs/M1.4.md`). M1.3's PR (#3)
-merged to `main` at `54f1842`. Branch: `claude/affectionate-ritchie-cxvoi6` (see the note at the
-top of the M1.4 log for why this isn't the usual `m1-4-...` name).
+None in progress. M1.4 is done (see `docs/logs/M1.4.md`); its PR is about to be opened,
+`needs-owner: yes` (D-068 touches the boot handoff ABI). **Next: M2.1 GDT, IDT, exceptions,
+hardening runtime**, once M1.4 merges. Needs the `architect` subagent first (paging/interrupts
+per CLAUDE.md).
 
 ## Phase
 1: Acapulco Gold
@@ -37,11 +38,27 @@ top of the M1.4 log for why this isn't the usual `m1-4-...` name).
   rounds -- the first found and fixed one Critical, an ELF-loader integer-overflow bug; the second
   passed clean after fixing 3 more Should-fix items -- see `docs/logs/M1.3.md`); PR open,
   `needs-owner: yes`.
+- M1.4 (PR about to open): bongOS boots into a real graphical boot menu. The UEFI loader picks a
+  GOP mode (auto or `resolution=`), draws an interactive menu (arrow keys/Enter/digits, mirrored
+  to serial) driven by a new pure boot-menu state machine, and hands the kernel a real HHDM-mapped
+  framebuffer (D-068: the one exception to D-059's "MMIO is never HHDM-mapped", 4 KiB/UC-/NX/
+  global). `boot.cfg` gained a full `[Name]`-section grammar (D-067) with inheritance and
+  line-numbered errors, validated both by the loader and at image-build time. The kernel's new
+  `fbcon` driver mirrors every `klog` line onto the screen in color, using an original 8x16
+  console font (D-069, `tools/mkfont`) and a glyph-blit primitive shared with the loader's menu.
+  New `tools/imgdiff` (a from-scratch PPM/PNG/DEFLATE codec, no third-party dependency) and a
+  QMP-scripting test harness (`tests/harness/qemu-script.py`, `tests/gui/`) screenshot-test the
+  whole pipeline end to end (D-070) -- `make test` now includes it. Designed with the `architect`
+  subagent (D-067 through D-070); implemented and verified in 7 independently-committed steps.
+  Actually running the finished GUI harness against live QEMU caught and fixed two real bugs (a
+  font-generation aliasing mistake, and a loader `ConIn->Reset()` ordering bug that could swallow
+  a fast keypress) -- see `docs/logs/M1.4.md` for details. `make test`/`make host-tests`
+  (128/128) both pass; PR about to open, `needs-owner: yes`.
 
 ## Next step
-Consult the `architect` subagent on the boot.cfg `[entry]` schema, PSF font handling, and the
-screenshot-test approach (see `docs/logs/M1.4.md`'s Plan section), then implement M1.4 step 1
-(loader GOP mode selection + `BootInfo.fb`).
+Once M1.4's PR is reviewed/merged by the owner, start M2.1 (GDT, IDT, exceptions, hardening
+runtime) following the session protocol in CLAUDE.md -- consult the `architect` subagent first
+(interrupts/exceptions are on CLAUDE.md's consult-first list).
 
 ## Blockers
 _(none)_
@@ -55,19 +72,26 @@ _(none)_
   page tables are live and CR4.PGE has been toggled, which M2.3 needs anyway since the loader's
   HHDM/kernel mappings are marked Global). No code changed yet -- this needs an owner decision on
   updating ROADMAP.md's M2.2 wording before that milestone starts.
-- `BootInfo.bootDiskGuid`/`bootPartGuid` (D-056) have no milestone assigned to fill them yet; M1.3
-  leaves both zero (valid under the v1 "zero means not provided" semantics recorded in D-064).
-  Suggest M1.4 fills them via UEFI's PartitionInfo protocol + a BlockIo read of the GPT header,
-  but flagging for the owner to confirm before M1.4 starts.
+- `BootInfo.bootDiskGuid`/`bootPartGuid` (D-056) still have no milestone assigned to fill them;
+  M1.4 didn't touch this (it wasn't part of the architect's D-068 design or ROADMAP's M1.4 steps),
+  so both remain zero. Still suggest a UEFI PartitionInfo protocol + BlockIo GPT-header read,
+  whichever milestone the owner wants to assign it to (M6.4, which adds the kernel's own GPT
+  scanner per D-056, looks like a natural fit).
 
 ## Waiting on owner (hardware checks and other owner-only steps)
 - Still open from M1.1: `libclang-rt-18-dev` (host-test sanitizers) and `gdb` (`make gdb`) were
-  added to `tools/ci/install-deps.sh`. The cloud environment's cached setup script needs
+  added to `tools/ci/install-deps.sh`. The cloud environment's cached setup script still needs
   re-running once (Environment settings -> re-run setup, or it picks it up on the next cache
-  invalidation) for `make host-tests`/`make gdb` to work in a fresh session without CI's own
-  `sudo bash tools/ci/install-deps.sh` step. M1.2's host tests (GPT writer, UEFI GUIDs) were
-  verified with a plain non-sanitized build in the meantime; CI itself runs the real
-  `sudo bash tools/ci/install-deps.sh` step and should pass `make host-tests` normally.
+  invalidation) for `make host-tests`/`make gdb` to work in a *fresh* session without manual
+  intervention. This M1.4 session hit the same gap and worked around it for itself by running
+  `sudo apt-get install -y libclang-rt-18-dev` directly (confirmed `make host-tests` then runs
+  for real, with ASan/UBSan, not the M1.2-era plain-build fallback) -- but that's a per-container
+  fix that won't survive to the next session, so the underlying setup-script re-run is still
+  needed. CI itself runs the real `sudo bash tools/ci/install-deps.sh` step and passes normally.
+- M1.4's owner hardware check (ROADMAP M1.4): `dd` the image to a USB stick, boot it, confirm the
+  boot menu appears and arrow keys/Enter work, then report the resolution logged and whether
+  scrolling looks noticeably slow (expected until M2.3 remaps the framebuffer WC, D-068). Full
+  instructions in `docs/logs/M1.4.md`'s "Owner hardware check" section.
 
 ## Parallel lanes (informational; updated by the main line when lanes merge)
 | Milestone | Branch | State |
