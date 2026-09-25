@@ -1,14 +1,12 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M1.4 done, reviewed, PR open)
+**Last updated:** 2026-09-25 (M1.4 merged; M2.1 in progress)
 
 ## Current milestone
-None in progress. M1.4 is done and reviewed (see `docs/logs/M1.4.md`); PR #4
-(https://github.com/gwbrickner/bongos/pull/4) open, `Reviewer: PASS`, `needs-owner: yes` (D-068
-touches the boot handoff ABI, memory management/PAT, and an on-disk format). **Next: M2.1 GDT,
-IDT, exceptions, hardening runtime**, once M1.4 merges. Needs the `architect` subagent first
-(paging/interrupts per CLAUDE.md).
+**M2.1 GDT, IDT, exceptions, hardening runtime** -- in progress (see `docs/logs/M2.1.md`).
+Consulting the `architect` subagent first (interrupts/exceptions per CLAUDE.md); implementation
+not yet started.
 
 ## Phase
 1: Acapulco Gold
@@ -39,7 +37,7 @@ IDT, exceptions, hardening runtime**, once M1.4 merges. Needs the `architect` su
   rounds -- the first found and fixed one Critical, an ELF-loader integer-overflow bug; the second
   passed clean after fixing 3 more Should-fix items -- see `docs/logs/M1.3.md`); PR open,
   `needs-owner: yes`.
-- M1.4 (PR open): bongOS boots into a real graphical boot menu. The UEFI loader picks a
+- M1.4 (merged, PR #4): bongOS boots into a real graphical boot menu. The UEFI loader picks a
   GOP mode (auto or `resolution=`), draws an interactive menu (arrow keys/Enter/digits, mirrored
   to serial) driven by a new pure boot-menu state machine, and hands the kernel a real HHDM-mapped
   framebuffer (D-068: the one exception to D-059's "MMIO is never HHDM-mapped", 4 KiB/UC-/NX/
@@ -61,12 +59,15 @@ IDT, exceptions, hardening runtime**, once M1.4 merges. Needs the `architect` su
   serial-drain bug that could hide a failing ktest's output, and a font glyph collision ('S'/'5'
   identical) -- all 9 fixed, verified individually and then together (`make format-check`,
   `make host-tests` 131/131, `make image`, `make test` including regenerated GUI references), see
-  `docs/logs/M1.4.md`'s reviewer-round entries. PR #4 open, `Reviewer: PASS`, `needs-owner: yes`.
+  `docs/logs/M1.4.md`'s reviewer-round entries. PR #4 merged.
 
 ## Next step
-Once M1.4's PR is reviewed/merged by the owner, start M2.1 (GDT, IDT, exceptions, hardening
-runtime) following the session protocol in CLAUDE.md -- consult the `architect` subagent first
-(interrupts/exceptions are on CLAUDE.md's consult-first list).
+M2.1 is in progress (`docs/logs/M2.1.md`). Waiting on the `architect` subagent's design response
+for the GDT/TSS/IDT layout, IST stack allocation, exception-stub generation, the C-level
+TrapFrame/handler design, the compressed-symbol-table embedding approach, UBSan runtime scope,
+and the ktest-recoverable-fault mechanism (how a ktest deliberately triggers #PF/#UD/a stack
+smash and has the handler report PASS/FAIL and continue to the next ktest instead of panicking).
+Once it returns: record any new D-0xx decisions, then implement step 1 (GDT+TSS+IDT) first.
 
 ## Blockers
 _(none)_
