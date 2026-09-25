@@ -63,10 +63,14 @@ Status vmmMapKernel(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags);
  * vmmLock. IRQ-safe: yes. May sleep: no. */
 Status vmmUnmapKernel(uint64_t va, uint64_t size);
 
-/* Looks up the current mapping at `va` (must be 4 KiB-aligned). On success, `*outPa` and
- * `*outFlags` describe the leaf and this returns STATUS_OK; returns STATUS_ERR_NOT_FOUND if `va`
- * isn't mapped. No locks beyond a brief vmmLock hold; IRQ-safe; pure with respect to visible
- * kernel state. */
+/* Looks up the current 4 KiB-leaf mapping at `va` (must itself be 4 KiB-aligned). On success,
+ * `*outPa` and `*outFlags` describe the leaf and this returns STATUS_OK; returns
+ * STATUS_ERR_NOT_FOUND if `va` isn't mapped *as a 4 KiB leaf* -- unlike vmmMapKernel/
+ * vmmUnmapKernel, this isn't restricted to the KVA region (it also works against KVA-region VAs
+ * and against the framebuffer's HHDM mapping, both always 4 KiB), but a VA covered by one of the
+ * kernel's own 2 MiB/1 GiB HHDM leaves (most of the HHDM, D-086) reports NOT_FOUND rather than
+ * resolving through the large leaf. No locks beyond a brief vmmLock hold; IRQ-safe; pure with
+ * respect to visible kernel state. */
 Status vmmLookupKernel(uint64_t va, uint64_t *outPa, VmmFlags *outFlags);
 
 /* Reserves `size` (4 KiB-aligned, nonzero) bytes of KVA space, with an unmapped guard page on

@@ -125,6 +125,18 @@ Page *pmmPhysToPage(uint64_t phys) {
     return pmmPfnValid(pfn) ? pageFromPfn(pfn) : NULL;
 }
 
+bool pmmPhysInLoaderReclaim(uint64_t phys) {
+    uint64_t end = phys + 4096;
+    for (uint32_t i = 0; i < pmmMap.loaderReclaimCount; i++) {
+        uint64_t rangeBase = pmmMap.loaderReclaim[i].physBase;
+        uint64_t rangeEnd = rangeBase + pmmMap.loaderReclaim[i].length;
+        if (phys < rangeEnd && rangeBase < end) {
+            return true;
+        }
+    }
+    return false;
+}
+
 uint64_t pmmHhdmBase(void) {
     return pmmHhdmBaseValue;
 }
@@ -402,14 +414,32 @@ static void pmmZeroRange(uint64_t physBase, uint64_t length) {
     }
 }
 
+/* True if every frame in [base, base+length) is still PAGE_STATE_RESERVED -- checked *before*
+ * pmmReclaimPiece() zeroes anything, so a mismatch between pmmMap.loaderReclaim[] and the Page
+ * array's actual state (which should never happen, but would mean this range isn't safe to
+ * reclaim at all) is caught before any byte is destroyed, not after. `pmmAddFreeRange()` re-checks
+ * this same condition itself right before it commits, but only after this function has already
+ * zeroed the range -- validating here first is what keeps a caught inconsistency's evidence (and
+ * whatever live data a wrongly-included frame held) intact for the panic report. */
+static bool pmmRangeAllReserved(uint64_t base, uint64_t length) {
+    uint64_t startPfn = base >> 12;
+    uint64_t endPfn = startPfn + (length >> 12);
+    for (uint64_t pfn = startPfn; pfn < endPfn; pfn++) {
+        if (!pmmPfnValid(pfn) || pageFromPfn(pfn)->state != PAGE_STATE_RESERVED) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Frees [base, base+length) to the buddy allocator, splitting around [keepPagePhys,
  * keepPagePhys+4096) if it falls inside (recurses at most once per side -- the two split pieces
  * can never contain keepPagePhys again). Zeroes each freed piece through the HHDM first: a loader
  * stack or its page-table pool can hold RNG/seed residue or other loader-controlled data. Returns
- * the number of pages actually freed. Panics (via pmmAddFreeRange's contract) rather than return
- * an error -- pmmMap.loaderReclaim[] ranges are the pmm's own record of exactly what pmmInit()
- * scanned, so a failure here means that record is inconsistent with the Page array, not a bad
- * caller argument. */
+ * the number of pages actually freed. Panics (via pmmAddFreeRange's contract, and its own
+ * pmmRangeAllReserved() precheck) rather than return an error -- pmmMap.loaderReclaim[] ranges are
+ * the pmm's own record of exactly what pmmInit() scanned, so a failure here means that record is
+ * inconsistent with the Page array, not a bad caller argument. */
 static uint64_t pmmReclaimPiece(uint64_t base, uint64_t length, uint64_t keepPagePhys) {
     if (length == 0) {
         return 0;
@@ -427,6 +457,10 @@ static uint64_t pmmReclaimPiece(uint64_t base, uint64_t length, uint64_t keepPag
         return total;
     }
 
+    if (!pmmRangeAllReserved(base, length)) {
+        panic("pmm: reclaim: [0x%llx, 0x%llx) is not entirely PAGE_STATE_RESERVED",
+              (unsigned long long)base, (unsigned long long)end);
+    }
     pmmZeroRange(base, length);
     Status st = pmmAddFreeRange(base, length);
     if (st != STATUS_OK) {
@@ -437,12 +471,17 @@ static uint64_t pmmReclaimPiece(uint64_t base, uint64_t length, uint64_t keepPag
 }
 
 void pmmReclaimLoaderMemory(uint64_t keepPagePhys) {
+    static bool reclaimDone = false;
+    if (reclaimDone) {
+        panic("pmm: pmmReclaimLoaderMemory: called twice");
+    }
     if (!vmmKernelTablesActive()) {
         panic("pmm: pmmReclaimLoaderMemory: called before the kernel's own page tables are active");
     }
     if ((keepPagePhys & 0xFFF) != 0) {
         panic("pmm: pmmReclaimLoaderMemory: keepPagePhys is not 4 KiB aligned");
     }
+    reclaimDone = true;
 
     uint64_t reclaimed = 0;
     for (uint32_t i = 0; i < pmmMap.loaderReclaimCount; i++) {
@@ -451,12 +490,26 @@ void pmmReclaimLoaderMemory(uint64_t keepPagePhys) {
         if (base < PMM_RECLAIM_LOW_LIMIT) {
             base = PMM_RECLAIM_LOW_LIMIT;
         }
+        if (end > BOOTINFO_HHDM_SIZE) { /* mirrors pmm-map.c's own HHDM-window clip */
+            end = BOOTINFO_HHDM_SIZE;
+        }
         if (base >= end) {
             continue;
         }
         reclaimed += pmmReclaimPiece(base, end - base, keepPagePhys);
     }
     pmmReclaimedPagesValue += reclaimed;
+
+    /* Independent sanity bound (not a full re-derivation, which would just repeat the loop
+     * above): reclaiming can never exceed the raw LOADER_RECLAIM total pmmMapScan() recorded at
+     * boot, before any of this function's own clipping/splitting logic ran. Catches, for example,
+     * a bug that double-counts a piece or free a range into the wrong zone's ledger. */
+    if (reclaimed > pmmMap.typePages[BOOT_MEM_LOADER_RECLAIM]) {
+        panic("pmm: reclaim: reclaimed %llu pages, more than the %llu ever recorded as "
+              "LOADER_RECLAIM",
+              (unsigned long long)reclaimed,
+              (unsigned long long)pmmMap.typePages[BOOT_MEM_LOADER_RECLAIM]);
+    }
 
     klogWrite(KLOG_INFO, "pmm", "reclaimed %llu KiB of LOADER_RECLAIM (kept BootInfo page 0x%llx)",
               (unsigned long long)reclaimed * 4, (unsigned long long)keepPagePhys);

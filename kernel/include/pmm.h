@@ -102,6 +102,15 @@ bool pmmPfnValid(uint64_t pfn);
 /* NULL if !pmmPfnValid(phys >> 12); otherwise pageFromPfn(phys >> 12). No locks; pure. */
 Page *pmmPhysToPage(uint64_t phys);
 
+/* True if [phys, phys+4096) lies inside one of the pmm's own recorded LOADER_RECLAIM ranges
+ * (`PmmMap.loaderReclaim[]`, set once during pmmInit(), immutable after). Used by M2.3's kernel
+ * page-table builder (kernel/arch/x86_64/paging.c) to confirm a table page it's about to adopt
+ * from the loader's own tables is genuinely bump-allocator memory, not a LOADER_RECLAIM page that
+ * merely happens to share PAGE_STATE_RESERVED with it (both are RESERVED until
+ * pmmReclaimLoaderMemory() runs, so the Page state alone can't tell them apart). No locks
+ * (span/map data is immutable after pmmInit); pure. */
+bool pmmPhysInLoaderReclaim(uint64_t phys);
+
 static inline uint64_t pmmPageToPhys(const Page *page) {
     return pageToPfn(page) << 12;
 }

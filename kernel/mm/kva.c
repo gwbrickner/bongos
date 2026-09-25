@@ -5,6 +5,8 @@
 #include <stddef.h>
 
 void kvaStateInit(KvaState *st, uint64_t base, uint64_t end) {
+    st->base = base;
+    st->end = end;
     st->extents[0] = (KvaExtent){.start = base, .end = end};
     st->count = 1;
 }
@@ -45,6 +47,9 @@ Status kvaFree(KvaState *st, uint64_t va, uint64_t size) {
     uint64_t start = va - KVA_GUARD_SIZE;
     uint64_t end = va + size + KVA_GUARD_SIZE;
     if (end < va) { /* overflow */
+        return STATUS_ERR_INVALID;
+    }
+    if (start < st->base || end > st->end) {
         return STATUS_ERR_INVALID;
     }
 

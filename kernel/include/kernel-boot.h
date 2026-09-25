@@ -9,11 +9,18 @@
 
 /* The kernel's own copy of the loader's BootInfo (kernel .data, `bootInfoCopy` -- M2.3, D-089:
  * before that, this returned the live loader-supplied pointer directly, which stopped being valid
- * once LOADER_RECLAIM is freed). `bi->memMapPhys` points at kernelBootMemMap()'s snapshot, not the
- * original loader array, so every field stays dereferenceable through the kernel's own HHDM
- * mapping for the life of the kernel, including after pmmReclaimLoaderMemory() runs. Only valid
- * from kernelMain's post-validation point on (i.e. from ktests, which run after it). No locks;
- * read-only. */
+ * once LOADER_RECLAIM is freed). The struct itself (every plain scalar field) stays valid for the
+ * life of the kernel. Two fields need care beyond that:
+ *   - `memMapPhys` points at kernelBootMemMap()'s pmm-backed snapshot, not the original loader
+ *     array, so it (via the HHDM) stays dereferenceable even after pmmReclaimLoaderMemory() runs.
+ *   - `cmdlinePhys` is deliberately zeroed once kernelCmdline()'s copy is made -- its original
+ *     target is LOADER_RECLAIM memory that does get freed, and nothing needs the physical address
+ *     once the copy exists.
+ * Every *other* phys-address field (`rsdpPhys`, `efiSystemTablePhys`, `initrdPhys`) still holds
+ * its original loader-reported value, but is only actually HHDM-reachable if its target's
+ * BootMemType is one M2.3's narrower kernel HHDM still maps (ARCHITECTURE §5.4/§6.1) -- a RESERVED
+ * region (where an RSDP, for instance, commonly lives) is not. Only valid from kernelMain's post-
+ * validation point on (i.e. from ktests, which run after it). No locks; read-only. */
 const BootInfo *kernelBootInfo(void);
 
 /* The kernel's own NUL-terminated copy of the command line. Same availability as

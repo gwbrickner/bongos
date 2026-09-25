@@ -98,3 +98,38 @@ TEST(kvaFirstFitPicksLowestAddress) {
     ASSERT_EQ(c, a);
     ASSERT_TRUE(b != a); /* sanity: b really did land somewhere else */
 }
+
+TEST(kvaFreeRejectsOutOfBounds) {
+    KvaState st;
+    kvaStateInit(&st, 0x10000, 0x20000);
+    /* A VA never handed out by this state (its own [base, end) is [0x10000, 0x20000)) must be
+     * rejected outright, not silently added to the free list as if it belonged here. */
+    ASSERT_TRUE(kvaFree(&st, 0x1000, 0x1000) == STATUS_ERR_INVALID);
+    ASSERT_TRUE(kvaFree(&st, 0x30000, 0x1000) == STATUS_ERR_INVALID);
+}
+
+TEST(kvaFreeFailsWhenExtentTableFull) {
+    KvaState st;
+    /* KVA_MAX_EXTENTS+1 single-page allocations, each immediately followed by a "spacer"
+     * allocation that stays allocated forever -- so freeing every non-spacer one produces
+     * KVA_MAX_EXTENTS isolated free extents (boxed in by still-allocated spacers on both sides,
+     * never coalescing), with no room left for one more. */
+    uint64_t pageStride = 0x1000 + 2 * KVA_GUARD_SIZE; /* what one kvaAlloc(0x1000, ...) consumes */
+    uint64_t totalAllocs = 2 * (uint64_t)KVA_MAX_EXTENTS + 1;
+    kvaStateInit(&st, 0, totalAllocs * pageStride);
+
+    uint64_t vas[KVA_MAX_EXTENTS + 1];
+    for (uint32_t i = 0; i < KVA_MAX_EXTENTS + 1; i++) {
+        ASSERT_TRUE(kvaAlloc(&st, 0x1000, &vas[i]) == STATUS_OK);
+        if (i < KVA_MAX_EXTENTS) {
+            uint64_t spacerVa;
+            ASSERT_TRUE(kvaAlloc(&st, 0x1000, &spacerVa) == STATUS_OK);
+        }
+    }
+    for (uint32_t i = 0; i < KVA_MAX_EXTENTS; i++) {
+        ASSERT_TRUE(kvaFree(&st, vas[i], 0x1000) == STATUS_OK);
+    }
+    /* This is D-088's recorded, accepted limit, not a crash: the caller (kernel/mm/vmm.c's
+     * vmmKvaFree) turns this into a panic rather than corrupting state. */
+    ASSERT_TRUE(kvaFree(&st, vas[KVA_MAX_EXTENTS], 0x1000) == STATUS_ERR_INVALID);
+}

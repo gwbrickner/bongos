@@ -18,13 +18,15 @@ typedef struct {
 } KvaExtent;
 
 typedef struct {
+    uint64_t base, end; /* the allocator's own fixed bounds, set once by kvaStateInit() */
     KvaExtent extents[KVA_MAX_EXTENTS]; /* sorted ascending by start; non-overlapping, non-
                                          * touching (touching neighbors are always merged) */
     uint32_t count;
 } KvaState;
 
-/* Resets `st` to one free extent covering [base, end). Requires base < end, both 4 KiB-aligned. No
- * locks; pure. */
+/* Resets `st` to one free extent covering [base, end), and records [base, end) as `st`'s
+ * permanent bounds (kvaFree() rejects anything outside them). Requires base < end, both 4 KiB-
+ * aligned. No locks; pure. */
 void kvaStateInit(KvaState *st, uint64_t base, uint64_t end);
 
 /* First-fit allocation of `size` (nonzero, 4 KiB-aligned) bytes plus a KVA_GUARD_SIZE guard page
@@ -37,8 +39,11 @@ Status kvaAlloc(KvaState *st, uint64_t size, uint64_t *outVa);
 /* Returns `[va - KVA_GUARD_SIZE, va + size + KVA_GUARD_SIZE)` to the free extents, coalescing with
  * any touching neighbor. `va`/`size` must be exactly what a prior kvaAlloc() call was given/
  * returned -- returns STATUS_ERR_INVALID if that range overlaps an already-free extent (a double
- * free) or falls outside [st's own bounds] entirely; the caller decides whether that's a panic.
- * No locks; pure. */
+ * free), falls outside `st`'s own `[base, end)` bounds, or the extent table is already full and
+ * this free can't coalesce into an existing entry (KVA_MAX_EXTENTS -- D-088's recorded, accepted
+ * limit: a caller doing many small, spatially scattered allocations could in principle exhaust
+ * the table before exhausting the address space itself; no current M2.3 caller does). The caller
+ * decides whether any of these is a panic. No locks; pure. */
 Status kvaFree(KvaState *st, uint64_t va, uint64_t size);
 
 #endif

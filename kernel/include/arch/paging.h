@@ -51,7 +51,10 @@ void archCpuEnableProtections(void);
  * any level has U/S set or a leaf is missing G; any leaf is both writable and executable
  * (effective W = AND of R/W down the path, effective X = NOT OR(NX) down the path); any
  * executable leaf lies outside [kernelTextStart, kernelTextEnd) or isn't 4 KiB; or the HHDM alias
- * of any kernel text/rodata frame is writable. Logs "vmm: W^X verified: ..." on success (the exact
+ * of any kernel *text* frame is writable (rodata's HHDM alias is kept read-only too, by the same
+ * shared carve-out range that keeps text's, but isn't separately re-checked here: rodata is NX,
+ * so unlike text's alias, W^X itself has no stake in whether rodata's alias is writable). Logs
+ * "vmm: W^X verified: ..." on success (the exact
  * line `mk/test.mk` greps for, ROADMAP M2.3's Done-when clause). No locks, boot-time-only; called
  * once from vmmInit() and again by a ktest. */
 void archPagingVerifyWx(void);

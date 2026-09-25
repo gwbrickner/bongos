@@ -80,3 +80,39 @@ KTEST(paging_fb_wc) {
     uint8_t patEntry = (uint8_t)(pat >> (8 * patIdx));
     KTEST_ASSERT_EQ(patEntry, 0x01); /* D-087: index 1 is WC */
 }
+
+/* ROADMAP M2.3's Done-when clause is "the boot log shows W^X verified" -- vmmInit() already ran
+ * archPagingVerifyWx() once at boot (that's the log line itself), but nothing had re-run the
+ * *check* against the live, post-boot page tables until now. Re-running it here from a ktest (as
+ * ARCHITECTURE §6.3/D-090 says it does) proves the verifier itself still passes against whatever
+ * state the rest of the ktest run has left the tables in, not just a fresh boot -- if it panics,
+ * the whole ktest run reports it exactly the way any other ktest panic does. */
+KTEST(paging_wx_verify) {
+    archPagingVerifyWx();
+    KTEST_ASSERT(true); /* reaching here at all is the assertion: a violation panics inside */
+}
+
+/* Direct enforcement check for D-090 point (g): the HHDM alias of kernel text is read-only, not
+ * just "the verifier's static walk says it should be". Writes through the alias VA rather than
+ * the image-address one paging_text_write_faults already covers, so a bug that only guards one of
+ * the two aliases (the actual failure mode a prior review round on this milestone found and this
+ * test exists to catch a regression of) would be caught here even if the other test still passed.
+ */
+static void pagingTextHhdmAliasWriteTrigger(void *arg) {
+    volatile uint8_t *p = (volatile uint8_t *)arg;
+    *p = *p;
+}
+
+KTEST(paging_text_hhdm_alias_readonly) {
+    const BootInfo *bi = kernelBootInfo();
+    uint64_t textPhys = bi->kernelPhysBase;
+    volatile uint8_t *aliasAddr =
+        (volatile uint8_t *)(uintptr_t)(bi->hhdmBase + textPhys + 0x10);
+    TrapCatchInfo info;
+    bool caught = archTrapCatch(TRAP_CATCH_VEC(14), pagingTextHhdmAliasWriteTrigger,
+                                (void *)(uintptr_t)aliasAddr, &info);
+    KTEST_ASSERT(caught);
+    KTEST_ASSERT_EQ(info.vector, 14);
+    KTEST_ASSERT_EQ(info.cr2, (uint64_t)(uintptr_t)aliasAddr);
+    KTEST_ASSERT_EQ(info.errorCode & 0x3, 0x3); /* P=1 (present), W=1 (write) */
+}

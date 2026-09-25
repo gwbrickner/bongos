@@ -102,6 +102,15 @@ void vmmKvaFree(uint64_t va, uint64_t size) {
     if (!vmmActive) {
         panic("vmmKvaFree: called before vmmInit()");
     }
+    /* kvaFree() itself also rejects anything outside [VM_KVA_BASE, VM_KVA_END) (its own `base`/
+     * `end`), but checking the caller's exact args here first, the same way vmmMapKernel/
+     * vmmUnmapKernel do, keeps the bounds check in one obvious place across every vmm entry
+     * point rather than relying on kva.c's internal state matching VM_KVA_BASE/END by
+     * construction. */
+    if (!vmmRangeInKva(va, size)) {
+        panicBug("vmm: kvaFree: range outside the KVA region va=0x%llx size=0x%llx",
+                (unsigned long long)va, (unsigned long long)size);
+    }
     uint64_t irqFlags = vmmLock();
     Status st = kvaFree(&kvaState, va, size);
     vmmUnlock(irqFlags);

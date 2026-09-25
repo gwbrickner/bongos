@@ -149,6 +149,13 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
         cmdlineCopy[i] = srcCmdline[i];
     }
     cmdlineCopy[i] = '\0';
+    /* bootInfoCopy.cmdlinePhys still points at the loader's own cmdline page, which
+     * pmmReclaimLoaderMemory() later zeroes and frees (M2.3, D-089) -- unlike memMapPhys, nothing
+     * repoints it at kernel-owned storage, since kernelCmdline() (above) is the one sanctioned
+     * accessor and nothing else needs the physical address. Zero it here rather than leave a
+     * pointer that looks dereferenceable (kernelBootInfo()'s contract promises the rest of the
+     * struct stays valid) but silently isn't once the reclaim runs. */
+    bootInfoCopy.cmdlinePhys = 0;
 
     if (!cmdlineHasToken(cmdlineCopy, "fbcon=off")) {
         Status fbSt = fbconInit(&bootInfoCopy.fb, bootInfoCopy.hhdmBase);
