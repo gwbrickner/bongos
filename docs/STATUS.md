@@ -8,10 +8,12 @@ _Main-line status. Parallel-lane sessions don't edit this file; they track progr
 Architect design received (D-072 through D-078). Steps 1 (GDT+TSS+IDT+trapDispatch,
 `trap_int3_resumes` ktest) and 2 (KSYM v1 symbol table -- a new `tools/ksyms` host tool, a
 two-pass kernel link, `ksymSymbolize()` wired into every backtrace frame, `ksym_lookup`/
-`backtrace_symbolized` ktests) are both built; step 1 confirmed working under real QEMU, step 2's
-`qemu-tester` verification (specifically checking both new ktests pass against the kernel's real
-embedded symbol table) is in flight. UBSan, stack-protector reseed, and the ktest fault-catch
-mechanism (`archTrapCatch`, D-078) are still to come.
+`backtrace_symbolized` ktests) are both built and confirmed working under real QEMU -- the new
+`backtrace_symbolized` ktest itself had two real bugs (a stack-reuse issue and a tail-call
+optimization collapsing its test call chain), found and fixed by hand with `objdump`/debug-log
+evidence; `make test` passes in full (`KTEST DONE passed=9 failed=0`, all GUI screenshots
+byte-for-byte). UBSan, stack-protector reseed, and the ktest fault-catch mechanism
+(`archTrapCatch`, D-078) are still to come.
 
 ## Phase
 1: Acapulco Gold
