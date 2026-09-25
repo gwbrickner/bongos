@@ -14,6 +14,8 @@
 /* Page-table entry bits, SDM Vol 3A §4.5 (4-level paging). */
 #define PT_P         (1ULL << 0)
 #define PT_W         (1ULL << 1)
+#define PT_PWT       (1ULL << 3) /* page-level write-through */
+#define PT_PCD       (1ULL << 4) /* page-level cache disable */
 #define PT_PS        (1ULL << 7)
 #define PT_G         (1ULL << 8)
 #define PT_NX        (1ULL << 63)
@@ -34,6 +36,11 @@
 #define PT_FLAGS_KERNEL_RO  (PT_P | PT_G | PT_NX)
 #define PT_FLAGS_KERNEL_RW  (PT_P | PT_W | PT_G | PT_NX)
 #define PT_FLAGS_TRAMPOLINE (PT_P) /* R-X, identity, deliberately not global (§5.4) */
+/* The framebuffer mapping (D-068): 4 KiB pages only (never sharing a large page with real RAM),
+ * PCD=1/PWT=0 selects PAT index 2 on a 4K leaf (bit 7 there is PS, not PAT -- so this is UC- under
+ * the firmware's power-on IA32_PAT, MSR 0x277; M2.3 reprograms the PAT and remaps this WC). NX,
+ * global, RW. */
+#define PT_FLAGS_FRAMEBUFFER (PT_P | PT_W | PT_PCD | PT_NX | PT_G)
 
 typedef struct {
     uint64_t poolPhys;

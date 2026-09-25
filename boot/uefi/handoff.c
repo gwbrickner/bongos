@@ -1,6 +1,8 @@
-/* See handoff.h. Implements ARCHITECTURE §5.5 steps 2-10 (D-059/D-060/D-066): CPU checks, reading
- * boot.cfg/kernel.elf, the page-table build (boot/common/paging.c), the BootInfo build, the
- * ExitBootServices retry loop, and the final jump through boot/uefi/trampoline.asm.
+/* See handoff.h. Implements ARCHITECTURE §5.5 steps 2-11 (D-059/D-060/D-066/D-068): CPU checks,
+ * reading boot.cfg, GOP mode selection and the boot menu (boot/uefi/gop.c, menu.c), reading
+ * kernel.elf, the page-table build including the framebuffer HHDM mapping (boot/common/paging.c),
+ * the BootInfo build, the ExitBootServices retry loop, and the final jump through
+ * boot/uefi/trampoline.asm.
  *
  * Simplifications versus the full M1.3 design (noted in the M1.3 milestone log, not blocking the
  * Done-when check): the page-table pool and the BootInfo memory-map array are fixed, generously
@@ -13,12 +15,15 @@
 
 #include "branding.h"
 #include "file.h"
+#include "gop.h"
 #include "include/efi/guids.h"
+#include "menu.h"
 #include "serial.h"
 
 #include "bootcfg.h"
 #include "bootmem.h"
 #include "elf64.h"
+#include "fbtext.h"
 #include "memmap.h"
 #include "paging.h"
 
@@ -67,6 +72,63 @@ static void handoffRecordAlloc(LoaderAlloc *allocs, uint32_t *count, uint64_t ba
     allocs[*count].pages = pages;
     allocs[*count].type = type;
     (*count)++;
+}
+
+/* Maps `fb`'s pixel range into the HHDM at `hhdmBase + fb->phys`, D-068: 4 KiB pages only (never
+ * sharing a large page with real RAM), PT_FLAGS_FRAMEBUFFER (PCD=1/PWT=0 -> PAT index 2 -> UC-
+ * under the firmware's power-on PAT; NX; global). This is the one exception to D-059's "MMIO is
+ * never HHDM-mapped" rule. Checks the range doesn't run past the HHDM window and doesn't already
+ * overlap a mapping from the earlier RAM/HHDM pass (spot-checking the first and last page, same
+ * style as the self-check below, rather than walking every page -- a genuine RAM overlap shows up
+ * on every page in that run, so the endpoints already catch it); on either problem, or on a
+ * mapping failure, zeroes `*fb` (the "not provided" convention, D-064) and leaves it out of the
+ * memory map instead of failing the whole boot -- a missing framebuffer is recoverable, but a
+ * corrupt one silently overlapping RAM would not be. Adds a BOOT_MEM_FRAMEBUFFER overlay on
+ * success. */
+static void handoffMapFramebuffer(PtBuilder *pt, LoaderAlloc *allocs, uint32_t *allocCount,
+                                  BootFramebuffer *fb) {
+    if (fb->phys == 0) {
+        return;
+    }
+    uint64_t fbBase = bootAlignDown(fb->phys, HANDOFF_PAGE_SIZE);
+    uint64_t fbEndUnaligned = fb->phys + (uint64_t)fb->pitch * (uint64_t)fb->height;
+    uint64_t fbEnd = bootAlignUp(fbEndUnaligned, HANDOFF_PAGE_SIZE);
+    if (fbEnd < fbEndUnaligned /* overflow */ || fbEnd <= fbBase) {
+        loaderSerialWriteString("loader: framebuffer unusable for handoff: invalid geometry\n");
+        bootMemset(fb, 0, sizeof(*fb));
+        return;
+    }
+    uint64_t fbSize = fbEnd - fbBase;
+    if (fbBase >= BOOTINFO_HHDM_SIZE || fbSize > BOOTINFO_HHDM_SIZE - fbBase) {
+        loaderSerialWriteString(
+            "loader: framebuffer unusable for handoff: beyond the HHDM window\n");
+        bootMemset(fb, 0, sizeof(*fb));
+        return;
+    }
+
+    uint64_t checkPa, checkFlags;
+    bool alreadyMapped =
+        ptLookup(pt, BOOTINFO_HHDM_BASE + fbBase, &checkPa, &checkFlags) == BOOT_OK ||
+        ptLookup(pt, BOOTINFO_HHDM_BASE + fbEnd - HANDOFF_PAGE_SIZE, &checkPa, &checkFlags) ==
+            BOOT_OK;
+    if (alreadyMapped) {
+        loaderSerialWriteString(
+            "loader: framebuffer unusable for handoff: overlaps an existing mapping\n");
+        bootMemset(fb, 0, sizeof(*fb));
+        return;
+    }
+
+    BootStatus bst =
+        ptMapRange(pt, BOOTINFO_HHDM_BASE + fbBase, fbBase, fbSize, PT_FLAGS_FRAMEBUFFER, false);
+    if (bst != BOOT_OK) {
+        loaderSerialWriteString("loader: framebuffer mapping failed: ");
+        loaderSerialWriteString(bootStatusString(bst));
+        loaderSerialWriteString("\n");
+        bootMemset(fb, 0, sizeof(*fb));
+        return;
+    }
+    handoffRecordAlloc(allocs, allocCount, fbBase, fbSize / HANDOFF_PAGE_SIZE,
+                       BOOT_MEM_FRAMEBUFFER);
 }
 
 /* CPUID 0x80000001 EDX bit 20 (NX, required) and bit 26 (PDPE1GB, gates 1 GiB HHDM pages). */
@@ -291,36 +353,102 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     }
 
     /* D-067's two-phase API: bootCfgParse() builds spans + the parsed [entry] sections, then
-     * bootCfgResolveEntry() copies one entry's effective (inherited) values out. This still picks
-     * cfg.defaultIndex unconditionally rather than showing the menu -- the menu itself (ConIn,
-     * the countdown, arrow-key/digit selection) is a later step in this same milestone; until
-     * then every boot behaves like the countdown fired immediately. */
-    BootCfg cfg;
-    BootCfgEntry entry;
+     * bootCfgResolveEntry() copies one entry's effective (inherited) values out. A missing
+     * boot.cfg is treated as an empty one (bootCfgParse("", 0, ...) synthesizes the same
+     * single-implicit-entry, all-defaults BootCfg a hand-rolled "file not found" path would have
+     * built, so there's only one code path from here on regardless of which happened). */
     uint8_t *cfgBuf = NULL;
     uint64_t cfgSize = 0;
+    static const char emptyCfgText[] = "";
+    const char *cfgText = emptyCfgText;
+    uint64_t cfgTextLen = 0;
     status = loaderReadFile(st, root, (CHAR16 *)L"\\bong\\boot.cfg", &cfgBuf, &cfgSize);
     if (!EFI_ERROR(status)) {
-        BootStatus bst = bootCfgParse((const char *)cfgBuf, cfgSize, &cfg);
-        if (bst != BOOT_OK) {
-            loaderSerialWriteString("loader: boot.cfg: ");
-            loaderSerialWriteString(cfg.errorReason != NULL ? cfg.errorReason
-                                                            : bootStatusString(bst));
-            loaderSerialWriteString("\n");
-            bs->FreePool(cfgBuf);
-            return EFI_INVALID_PARAMETER;
-        }
-        bst = bootCfgResolveEntry((const char *)cfgBuf, cfgSize, &cfg, cfg.defaultIndex, &entry);
-        bs->FreePool(cfgBuf);
-        if (bst != BOOT_OK) {
-            loaderSerialWriteString("loader: boot.cfg: failed to resolve the default entry\n");
-            return EFI_INVALID_PARAMETER;
-        }
+        cfgText = (const char *)cfgBuf;
+        cfgTextLen = cfgSize;
     } else {
         loaderSerialWriteString("loader: boot.cfg not found; using defaults\n");
-        bootMemset(&entry, 0, sizeof(entry));
-        static const char defaultKernel[] = "/bong/kernel.elf";
-        bootMemcpy(entry.kernel, defaultKernel, sizeof(defaultKernel));
+    }
+
+    BootCfg cfg;
+    BootStatus bst = bootCfgParse(cfgText, cfgTextLen, &cfg);
+    if (bst != BOOT_OK) {
+        loaderSerialWriteString("loader: boot.cfg:");
+        loaderSerialWriteUint(cfg.errorLine);
+        loaderSerialWriteString(": ");
+        loaderSerialWriteString(cfg.errorReason != NULL ? cfg.errorReason : bootStatusString(bst));
+        loaderSerialWriteString("\n");
+        if (cfgBuf != NULL) {
+            bs->FreePool(cfgBuf);
+        }
+        return EFI_INVALID_PARAMETER;
+    }
+
+    /* ARCHITECTURE §5.5 steps 2-4 (D-068): pick the GOP mode using the global resolution before
+     * showing anything (the menu needs a framebuffer), show the menu if timeout > 0, then pick
+     * the mode again only if the selected entry's resolution differs from the global one. After
+     * the first SetMode, ConOut is never touched again (GraphicsConsole doesn't know the mode
+     * changed and would blit at stale geometry) -- EnableCursor(FALSE) is the very last ConOut
+     * call in this function. */
+    LoaderGop gop;
+    loaderGopFind(st, &gop);
+    if (gop.gop != NULL) {
+        st->ConOut->EnableCursor(st->ConOut, FALSE);
+    }
+    uint32_t globalResWidth =
+        (cfg.global.setMask & BOOT_CFG_HAS_RESOLUTION) ? cfg.global.resWidth : 0;
+    uint32_t globalResHeight =
+        (cfg.global.setMask & BOOT_CFG_HAS_RESOLUTION) ? cfg.global.resHeight : 0;
+    BootFramebuffer fb;
+    status = loaderGopSetMode(st, &gop, globalResWidth, globalResHeight, &fb);
+    if (EFI_ERROR(status)) {
+        loaderSerialWriteString("loader: GOP mode selection failed; continuing without a "
+                                "framebuffer\n");
+        bootMemset(&fb, 0, sizeof(fb));
+    }
+
+    uint32_t selectedIndex = cfg.defaultIndex;
+    if (cfg.timeoutSec > 0 && fb.phys != 0) {
+        BootFbText fx;
+        /* Pre-ExitBootServices, every physical address the firmware hands out (including a GOP
+         * framebuffer BAR) is still directly usable as a pointer -- the same trick
+         * bootPhysToPtr() documents for BootInfo/the kernel image. This is not the kernel's HHDM
+         * mapping (built later, after the menu, once the final framebuffer is known). */
+        BootStatus fxSt = fbTextInit(&fx, (uint8_t *)bootPhysToPtr(fb.phys), fb.width, fb.height,
+                                     fb.pitch, fb.redShift, fb.redSize, fb.greenShift, fb.greenSize,
+                                     fb.blueShift, fb.blueSize);
+        if (fxSt == BOOT_OK) {
+            selectedIndex = loaderMenuRun(st, cfgText, cfgTextLen, &cfg, &fx);
+        } else {
+            loaderSerialWriteString("loader: framebuffer geometry unusable for the menu; booting "
+                                    "the default entry\n");
+        }
+    } else if (cfg.timeoutSec > 0) {
+        loaderSerialWriteString("loader: no framebuffer available; booting the default entry "
+                                "without a menu\n");
+    }
+
+    BootCfgEntry entry;
+    bst = bootCfgResolveEntry(cfgText, cfgTextLen, &cfg, selectedIndex, &entry);
+    if (bst != BOOT_OK) {
+        loaderSerialWriteString("loader: boot.cfg: failed to resolve the selected entry\n");
+        if (cfgBuf != NULL) {
+            bs->FreePool(cfgBuf);
+        }
+        return EFI_INVALID_PARAMETER;
+    }
+
+    if (entry.resWidth != globalResWidth || entry.resHeight != globalResHeight) {
+        status = loaderGopSetMode(st, &gop, entry.resWidth, entry.resHeight, &fb);
+        if (EFI_ERROR(status)) {
+            loaderSerialWriteString("loader: GOP mode re-selection for the chosen entry failed; "
+                                    "continuing without a framebuffer\n");
+            bootMemset(&fb, 0, sizeof(fb));
+        }
+    }
+
+    if (cfgBuf != NULL) {
+        bs->FreePool(cfgBuf);
     }
 
     CHAR16 kernelPathW[BOOT_CFG_PATH_MAX];
@@ -335,7 +463,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     }
 
     ElfImage elfImage;
-    BootStatus bst = elfParse(kernelBuf, kernelSize, &elfImage);
+    bst = elfParse(kernelBuf, kernelSize, &elfImage);
     if (bst != BOOT_OK) {
         loaderSerialWriteString("loader: kernel.elf: ");
         loaderSerialWriteString(bootStatusString(bst));
@@ -480,6 +608,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         loaderSerialWriteString("loader: trampoline mapping failed\n");
         return EFI_OUT_OF_RESOURCES;
     }
+    handoffMapFramebuffer(&pt, allocs, &allocCount, &fb); /* D-068; zeroes fb on failure */
 
     /* Self-check (ARCHITECTURE §5.5 step 10): every mapping the trampoline and the kernel's first
      * instructions depend on actually resolves the way it should. */
@@ -502,6 +631,11 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
                        ptLookup(&pt, memMapVa, &checkPa, &checkFlags) == BOOT_OK &&
                        ptLookup(&pt, trampPhys, &checkPa, &checkFlags) == BOOT_OK &&
                        (checkFlags & PT_NX) == 0;
+    if (selfCheckOk && fb.phys != 0) {
+        uint64_t fbVa = BOOTINFO_HHDM_BASE + fb.phys;
+        selfCheckOk = ptLookup(&pt, fbVa, &checkPa, &checkFlags) == BOOT_OK &&
+                      (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0;
+    }
     if (!selfCheckOk) {
         loaderSerialWriteString("loader: page-table self-check failed\n");
         return EFI_DEVICE_ERROR;
@@ -513,6 +647,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     bi->version = BOOTINFO_VERSION;
     bi->size = sizeof(BootInfo);
     bi->bootMethod = BOOT_METHOD_UEFI;
+    bi->fb = fb;
     bi->memMapPhys = memMapArrayPhys;
     bi->rsdpPhys = rsdpPhys;
     bi->kernelPhysBase = (uint64_t)kernelPhys;
@@ -549,8 +684,10 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         loaderSerialWriteString("loader: cmdline truncated to fit BOOTINFO_CMDLINE_MAX\n");
     }
 
+    /* No ConOut call here (D-068): GraphicsConsole doesn't know about a mode change from a direct
+     * SetMode, and would blit this at stale geometry over the menu/framebuffer. EnableCursor
+     * above (before the first SetMode) is the last ConOut call this loader ever makes. */
     loaderSerialWriteString("loader: exiting boot services\n");
-    st->ConOut->OutputString(st->ConOut, (CHAR16 *)L"loader: exiting boot services\r\n");
 
     UINTN finalMapCap = (nPreDesc + 64) * preDescSize;
     VOID *finalMapBuf = NULL;

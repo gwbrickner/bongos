@@ -73,6 +73,7 @@ typedef struct {
 #define EFI_NOT_FOUND          (EFI_ERROR_BIT | 14)
 #define EFI_ACCESS_DENIED      (EFI_ERROR_BIT | 15)
 #define EFI_TIMEOUT            (EFI_ERROR_BIT | 18)
+#define EFI_NOT_STARTED        (EFI_ERROR_BIT | 23)
 #define EFI_ABORTED            (EFI_ERROR_BIT | 21)
 #define EFI_SECURITY_VIOLATION (EFI_ERROR_BIT | 26)
 
