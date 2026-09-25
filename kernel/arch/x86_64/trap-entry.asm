@@ -76,6 +76,54 @@ trapCommon:
     iretq
 .end:
 
+; archTrapCatch's setjmp/longjmp-style register save/resume (ARCHITECTURE §23, D-078). TrapCatchCtx
+; (kernel/arch/x86_64/trap.c) is 7 qwords in exactly this order -- rsp, rbx, rbp, r12, r13, r14,
+; r15 -- at offsets 0/8/16/24/32/40/48; this file and that struct must stay in sync by hand.
+;
+; uint32_t archTrapCatchCall(TrapCatchCtx *ctx, void (*fn)(void *), void *arg);
+; rdi=ctx, rsi=fn, rdx=arg (SysV AMD64 ABI). Saves every callee-saved register `fn` (or anything it
+; calls) might clobber, then calls `fn(arg)`. Returns 0 if `fn` returned normally. If a fault or a
+; software trip (archTrapCatchSoftware) redirects execution to archTrapCatchResume below instead,
+; *that* call "returns" here a second time with eax=1 -- ctx->rsp was saved *before* the local
+; `push rbp` here, so restoring it unwinds straight back past this function's own prologue to
+; exactly this point, without ever executing this function's own epilogue for real.
+global archTrapCatchCall:function
+archTrapCatchCall:
+    mov  [rdi], rsp
+    mov  [rdi+8], rbx
+    mov  [rdi+16], rbp
+    mov  [rdi+24], r12
+    mov  [rdi+32], r13
+    mov  [rdi+40], r14
+    mov  [rdi+48], r15
+    push rbp
+    mov  rbp, rsp                     ; RSP stays 16-aligned; the backtrace chain stays walkable
+    mov  rdi, rdx                     ; fn's one argument
+    call rsi
+    pop  rbp
+    xor  eax, eax
+    ret
+
+; void archTrapCatchResume(TrapCatchCtx *ctx); -- rdi=ctx. Restores every register archTrapCatchCall
+; saved, including RSP, then `ret`s -- which pops whatever archTrapCatchCall's *own* return address
+; was (saved as part of ctx->rsp's snapshot), transferring control back to archTrapCatchCall's
+; caller as if archTrapCatchCall had just returned normally, except with eax=1. Never returns to
+; its own caller in the ordinary sense (its C declaration is `_Noreturn` for exactly this reason):
+; called either from trapDispatch() after redirecting a TrapFrame's RIP/RSP/RDI here (so the CPU's
+; own `iretq` is what actually transfers control into this function), or directly from
+; archTrapCatchSoftware() for a software-raised catch.
+global archTrapCatchResume:function
+archTrapCatchResume:
+    mov  rsp, [rdi]
+    mov  rbx, [rdi+8]
+    mov  rbp, [rdi+16]
+    mov  r12, [rdi+24]
+    mov  r13, [rdi+32]
+    mov  r14, [rdi+40]
+    mov  r15, [rdi+48]
+    mov  eax, 1
+    ret
+
 ; One pointer per vector, in vector order, for the C-side IDT builder (kernel/arch/x86_64/trap.c)
 ; to read gate offsets from without 256 `extern` declarations. R_X86_64_64 relocations, so this
 ; stays correct under KASLR once the kernel is relocatable (M2.6).

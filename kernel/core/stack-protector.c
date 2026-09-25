@@ -6,6 +6,7 @@
 #include "panic.h"
 
 #include <arch/cpu.h>
+#include <arch/trap.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -67,7 +68,11 @@ __attribute__((noinline, no_stack_protector)) void stackGuardInit(const BootInfo
     __stack_chk_guard = guard;
 }
 
-/* No locks; never returns (panics). May be called from any protected function's epilogue. */
+/* No locks; never returns. May be called from any protected function's epilogue. Offers the trip
+ * to a ktest-armed archTrapCatch(TRAP_CATCH_STACK_SMASH, ...) first (D-078) -- if one is armed and
+ * claims it, archTrapCatchSoftware() redirects execution back to that ktest's call site and never
+ * returns here; otherwise it returns false and this panics as usual. */
 __attribute__((noreturn)) void __stack_chk_fail(void) {
+    archTrapCatchSoftware(TRAP_CATCH_STACK_SMASH, (uint64_t)(uintptr_t)__builtin_return_address(0));
     panic("stack protector: smashed");
 }

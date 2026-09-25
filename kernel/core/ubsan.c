@@ -17,6 +17,7 @@
 #include "klog.h"
 #include "panic.h"
 
+#include <arch/trap.h>
 #include <stdint.h>
 
 typedef struct {
@@ -47,6 +48,12 @@ static _Noreturn void report(const char *check, const SourceLocation *loc, const
         panic("UBSAN: recursive trip (%s)", check);
     }
     ubsanReporting = 1;
+
+    /* Offers the trip to a ktest-armed archTrapCatch(TRAP_CATCH_UBSAN, ...) before printing
+     * anything (D-078): if one is armed and claims it, archTrapCatchSoftware() redirects execution
+     * back to that ktest's call site and never returns here. A caught trip is deliberately silent
+     * on serial (the ktest itself reports pass/fail); only an uncaught one panics loudly below. */
+    archTrapCatchSoftware(TRAP_CATCH_UBSAN, (uint64_t)(uintptr_t)__builtin_return_address(0));
 
     char msg[220];
     const char *file = (loc != NULL && loc->filename != NULL) ? loc->filename : "?";

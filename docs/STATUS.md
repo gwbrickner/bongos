@@ -10,8 +10,12 @@ symbol table -- `tools/ksyms`, a two-pass kernel link, `ksymSymbolize()` wired i
 backtrace frame), 3 (UBSan runtime, all 16 `__ubsan_handle_*` entry points), and 4
 (stack-protector reseed from `BootInfo.randomSeed`, `kernelMain`/`stackGuardInit` both
 `no_stack_protector`) are all built and confirmed working under real QEMU with no regressions
-(`make test`: `KTEST DONE passed=10 failed=0`, all GUI screenshots byte-for-byte). Only
-`archTrapCatch` (D-078) and the ktests it unlocks (`trap_pf_read_cr2`, `trap_pf_write_error_code`,
+(`make test`: `KTEST DONE passed=10 failed=0`, all GUI screenshots byte-for-byte). Step 5's
+`archTrapCatch` mechanism (D-078: `archTrapCatchCall`/`archTrapCatchResume` in `trap-entry.asm`,
+`archTrapCatch`/`archTrapCatchSoftware`/`archTrapCatchTryResume` in `trap.c`, wired into
+`__stack_chk_fail`/UBSan's `report()`) is written, `objdump`-verified against the C struct
+offsets, and confirmed to not regress the existing 10 ktests -- but nothing calls it yet. The
+ktests that actually exercise it (`trap_pf_read_cr2`, `trap_pf_write_error_code`,
 `stack_guards_unmapped`, `trap_ud_caught`, `stack_protector_detects_smash`,
 `ubsan_catches_signed_overflow`) remain before the milestone moves to the `reviewer` pass.
 
@@ -69,12 +73,21 @@ backtrace frame), 3 (UBSan runtime, all 16 `__ubsan_handle_*` entry points), and
   `docs/logs/M1.4.md`'s reviewer-round entries. PR #4 merged.
 
 ## Next step
-Once the pending `qemu-tester` boot check on the GDT/TSS change confirms no regression, continue
-M2.1 step 1's IDT half: `kernel/arch/x86_64/trap-entry.asm` (256-vector stub table + common
-trampoline), `trap-frame.h`, `trap.c` (`trapDispatch`, IDT gate builder), extending
-`archCpuInitBsp()` to build+load the real IDT (D-074). Then: KSYM v1 symbol table + `tools/ksyms`
-(D-075), UBSan runtime (D-076), stack-protector reseed (D-077), and `archTrapCatch` + the
-prescribed ktests (D-078). Full design is in `docs/logs/M2.1.md` and DECISIONS.md D-072-D-078.
+Write the ktests that exercise the now-built `archTrapCatch` mechanism (D-078) end to end, in
+`kernel/arch/x86_64/test/trap_test.c` and/or new test files alongside it: `trap_pf_read_cr2`
+(deliberate #PF via a guard-page read inside `archTrapCatch(TRAP_CATCH_VEC(14), ...)`, assert
+vector==14 and cr2==the faulting address), `trap_pf_write_error_code` (same but a write, assert
+the W bit in the error code), `stack_guards_unmapped` (repeat the guard-page read at the bottom
+of IST1/2/3), `trap_ud_caught` (deliberate `ud2`, assert vector==6 and the captured RIP
+symbolizes via `ksymSymbolize`), `stack_protector_detects_smash` (an intentionally-overflowing
+local buffer via `memset`, caught via `TRAP_CATCH_STACK_SMASH`), `ubsan_catches_signed_overflow`
+(`volatile int a = INT_MAX; a + 1;` under `KERNEL_UBSAN`, caught via `TRAP_CATCH_UBSAN`). Verify
+each via a direct bounded `tests/harness/run-qemu.sh --fw uefi --cpus 1 --image build/bongos-
+ktest.img --timeout 90` run. Then: full `make test`/`make host-tests`, the `reviewer` subagent
+pass on the whole M2.1 diff, fix Critical findings (re-review), fix or explain Should-fix items,
+write the milestone Summary in `docs/logs/M2.1.md`, check ROADMAP.md's M2.1 box, update this file
+for M2.2, and open the PR (`needs-owner: yes` per D-045/§25 -- interrupts). Full design is in
+`docs/logs/M2.1.md` and DECISIONS.md D-072-D-078.
 
 ## Blockers
 _(none)_
