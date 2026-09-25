@@ -91,7 +91,7 @@ static bool gopAcceptMode(const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info) {
     }
 }
 
-/* SDM/UEFI spec quirk some firmware exhibits: QueryMode on a GOP instance that's never had
+/* UEFI firmware quirk some implementations exhibit: QueryMode on a GOP instance that's never had
  * SetMode called on it yet returns EFI_NOT_STARTED. One SetMode(0) primes it. */
 static EFI_STATUS gopQueryMode(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, UINT32 mode, UINTN *sizeOfInfo,
                                EFI_GRAPHICS_OUTPUT_MODE_INFORMATION **info) {

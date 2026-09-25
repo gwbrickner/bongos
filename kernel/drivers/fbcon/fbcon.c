@@ -153,15 +153,14 @@ void fbconWrite(const char *s, size_t n) {
             if (next > fx.cols) {
                 next = fx.cols;
             }
-            /* putGlyph() itself wraps to the next row once cursorCol reaches fx.cols (resetting
-             * it to 0), which would otherwise make `cursorCol < next` true again and emit extra
-             * spaces on the new row -- stop as soon as that happens instead. */
-            while (cursorCol < next) {
-                uint32_t before = cursorCol;
+            /* Compute the space count up front rather than looping on `cursorCol < next`: once
+             * putGlyph() wraps (cursorCol reaches fx.cols and resets to 0), that condition can
+             * never distinguish "just wrapped" from "never started" when cursorCol was already 0
+             * (e.g. fx.cols == 1, wrapping every call) -- an infinite loop. `next <= fx.cols`
+             * guarantees at most the final iteration here can wrap, so a fixed count is safe. */
+            uint32_t count = next - cursorCol;
+            for (uint32_t j = 0; j < count; j++) {
                 putGlyph(' ');
-                if (cursorCol < before) {
-                    break;
-                }
             }
         } else {
             putGlyph(c);

@@ -74,20 +74,43 @@ static void handoffRecordAlloc(LoaderAlloc *allocs, uint32_t *count, uint64_t ba
     (*count)++;
 }
 
+/* IA32_PAT (MSR 0xC0000277 -- no, 0x277; see below), entry 2 (index (PAT<<2)|(PCD<<1)|PWT with
+ * PAT bit 7 clear, PCD=1, PWT=0, exactly what PT_FLAGS_FRAMEBUFFER's 4K leaves select): the
+ * D-068 framebuffer mapping is only actually UC-/UC if the firmware left this at its documented
+ * power-on value (SDM Vol 3A "PAT Compatibility with Earlier IA-32 Processors": entry 2 = 0x07,
+ * UC-). Reading it back rather than assuming it, since a UB firmware that reprogrammed entry 2 to
+ * something cacheable (e.g. WB) would make this mapping lie about being safe to treat as MMIO. */
+#define IA32_PAT_MSR 0x277u
+static bool handoffPatEntry2IsUncacheable(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(IA32_PAT_MSR));
+    uint64_t pat = ((uint64_t)hi << 32) | lo;
+    uint8_t entry2 = (uint8_t)((pat >> 16) & 0xFFu);
+    return entry2 == 0x07u /* UC- */ || entry2 == 0x00u /* UC */;
+}
+
 /* Maps `fb`'s pixel range into the HHDM at `hhdmBase + fb->phys`, D-068: 4 KiB pages only (never
  * sharing a large page with real RAM), PT_FLAGS_FRAMEBUFFER (PCD=1/PWT=0 -> PAT index 2 -> UC-
- * under the firmware's power-on PAT; NX; global). This is the one exception to D-059's "MMIO is
- * never HHDM-mapped" rule. Checks the range doesn't run past the HHDM window and doesn't already
- * overlap a mapping from the earlier RAM/HHDM pass (spot-checking the first and last page, same
- * style as the self-check below, rather than walking every page -- a genuine RAM overlap shows up
- * on every page in that run, so the endpoints already catch it); on either problem, or on a
- * mapping failure, zeroes `*fb` (the "not provided" convention, D-064) and leaves it out of the
- * memory map instead of failing the whole boot -- a missing framebuffer is recoverable, but a
- * corrupt one silently overlapping RAM would not be. Adds a BOOT_MEM_FRAMEBUFFER overlay on
+ * under the firmware's power-on PAT, verified above rather than assumed; NX; global). This is the
+ * one exception to D-059's "MMIO is never HHDM-mapped" rule. Checks the range doesn't run past
+ * the HHDM window and doesn't already overlap a mapping from the earlier RAM/HHDM pass --
+ * checking every page the range covers, not just the endpoints, since RAM could sit anywhere
+ * inside the range, not only touching its boundary. On any problem, or on a mapping failure
+ * (which `ptMapRange` never partially undoes, so a failure partway through could otherwise leave
+ * some pages mapped with no BOOT_MEM_FRAMEBUFFER overlay -- checked-and-refused up front instead
+ * of relying on a rollback), zeroes `*fb` (the "not provided" convention, D-064) and leaves it out
+ * of the memory map instead of failing the whole boot -- a missing framebuffer is recoverable, but
+ * a corrupt one silently overlapping RAM would not be. Adds a BOOT_MEM_FRAMEBUFFER overlay on
  * success. */
 static void handoffMapFramebuffer(PtBuilder *pt, LoaderAlloc *allocs, uint32_t *allocCount,
                                   BootFramebuffer *fb) {
     if (fb->phys == 0) {
+        return;
+    }
+    if (!handoffPatEntry2IsUncacheable()) {
+        loaderSerialWriteString(
+            "loader: framebuffer unusable for handoff: firmware's IA32_PAT entry 2 isn't UC/UC-\n");
+        bootMemset(fb, 0, sizeof(*fb));
         return;
     }
     uint64_t fbBase = bootAlignDown(fb->phys, HANDOFF_PAGE_SIZE);
@@ -107,10 +130,14 @@ static void handoffMapFramebuffer(PtBuilder *pt, LoaderAlloc *allocs, uint32_t *
     }
 
     uint64_t checkPa, checkFlags;
-    bool alreadyMapped =
-        ptLookup(pt, BOOTINFO_HHDM_BASE + fbBase, &checkPa, &checkFlags) == BOOT_OK ||
-        ptLookup(pt, BOOTINFO_HHDM_BASE + fbEnd - HANDOFF_PAGE_SIZE, &checkPa, &checkFlags) ==
-            BOOT_OK;
+    bool alreadyMapped = false;
+    for (uint64_t va = BOOTINFO_HHDM_BASE + fbBase; va < BOOTINFO_HHDM_BASE + fbEnd;
+        va += HANDOFF_PAGE_SIZE) {
+        if (ptLookup(pt, va, &checkPa, &checkFlags) == BOOT_OK) {
+            alreadyMapped = true;
+            break;
+        }
+    }
     if (alreadyMapped) {
         loaderSerialWriteString(
             "loader: framebuffer unusable for handoff: overlaps an existing mapping\n");
@@ -121,6 +148,14 @@ static void handoffMapFramebuffer(PtBuilder *pt, LoaderAlloc *allocs, uint32_t *
     BootStatus bst =
         ptMapRange(pt, BOOTINFO_HHDM_BASE + fbBase, fbBase, fbSize, PT_FLAGS_FRAMEBUFFER, false);
     if (bst != BOOT_OK) {
+        /* ptMapRange() never partially undoes a failed range -- but every page in [fbBase, fbEnd)
+         * was just confirmed unmapped above, and a failure here can only be BOOT_ERR_NO_MEMORY
+         * (the page-table pool exhausted) since BOOT_ERR_PT_CONFLICT is now ruled out by the scan
+         * and BOOT_ERR_PT_UNALIGNED can't happen (fbBase/fbEnd are already page-aligned). Either
+         * way there is nothing to roll back: ptMapRange() only ever writes a fresh leaf into an
+         * already-confirmed-empty slot, never overwrites, so a pool exhaustion partway through
+         * leaves some pages mapped and the rest not -- exactly why `fb` is zeroed and no overlay
+         * is recorded rather than trusting a partial mapping. */
         loaderSerialWriteString("loader: framebuffer mapping failed: ");
         loaderSerialWriteString(bootStatusString(bst));
         loaderSerialWriteString("\n");
@@ -632,9 +667,20 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
                        ptLookup(&pt, trampPhys, &checkPa, &checkFlags) == BOOT_OK &&
                        (checkFlags & PT_NX) == 0;
     if (selfCheckOk && fb.phys != 0) {
-        uint64_t fbVa = BOOTINFO_HHDM_BASE + fb.phys;
-        selfCheckOk = ptLookup(&pt, fbVa, &checkPa, &checkFlags) == BOOT_OK &&
-                      (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0;
+        /* Check both ends of the mapped range, not just the first page: a partial-mapping bug
+         * could leave the tail pages missing PT_W/PT_PCD/PT_NX (or absent) while the head looks
+         * fine. checkPa == fbBase confirms the VA->PA translation itself, not just its flags. */
+        uint64_t fbBase = bootAlignDown(fb.phys, HANDOFF_PAGE_SIZE);
+        uint64_t fbEndUnaligned = fb.phys + (uint64_t)fb.pitch * (uint64_t)fb.height;
+        uint64_t fbEnd = bootAlignUp(fbEndUnaligned, HANDOFF_PAGE_SIZE);
+        uint64_t fbFirstVa = BOOTINFO_HHDM_BASE + fbBase;
+        uint64_t fbLastVa = BOOTINFO_HHDM_BASE + fbEnd - HANDOFF_PAGE_SIZE;
+        selfCheckOk = ptLookup(&pt, fbFirstVa, &checkPa, &checkFlags) == BOOT_OK &&
+                      checkPa == fbBase && (checkFlags & PT_PCD) != 0 &&
+                      (checkFlags & PT_NX) != 0 && (checkFlags & PT_W) != 0 &&
+                      ptLookup(&pt, fbLastVa, &checkPa, &checkFlags) == BOOT_OK &&
+                      (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0 &&
+                      (checkFlags & PT_W) != 0;
     }
     if (!selfCheckOk) {
         loaderSerialWriteString("loader: page-table self-check failed\n");
