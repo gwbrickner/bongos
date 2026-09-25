@@ -1,7 +1,7 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M2.1 done, reviewer PASS, PR open; M2.2 is next)
+**Last updated:** 2026-09-25 (M2.1 done, reviewer PASS, [PR #5](https://github.com/gwbrickner/bongos/pull/5) open; M2.2 is next)
 
 ## Current milestone
 None in progress. **M2.1 GDT, IDT, exceptions, hardening runtime** is done -- see `docs/logs/
@@ -75,7 +75,7 @@ for owner" below -- this step's wording may need an owner decision before it sta
   identical) -- all 9 fixed, verified individually and then together (`make format-check`,
   `make host-tests` 131/131, `make image`, `make test` including regenerated GUI references), see
   `docs/logs/M1.4.md`'s reviewer-round entries. PR #4 merged.
-- M2.1 (PR open, `needs-owner: yes`): bongOS has a real GDT/TSS with dedicated IST stacks for
+- M2.1 ([PR #5](https://github.com/gwbrickner/bongos/pull/5) open, `needs-owner: yes`): bongOS has a real GDT/TSS with dedicated IST stacks for
   #DF/NMI/#MC and a full 256-vector IDT (D-072/D-074) -- every exception is reported with
   registers/CR2/control registers and a **symbolized** backtrace, then panics, except #BP, which
   resumes cleanly. Symbolization comes from a new embedded KSYM v1 symbol table (D-075,
