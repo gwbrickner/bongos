@@ -290,34 +290,41 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         return status;
     }
 
+    /* D-067's two-phase API: bootCfgParse() builds spans + the parsed [entry] sections, then
+     * bootCfgResolveEntry() copies one entry's effective (inherited) values out. This still picks
+     * cfg.defaultIndex unconditionally rather than showing the menu -- the menu itself (ConIn,
+     * the countdown, arrow-key/digit selection) is a later step in this same milestone; until
+     * then every boot behaves like the countdown fired immediately. */
     BootCfg cfg;
+    BootCfgEntry entry;
     uint8_t *cfgBuf = NULL;
     uint64_t cfgSize = 0;
     status = loaderReadFile(st, root, (CHAR16 *)L"\\bong\\boot.cfg", &cfgBuf, &cfgSize);
     if (!EFI_ERROR(status)) {
         BootStatus bst = bootCfgParse((const char *)cfgBuf, cfgSize, &cfg);
-        bs->FreePool(cfgBuf);
         if (bst != BOOT_OK) {
             loaderSerialWriteString("loader: boot.cfg: ");
-            loaderSerialWriteString(bootStatusString(bst));
+            loaderSerialWriteString(cfg.errorReason != NULL ? cfg.errorReason
+                                                            : bootStatusString(bst));
             loaderSerialWriteString("\n");
+            bs->FreePool(cfgBuf);
+            return EFI_INVALID_PARAMETER;
+        }
+        bst = bootCfgResolveEntry((const char *)cfgBuf, cfgSize, &cfg, cfg.defaultIndex, &entry);
+        bs->FreePool(cfgBuf);
+        if (bst != BOOT_OK) {
+            loaderSerialWriteString("loader: boot.cfg: failed to resolve the default entry\n");
             return EFI_INVALID_PARAMETER;
         }
     } else {
         loaderSerialWriteString("loader: boot.cfg not found; using defaults\n");
-        cfg.hasKernel = false;
-        cfg.hasCmdline = false;
-        cfg.cmdlineTruncated = false;
-        cfg.kernel[0] = '\0';
-        cfg.cmdline[0] = '\0';
-    }
-    if (!cfg.hasKernel) {
+        bootMemset(&entry, 0, sizeof(entry));
         static const char defaultKernel[] = "/bong/kernel.elf";
-        bootMemcpy(cfg.kernel, defaultKernel, sizeof(defaultKernel));
+        bootMemcpy(entry.kernel, defaultKernel, sizeof(defaultKernel));
     }
 
-    CHAR16 kernelPathW[BOOT_CFG_KERNEL_PATH_MAX];
-    loaderAsciiPathToWide(cfg.kernel, kernelPathW, BOOT_CFG_KERNEL_PATH_MAX);
+    CHAR16 kernelPathW[BOOT_CFG_PATH_MAX];
+    loaderAsciiPathToWide(entry.kernel, kernelPathW, BOOT_CFG_PATH_MAX);
 
     uint8_t *kernelBuf = NULL;
     uint64_t kernelSize = 0;
@@ -528,17 +535,17 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         *(volatile uint64_t *)&randomSeed[i] = 0;
     }
 
-    /* cfg.cmdline is already NUL-terminated and within BOOTINFO_CMDLINE_MAX by construction
-     * (bootCfgParse's cfgCopyBounded never overflows its destination), so this is a plain copy,
-     * not a second truncation pass -- bootCfgParse is what actually detects truncation, in
-     * cfg.cmdlineTruncated. */
+    /* entry.cmdline is already NUL-terminated and within BOOTINFO_CMDLINE_MAX by construction
+     * (bootCfgResolveEntry's cfgCopySpan never overflows its destination), so this is a plain
+     * copy, not a second truncation pass -- bootCfgResolveEntry is what actually detects
+     * truncation, in entry.cmdlineTruncated. */
     char *cmdlineDst = (char *)(uintptr_t)cmdlinePhys;
     uint32_t cmdLen = 0;
-    while (cfg.cmdline[cmdLen] != '\0') {
+    while (entry.cmdline[cmdLen] != '\0') {
         cmdLen++;
     }
-    bootMemcpy(cmdlineDst, cfg.cmdline, (uint64_t)cmdLen + 1);
-    if (cfg.cmdlineTruncated) {
+    bootMemcpy(cmdlineDst, entry.cmdline, (uint64_t)cmdLen + 1);
+    if (entry.cmdlineTruncated) {
         loaderSerialWriteString("loader: cmdline truncated to fit BOOTINFO_CMDLINE_MAX\n");
     }
 

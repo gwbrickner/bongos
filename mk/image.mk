@@ -51,16 +51,30 @@ $(UEFI_EFI): $(UEFI_OBJECTS) $(BOOT_COMMON_OBJECTS) $(UEFI_TRAMPOLINE_OBJECT)
 	lld-link /subsystem:efi_application /entry:efiMain /nodefaultlib /out:$@ $^
 
 # tools/mkimage: a host tool (own clang, no cross flags), per ARCHITECTURE §0's host-tool
-# exception. Also wants branding.h, for the root partition's on-disk name label.
-MKIMAGE_SOURCES := tools/mkimage/main.c tools/mkimage/gpt.c tools/mkimage/crc32.c
+# exception. Also wants branding.h, for the root partition's on-disk name label, and
+# boot/common's bootcfg.c/boot-status.c/bootmem.c to validate --boot-cfg at build time (D-067) --
+# the same parser the loader itself runs, built here for the host instead of x86_64-windows.
+MKIMAGE_SOURCES := tools/mkimage/main.c tools/mkimage/gpt.c tools/mkimage/crc32.c \
+                   boot/common/bootcfg.c boot/common/boot-status.c boot/common/bootmem.c
 MKIMAGE_BIN := $(MKIMAGE_DIR)/mkimage
 
-$(MKIMAGE_BIN): $(MKIMAGE_SOURCES) tools/mkimage/gpt.h tools/mkimage/crc32.h $(BRANDING_HDR)
+$(MKIMAGE_BIN): $(MKIMAGE_SOURCES) tools/mkimage/gpt.h tools/mkimage/crc32.h $(BRANDING_HDR) \
+                $(wildcard boot/common/include/*.h)
 	@mkdir -p $(dir $@)
-	clang -std=c17 -I$(BUILD)/include -Wall -Wextra -Werror -O1 -o $@ $(MKIMAGE_SOURCES)
+	clang -std=c17 -I$(BUILD)/include -Iboot/common/include -Wall -Wextra -Werror -O1 -o $@ \
+		$(MKIMAGE_SOURCES)
+
+# build/boot.cfg: boot/boot.cfg.in with @BRANDING_NAME@ substituted (D-067/D-046 -- the OS name
+# lives only in branding/, so the checked-in template can't hardcode it).
+BOOT_CFG_GENERATED := $(BUILD)/boot.cfg
+
+$(BOOT_CFG_GENERATED): boot/boot.cfg.in branding/name tools/gen-boot-cfg.sh
+	@mkdir -p $(dir $@)
+	bash tools/gen-boot-cfg.sh > $@
 
 .PHONY: image
-image: branding $(UEFI_EFI) $(MKIMAGE_BIN) $(KERNEL_ELF)
-	$(MKIMAGE_BIN) --output $(IMAGE) --efi $(UEFI_EFI) --kernel $(KERNEL_ELF) --boot-cfg boot/boot.cfg
+image: branding $(UEFI_EFI) $(MKIMAGE_BIN) $(KERNEL_ELF) $(BOOT_CFG_GENERATED)
+	$(MKIMAGE_BIN) --output $(IMAGE) --efi $(UEFI_EFI) --kernel $(KERNEL_ELF) \
+		--boot-cfg $(BOOT_CFG_GENERATED)
 	$(MKIMAGE_BIN) --output $(KTEST_IMAGE) --efi $(UEFI_EFI) --kernel $(KERNEL_ELF) \
 		--boot-cfg tests/harness/ktest-boot.cfg

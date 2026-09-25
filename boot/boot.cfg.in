@@ -1,0 +1,17 @@
+# bongOS boot configuration (ARCHITECTURE §5.2, D-067). Generated from boot/boot.cfg.in by
+# tools/gen-boot-cfg.sh (mk/image.mk) with @BRANDING_NAME@ substituted -- boot.cfg.in is the
+# only place under boot/ that names the OS outside branding/ (D-046), and it stays a plain
+# template rather than the OS name being hardcoded here.
+timeout = 3
+default = 1
+kernel = /bong/kernel.elf
+resolution = auto
+
+[@BRANDING_NAME@]
+cmdline =
+
+[Safe mode]
+cmdline = cpus=1 nomodules fbcon=on
+
+[Serial debug]
+cmdline = loglevel=debug

@@ -15,6 +15,8 @@
 #include <unistd.h>
 
 #include "branding.h"
+#include "boot-status.h"
+#include "bootcfg.h"
 #include "gpt.h"
 
 #define SECTOR_SIZE 512
@@ -348,11 +350,63 @@ static void cleanupTmpFiles(void) {
     }
 }
 
+/* Runs the loader's own boot.cfg parser (boot/common/bootcfg.c) against `path` at build time
+ * (D-067), so a malformed boot.cfg fails the build with a line number instead of shipping to a
+ * USB stick and failing silently (or worse, half-parsing) in the loader. Exits the process on
+ * either an I/O error or a parse error; does nothing on success. */
+static void validateBootCfg(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+        fprintf(stderr, "mkimage: %s: %s\n", path, strerror(errno));
+        exit(1);
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fprintf(stderr, "mkimage: %s: %s\n", path, strerror(errno));
+        fclose(f);
+        exit(1);
+    }
+    long size = ftell(f);
+    if (size < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "mkimage: %s: %s\n", path, strerror(errno));
+        fclose(f);
+        exit(1);
+    }
+    char *buf = malloc((size_t)size > 0 ? (size_t)size : 1);
+    if (buf == NULL) {
+        fprintf(stderr, "mkimage: out of memory reading %s\n", path);
+        fclose(f);
+        exit(1);
+    }
+    size_t got = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    if (got != (size_t)size) {
+        fprintf(stderr, "mkimage: %s: short read\n", path);
+        free(buf);
+        exit(1);
+    }
+
+    BootCfg cfg;
+    BootStatus st = bootCfgParse(buf, (uint64_t)size, &cfg);
+    free(buf);
+    if (st != BOOT_OK) {
+        fprintf(stderr, "mkimage: %s:%u: %s\n", path, cfg.errorLine,
+                cfg.errorReason != NULL ? cfg.errorReason : bootStatusString(st));
+        exit(1);
+    }
+    if (cfg.unknownKeyCount > 0) {
+        fprintf(stderr, "mkimage: %s:%u: warning: %u unrecognized key(s), first here\n", path,
+                cfg.firstUnknownKeyLine, cfg.unknownKeyCount);
+    }
+}
+
 int main(int argc, char **argv) {
     Options opt;
     if (parseOptions(argc, argv, &opt) != 0) {
         usage(argv[0]);
         return 1;
+    }
+    if (opt.bootCfg != NULL) {
+        validateBootCfg(opt.bootCfg);
     }
     ensureSbinInPath();
     atexit(cleanupTmpFiles);
