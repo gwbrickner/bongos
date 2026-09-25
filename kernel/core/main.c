@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "drivers/fbcon/fbcon.h"
 #include "drivers/serial/uart16550.h"
 
 /* Copies of the loader's handoff data, in kernel .data rather than the loader's LOADER_RECLAIM
@@ -93,6 +94,17 @@ _Noreturn void kernelMain(const BootInfo *bi) {
         cmdlineCopy[i] = srcCmdline[i];
     }
     cmdlineCopy[i] = '\0';
+
+    if (!cmdlineHasToken(cmdlineCopy, "fbcon=off")) {
+        Status fbSt = fbconInit(&bootInfoCopy.fb, bootInfoCopy.hhdmBase);
+        if (fbSt == STATUS_OK) {
+            klogWrite(KLOG_INFO, "fbcon", "%ux%u framebuffer console attached",
+                      bootInfoCopy.fb.width, bootInfoCopy.fb.height);
+        } else if (bootInfoCopy.fb.phys != 0) {
+            klogWrite(KLOG_WARN, "fbcon", "framebuffer present but unusable; serial-only console");
+        }
+    }
+    klogWrite(KLOG_INFO, "boot", "cmdline: \"%s\"", cmdlineCopy);
 
     kernelPrintMemoryMapSummary(&bootInfoCopy);
 

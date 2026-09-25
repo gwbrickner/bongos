@@ -59,3 +59,23 @@ void serialWriteString(const char *s) {
         serialWriteByte(*s);
     }
 }
+
+#define LSR_DATA_READY 0x01
+
+bool serialTryReadByte(uint8_t *out) {
+    if (!uartPresent) {
+        return false;
+    }
+    if ((ioInByte(COM1_PORT + 5) & LSR_DATA_READY) == 0) {
+        return false;
+    }
+    *out = ioInByte(COM1_PORT);
+    return true;
+}
+
+void serialDrainRx(void) {
+    uint8_t discard;
+    while (serialTryReadByte(&discard)) {
+        /* keep reading until the FIFO is empty */
+    }
+}

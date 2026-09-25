@@ -21,4 +21,8 @@ bool cmdlineGlobMatch(const char *pattern, const char *name);
  * §4: only stdint/stddef/stdbool/stdarg/stdatomic in the kernel). No locks; pure. */
 bool cmdlineStrEq(const char *s, const char *t);
 
+/* True if `token` (e.g. "fbcon=off") appears as a whole space/tab-separated token anywhere in
+ * `cmdline` (not as a substring of a longer token). No locks, boot-time only; pure. */
+bool cmdlineHasToken(const char *cmdline, const char *token);
+
 #endif

@@ -183,24 +183,39 @@ GPT disk:
   USB media is commonly 512e (512-byte logical, larger physical); a loader or driver that reads
   block size must take it from the device (`BlockIo->Media` under UEFI) rather than assuming 512.
 
-### 5.2 `boot.cfg`
-This is a plain `key = value` file with `[entry]` sections that make up the boot menu.
+### 5.2 `boot.cfg` (grammar: D-067)
+A line-oriented `key = value` file, at most 64 KiB, UTF-8 (a leading BOM is skipped, a NUL byte
+is an error). Lines end at LF; a trailing CR is stripped. Each line is trimmed, then: blank
+lines are skipped; a line starting with `#` is a whole-line comment (no inline comments); a line
+starting with `[` opens a section, whose trimmed inner text (1-63 bytes, printable ASCII, no
+`[`/`]`, unique) is the entry's **display name** in the menu -- there is no separate `name =`
+key; every other non-blank line must contain `=`, else it's a fatal error. A key is
+`[a-z0-9_.]{1,31}`; an unrecognized key is ignored (forward-compatible) but counted. Within one
+scope the first occurrence of a key wins.
 
-**Keys:**
-- `kernel`
-- `initrd`
-- `cmdline`
-- `resolution = auto | WIDTHxHEIGHT`
-- `kaslr = on | off`
-- `timeout` (seconds)
-- `default`
+**Keys**, valid both before the first `[section]` (the *global* scope) and inside a section
+(each section is its own scope), with entry-then-global-then-built-in inheritance (an explicit
+empty `initrd =` or `cmdline =` in a section overrides an inherited non-empty value):
+- `kernel` (`/`-prefixed path; built-in default `/bong/kernel.elf`)
+- `initrd` (path; built-in default: none; not yet loaded, D-067 -- M5.5)
+- `cmdline` (any bytes but NUL; built-in default: empty)
+- `resolution = auto | WIDTHxHEIGHT` (built-in default `auto`)
+- `kaslr = on | off` (built-in default `on`; no effect until M2.6)
 
-**Default entries:**
+`timeout` (seconds, 0-3600, or `forever`; default 0 = no menu) and `default` (a 1-based index if
+all digits, else an exact entry name; default 1) are **global-only**. At most 9 `[entry]`
+sections (so serial digit keys 1-9 can select directly); a file with none is treated as one
+implicit entry taking every value from the global scope, so an M1.3-style `kernel =`/`cmdline =`
+file still boots unchanged. `tools/mkimage` runs the same parser (`boot/common/bootcfg.c`) at
+image-build time and fails the build on a malformed `boot.cfg`.
+
+**Default entries** (`boot/boot.cfg`, generated from `boot/boot.cfg.in`):
 - **bongOS**
-- **Safe mode** (`cmdline` adds `cpus=1 nomodules fbcon=on`)
-- **Serial debug** (`loglevel=debug`)
+- **Safe mode** (`cmdline = cpus=1 nomodules fbcon=on`)
+- **Serial debug** (`cmdline = loglevel=debug`)
 
-The menu is rendered on the framebuffer and on serial, and uses the arrow keys plus Enter.
+The menu is rendered on the framebuffer and on serial (arrow keys + Enter on the framebuffer
+side; number keys 1-9 on serial), per §5.5.
 
 ### 5.3 BootInfo: the handoff ABI (`boot/common/include/bootinfo.h`, shared with the kernel)
 
@@ -220,7 +235,7 @@ typedef enum {
 typedef struct { uint64_t base; uint64_t length; uint32_t type; uint32_t reserved; } BootMemRegion;
 
 typedef struct {
-    uint64_t phys; uint32_t width, height, pitch, bpp;
+    uint64_t phys; uint32_t width, height, pitch, bpp;   /* pitch is bytes per scanline */
     uint8_t redShift, redSize, greenShift, greenSize, blueShift, blueSize, reserved[2];
 } BootFramebuffer;
 
@@ -252,9 +267,15 @@ value means "not provided" for `fb.phys`, `initrdPhys`/`initrdSize`, `rsdpPhys`,
     (Loader{Code,Data}, BootServices{Code,Data}, Runtime{Code,Data}, Conventional, ACPIReclaim,
     ACPINVS), clipped at the 64 TiB HHDM window, at `hhdmBase = 0xFFFF800000000000`, using 1 GiB
     pages (or 2 MiB pages without PDPE1GB); MMIO, reserved, persistent, and unaccepted memory are
-    never HHDM-mapped (D-059)
+    never HHDM-mapped (D-059), **except** the framebuffer (D-068, below)
   - the kernel image at `kernelVirtBase` (slid when KASLR is on)
   - an identity mapping of the loader's trampoline page only; the kernel removes it
+  - if `fb.phys != 0`, the framebuffer (`[fb.phys, fb.phys + pitch*height)`, rounded to page
+    boundaries) at `hhdmBase + fb.phys`, using 4 KiB pages only (never sharing a large page with
+    real RAM), `PCD=1`/`PWT=0` (PAT index 2, UC- under the firmware's power-on `IA32_PAT`), NX,
+    global -- the one HHDM mapping that isn't RAM (D-068). If the range overlaps an existing
+    mapping or falls outside the 64 TiB window, the loader leaves `fb` all-zero instead. M2.3
+    reprograms the PAT and remaps this range WC once the kernel owns its own page tables.
 - **Control registers:** `EFER.NXE=1`, `CR0.WP=1`, `CR4.PAE|PGE`. Interrupts are disabled.
 - **Registers:** `rdi` holds the BootInfo virtual address (in the HHDM). `rsp` points to a
   64 KiB boot stack that is marked `LOADER_RECLAIM`. The kernel switches to its own stack
@@ -262,20 +283,39 @@ value means "not provided" for `fb.phys`, `initrdPhys`/`initrdSize`, `rsdpPhys`,
 - **GDT/IDT:** the firmware's own, left in place (now unmapped under the loader's page tables).
   The kernel installs its own first thing.
 
-### 5.5 UEFI loader flow
-1. Get the LoadedImage and SimpleFileSystem protocols, then read `/bong/boot.cfg`.
-2. Show the menu if `timeout > 0`.
-3. Load `kernel.elf` (check ELF64, x86_64, `PT_LOAD` segments) into `EfiLoaderData` pages.
+### 5.5 UEFI loader flow (D-068)
+1. Get the LoadedImage and SimpleFileSystem protocols, then read and parse `/bong/boot.cfg`
+   (§5.2).
+2. Pick the GOP mode using the *global* `resolution` and set it (see "GOP mode selection"
+   below) -- before the menu, since the menu needs a framebuffer. `EnableCursor(FALSE)` first.
+   After this point the loader never calls `ConOut` again (GraphicsConsole doesn't know the mode
+   changed and would blit at stale geometry); errors go to raw COM1 only (D-071: the
+   framebuffer text renderer exists post-GOP, but no error path draws to it in M1.4 -- every
+   failure after this point already has a serial diagnostic, and a boot that can't reach this far
+   has no menu to show one on either way).
+3. Show the menu if `timeout > 0` (arrow keys/Enter/1-9 via `ConIn` only -- never poll COM1
+   receive before `ExitBootServices`, since OVMF's TerminalDxe owns it). Resolve the chosen (or
+   default/timed-out) entry.
+4. If the entry's resolved `resolution` differs from the global one, pick and set the GOP mode
+   again.
+5. Load `kernel.elf` (check ELF64, x86_64, `PT_LOAD` segments) into `EfiLoaderData` pages.
    Apply the KASLR slide using the `--emit-relocs` relocations (`R_X86_64_64`, `R_X86_64_32S`).
-4. Load the initrd.
-5. Pick the GOP mode: the largest area up to 3840x2160 unless `resolution` is set; prefer
-   32 bpp. Set it.
-6. Find the RSDP in the config tables (ACPI 2.0 GUID first, then 1.0).
-7. Gather the random seed: `EFI_RNG_PROTOCOL` if present, else RDSEED/RDRAND, plus TSC jitter.
-8. Build the page tables and BootInfo.
-9. Call `GetMemoryMap` then `ExitBootServices`. Retry on a map-key mismatch, with no
-   allocations between the two calls.
-10. Convert the memory map, load CR3, and jump.
+6. Load the initrd (once M5.5 wires it in; M1.4 parses `initrd =` but doesn't load it).
+7. Find the RSDP in the config tables (ACPI 2.0 GUID first, then 1.0).
+8. Gather the random seed: `EFI_RNG_PROTOCOL` if present, else RDSEED/RDRAND, plus TSC jitter.
+9. Build the page tables (including the framebuffer mapping, §5.4) and BootInfo.
+10. Call `GetMemoryMap` then `ExitBootServices`. Retry on a map-key mismatch, with no
+    allocations between the two calls.
+11. Convert the memory map, load CR3, and jump.
+
+**GOP mode selection:** use the GOP on `ConsoleOutHandle`, falling back to the first
+`LocateHandleBuffer(ByProtocol, GOP)` result with a linear framebuffer (`FrameBufferBase != 0`,
+not `PixelBltOnly`). Query every mode; accept 32-bit-pixel formats only (RGBX, BGRX, or a
+BitMask whose R/G/B fields are each non-zero, contiguous, and together span bits 24-31). `auto`
+picks the largest `width*height` with width <=3840 and height <=2160 (ties: wider, then lower
+mode number); `WIDTHxHEIGHT` picks an exact match or falls back to `auto` with a log line. Set
+the mode only if it differs from the current one, then re-read `Mode->Info` and
+`FrameBufferBase` (both can change on `SetMode`).
 
 ### 5.6 BIOS loader flow
 - **stage1 (MBR):**

@@ -94,7 +94,7 @@ workflow is green on the PR.
 
 **Done when:** `make test` shows `KTEST PASS bootinfo_valid` and exits 33 under OVMF at 1 CPU.
 
-### [ ] M1.4 Framebuffer console + boot menu
+### [x] M1.4 Framebuffer console + boot menu
 **Needs:** M1.3
 1. Loader: GOP mode selection (the rule in §5.5, plus a `resolution=` override), fill `BootInfo.fb`.
 2. Kernel `fbcon`:

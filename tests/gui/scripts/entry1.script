@@ -1,0 +1,9 @@
+# Boots the first entry ("Default") over serial digit selection, confirms its exact cmdline,
+# then exercises the fbcon_screenshot ktest's ack handshake before letting ktest=all finish.
+expect loader: menu ready
+screendump menu
+send 1
+expect boot: cmdline: "ktest=all menutest=1 ktest.shots=1"
+expect SCREENSHOT kernel
+screendump kernel
+send \n

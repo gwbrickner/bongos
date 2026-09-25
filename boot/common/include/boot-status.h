@@ -25,6 +25,9 @@ typedef enum {
     /* Also an addition: ptMapRange() needs to report a misaligned va/pa/size distinctly from a
      * real conflict (mapping over an existing entry). */
     BOOT_ERR_PT_UNALIGNED = -13,
+    /* M1.4 addition: fbtext.c's geometry validation (bpp/pitch/shift-size sanity, D-068/D-069)
+     * needs a code distinct from BOOT_ERR_CFG (a boot.cfg problem, not a framebuffer one). */
+    BOOT_ERR_FB_UNSUPPORTED = -14,
 } BootStatus;
 
 /* Returns a static, human-readable string for `s` (never NULL, even for an unrecognized value).

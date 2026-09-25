@@ -13,7 +13,7 @@ format:
 		echo "format: no C sources yet"; \
 	fi
 
-format-check:
+format-check: font-check
 	@if [ -n "$(FORMAT_FILES)" ]; then \
 		$(CLANG_FORMAT) --dry-run --Werror $(FORMAT_FILES); \
 	else \

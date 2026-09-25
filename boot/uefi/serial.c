@@ -72,3 +72,19 @@ void loaderSerialWriteString(const char *s) {
         serialWriteByte(*s);
     }
 }
+
+void loaderSerialWriteUint(uint32_t v) {
+    char digits[10]; /* UINT32_MAX is 10 decimal digits */
+    int n = 0;
+    if (v == 0) {
+        serialWriteByte('0');
+        return;
+    }
+    while (v > 0) {
+        digits[n++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (n > 0) {
+        serialWriteByte(digits[--n]);
+    }
+}

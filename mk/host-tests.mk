@@ -12,11 +12,22 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # (parsers, bongfs, crypto...). Their own directories are added to the include path so a test
 # file can '#include "gpt.h"' without a relative path. boot/uefi/guids.c has no freestanding- or
 # cross-target-specific code, so it builds fine with the host's native clang too.
+# $(CONSOLE_FONT_C) (mk/font.mk): fbtext.c links against the generated font data (fontConsolePsf),
+# not a wildcard match under boot/common/*.c, so it's listed explicitly; Make builds it first since
+# it's its own target with its own rule. tools/imgdiff/*.c minus main.c (which defines its own
+# `main`, conflicting with tests/host/main.c's): imgdiff's PPM/PNG/DEFLATE codec is host-testable
+# logic living outside tests/host/, same reasoning as gpt.c/bootcfg.c below. kernel/drivers/fbcon/
+# fbcon.c: pure C on top of fbtext.c's primitive (no hardware I/O, no locks yet), so it's just as
+# host-testable as fbtext.c itself -- only needs kernel/include on the path for uapi/status.h.
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c boot/uefi/guids.c \
-                        $(wildcard boot/common/*.c)
+                        $(wildcard boot/common/*.c) $(CONSOLE_FONT_C) \
+                        $(filter-out tools/imgdiff/main.c,$(wildcard tools/imgdiff/*.c)) \
+                        kernel/drivers/fbcon/fbcon.c
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h $(wildcard boot/uefi/include/efi/*.h) \
-                        $(wildcard boot/common/include/*.h)
-HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common
+                        $(wildcard boot/common/include/*.h) $(wildcard tools/imgdiff/*.h) \
+                        kernel/drivers/fbcon/fbcon.h $(wildcard kernel/include/uapi/*.h)
+HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
+                            -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include
 
 .PHONY: host-tests
 host-tests: $(HOST_TEST_BIN)

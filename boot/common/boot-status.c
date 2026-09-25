@@ -30,6 +30,8 @@ const char *bootStatusString(BootStatus s) {
             return "virtual address not mapped";
         case BOOT_ERR_PT_UNALIGNED:
             return "page-table mapping request not 4 KiB aligned";
+        case BOOT_ERR_FB_UNSUPPORTED:
+            return "unsupported framebuffer geometry";
         default:
             return "unknown boot status";
     }

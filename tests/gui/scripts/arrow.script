@@ -1,0 +1,8 @@
+# Exercises the on-screen menu's arrow-key + Enter path (as opposed to the other scripts' digit
+# shortcuts): moves the selection down once (to "Safe mode") and confirms both the loader's own
+# "selected" log line and the resulting cmdline.
+expect loader: menu ready
+send \e[B
+expect loader: selected 2
+send \r
+expect boot: cmdline: "ktest=all menutest=2 cpus=1 nomodules fbcon=on"
