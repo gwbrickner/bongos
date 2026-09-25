@@ -8,6 +8,7 @@ BUILD := build
 RELEASE ?= 0   # wired to -O2 (vs. debug -O1 + UBSan/lock validator) starting with kernel.mk in M1.3
 
 include mk/branding.mk
+include mk/font.mk
 include mk/format.mk
 include mk/host-tests.mk
 include mk/kernel.mk
