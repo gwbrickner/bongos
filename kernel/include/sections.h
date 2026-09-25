@@ -19,5 +19,11 @@ extern const uint8_t kernelDataStart[];
 extern const uint8_t kernelDataEnd[];
 extern const uint8_t kernelBootStackBottom[];
 extern const uint8_t kernelBootStackTop[];
+extern const uint8_t kernelIst1Bottom[];
+extern const uint8_t kernelIst1Top[];
+extern const uint8_t kernelIst2Bottom[];
+extern const uint8_t kernelIst2Top[];
+extern const uint8_t kernelIst3Bottom[];
+extern const uint8_t kernelIst3Top[];
 
 #endif
