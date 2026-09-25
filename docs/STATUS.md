@@ -1,13 +1,12 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-24 (M1.3 done, PR open)
+**Last updated:** 2026-09-25 (M1.4 in progress)
 
 ## Current milestone
-None in progress. M1.3 is done and its PR is open (see `docs/logs/M1.3.md`). **Next: M1.4:
-Framebuffer console + boot menu** (needs owner hardware check for the on-screen part), once
-M1.3 merges. Branch: `claude/relaxed-curie-knpvwb` (see the note at the top of the M1.3 log for
-why this isn't the usual `m1-3-...` name).
+M1.4: Framebuffer console + boot menu, in progress (see `docs/logs/M1.4.md`). M1.3's PR (#3)
+merged to `main` at `54f1842`. Branch: `claude/affectionate-ritchie-cxvoi6` (see the note at the
+top of the M1.4 log for why this isn't the usual `m1-4-...` name).
 
 ## Phase
 1: Acapulco Gold
@@ -24,7 +23,7 @@ why this isn't the usual `m1-3-...` name).
   headers (D-007) prints a banner to ConOut and COM1, then halts. `make test` boots it under OVMF
   and checks the serial output (D-057's `--expect-serial`, a bridge until M1.3's kernel brings
   the real KTEST protocol).
-- M1.3 (PR open): bongOS has a real kernel. `kernel.ld` links it higher-half with a W^X section
+- M1.3 (merged, PR #3): bongOS has a real kernel. `kernel.ld` links it higher-half with a W^X section
   layout; the entry stub installs a boot GDT and null IDT; the kernel has a 16550 serial driver,
   `klog`, `panic()`, and an in-kernel test framework (`KTEST()`, `ktest=` cmdline, isa-debug-exit
   PASS/FAIL reporting). `boot/common/` gained a from-scratch ELF64 loader, a page-table builder
@@ -40,8 +39,9 @@ why this isn't the usual `m1-3-...` name).
   `needs-owner: yes`.
 
 ## Next step
-Once M1.3's PR is reviewed/merged by the owner, start M1.4 (framebuffer console + boot menu)
-following the session protocol in CLAUDE.md.
+Consult the `architect` subagent on the boot.cfg `[entry]` schema, PSF font handling, and the
+screenshot-test approach (see `docs/logs/M1.4.md`'s Plan section), then implement M1.4 step 1
+(loader GOP mode selection + `BootInfo.fb`).
 
 ## Blockers
 _(none)_
