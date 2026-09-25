@@ -22,10 +22,11 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c boot/uefi/guids.c \
                         $(wildcard boot/common/*.c) $(CONSOLE_FONT_C) \
                         $(filter-out tools/imgdiff/main.c,$(wildcard tools/imgdiff/*.c)) \
-                        kernel/drivers/fbcon/fbcon.c
+                        kernel/drivers/fbcon/fbcon.c kernel/core/ksyms-decode.c
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h $(wildcard boot/uefi/include/efi/*.h) \
                         $(wildcard boot/common/include/*.h) $(wildcard tools/imgdiff/*.h) \
-                        kernel/drivers/fbcon/fbcon.h $(wildcard kernel/include/uapi/*.h)
+                        kernel/drivers/fbcon/fbcon.h $(wildcard kernel/include/uapi/*.h) \
+                        kernel/include/ksyms-format.h
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
                             -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include
 

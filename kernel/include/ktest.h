@@ -4,6 +4,7 @@
 #ifndef KERNEL_KTEST_H
 #define KERNEL_KTEST_H
 
+#include <arch/jmp.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -74,5 +75,43 @@ bool ktestIsActive(void);
 /* The name of the test currently executing, or NULL if none is (either ktest mode is off, or
  * we're between tests / doing pre-run pattern checks). No locks, boot-time only. */
 const char *ktestCurrentName(void);
+
+/* Expected-panic recovery (D-076). Arms a match on `prefix` against the next panic()/panicTrap()
+ * message; a matching panic makes panic.c jump straight back into the ktest via
+ * archJmpSave()/archJmpRestore() (kernel/include/arch/jmp.h). Two calls, both required, in this
+ * exact shape, directly in the KTEST() body (never through a wrapper function -- same
+ * restriction as setjmp, and for the same reason: a wrapper's own "ret" would read a
+ * return-address stack slot that a sibling call in between could clobber, since the recovery
+ * jump only guarantees the *jump itself* lands correctly, not what any intervening function's
+ * own epilogue later reads off the stack):
+ *
+ *   ktestArmExpectedPanic(ktestCtx, "expected panic message prefix");
+ *   if (archJmpSave(ktestPanicJmpBuf()) == 0) {
+ *       triggerThePanic();
+ *       KTEST_ASSERT(false); // unreachable
+ *   } else {
+ *       // recovered: verify whatever state the panic should have left behind
+ *   }
+ *
+ * If the test function returns without the expected panic ever firing, ktestRunFromCmdline()
+ * fails it ("expected panic did not occur") and disarms the match. No locks, ktest-only (a no-op
+ * outside a running ktest). */
+void ktestArmExpectedPanic(KtestCtx *ktestCtx, const char *prefix);
+
+/* The single shared jump buffer archJmpSave()/archJmpRestore() use for expected-panic recovery.
+ * Never call archJmpSave() through anything but this buffer, and never save more than one
+ * expected panic at a time (ktests run one at a time, so this is never contended). */
+ArchJmpBuf *ktestPanicJmpBuf(void);
+
+/* Called by panic.c's shared panic implementation before printing anything: true if `message`
+ * matches an armed ktestExpectPanic() prefix (and disarms it). panic.c must follow a `true`
+ * result with ktestPanicRecover() and never fall through to the normal fatal path. Not for
+ * ktests to call directly. */
+bool ktestPanicExpected(const char *message);
+
+/* Jumps back to the matching ktestExpectPanic() call site (making it return 1). Never returns.
+ * Only valid to call immediately after ktestPanicExpected() returns true. Not for ktests to call
+ * directly. */
+_Noreturn void ktestPanicRecover(void);
 
 #endif

@@ -29,19 +29,31 @@ gui-test: image imgdiff
 update-refs: image imgdiff
 	tests/gui/run.sh --fw uefi --update-refs
 
-# A QEMU exit code of 33 (run-qemu.sh) only proves *some* ktest passed -- if bootinfo_test.c were
-# ever accidentally dropped, or bootinfo_valid renamed, `make test` would still report PASS on
-# klog_format alone, silently losing the actual ROADMAP Done-when guarantee. So explicitly grep
-# every configuration's serial log for the literal line the bootinfo_valid ktest prints on success,
-# and fail loudly if it's missing from any of them.
+# A QEMU exit code of 33 (run-qemu.sh) only proves *some* ktest passed -- if a test file were ever
+# accidentally dropped, or a test renamed, `make test` would still report PASS on whatever's left,
+# silently losing the actual ROADMAP Done-when guarantee. So explicitly grep every configuration's
+# serial log for the literal PASS line of every ktest a Done-when clause depends on, and fail
+# loudly if any is missing. M2.1 (D-072/D-073/D-074/D-075/D-076) adds the GDT/TSS/IDT, symbolize,
+# and hardening tests to this list.
+KTEST_REQUIRED := bootinfo_valid cpu_tables_loaded trap_int3_resumes trap_ud_caught \
+                  trap_pf_reports_cr2 trap_df_on_ist1 stack_smash_detected \
+                  ubsan_overflow_detected symbolize_known_function backtrace_walks_chain
+
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus rest; do \
 	    case "$$fw" in ''|\#*) continue ;; esac; \
 	    name="$${fw}-$${cpus}cpu"; \
 	    log="build/logs/$$name.serial.log"; \
-	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF 'KTEST PASS bootinfo_valid'; then \
-	        echo "make test: $$log does not contain 'KTEST PASS bootinfo_valid' (ROADMAP Done-when guarantee not met)"; \
+	    clean="$$(tr -d '\r' < "$$log" 2>/dev/null)"; \
+	    for t in $(KTEST_REQUIRED); do \
+	        if ! printf '%s\n' "$$clean" | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
+	    if ! printf '%s\n' "$$clean" | grep -qE '^  #[0-9]+ 0x[0-9a-f]{16} ktestSmashVictim\+0x[0-9a-f]+/0x[0-9a-f]+$$'; then \
+	        echo "make test: $$log's stack_smash_detected panic has no symbolized 'ktestSmashVictim' backtrace frame (ROADMAP M2.1 Done-when guarantee not met)"; \
 	        status=1; \
 	    fi; \
 	done < "$(MATRIX)"; \

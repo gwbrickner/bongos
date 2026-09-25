@@ -11,7 +11,7 @@
 bits 64
 
 section .text.entry progbits alloc exec nowrite align=16
-global kernelEntry
+global kernelEntry:function
 extern kernelMain
 extern kernelBootStackTop
 
@@ -38,6 +38,9 @@ kernelEntry:
 
     xor  ebp, ebp                      ; backtrace terminator (panic() stops here)
     call kernelMain                    ; _Noreturn void kernelMain(const BootInfo *bi)
+    ; kernelMain replaces this temporary GDT/IDT with the real ones (archCpuTablesInit(),
+    ; ARCHITECTURE §7.1/D-072) before doing anything else; this stub's tables cover only the
+    ; serialInit()-and-earlier window.
 .hang:                                 ; unreachable in practice (kernelMain never returns)
     cli
     hlt

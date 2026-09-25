@@ -44,4 +44,39 @@ static inline __attribute__((always_inline)) uint64_t archFramePointer(void) {
     return rbp;
 }
 
+/* Control register reads, used by the trap-frame dump (ARCHITECTURE §24/§7.1). No locks,
+ * IRQ-safe; pure reads with no side effect worth ordering against, so no "memory" clobber. */
+static inline uint64_t archReadCr0(void) {
+    uint64_t v;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(v));
+    return v;
+}
+
+static inline uint64_t archReadCr2(void) {
+    uint64_t v;
+    __asm__ volatile("mov %%cr2, %0" : "=r"(v));
+    return v;
+}
+
+static inline uint64_t archReadCr3(void) {
+    uint64_t v;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(v));
+    return v;
+}
+
+static inline uint64_t archReadCr4(void) {
+    uint64_t v;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(v));
+    return v;
+}
+
+/* Raw TSC read (`rdtsc`), used as a fallback entropy source when a real seed isn't available
+ * (D-074) -- not a timekeeping API (that's M3.3). No locks, IRQ-safe; not calibrated, not
+ * synchronized across CPUs. */
+static inline uint64_t archReadTsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 #endif

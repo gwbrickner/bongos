@@ -281,7 +281,10 @@ value means "not provided" for `fb.phys`, `initrdPhys`/`initrdSize`, `rsdpPhys`,
   64 KiB boot stack that is marked `LOADER_RECLAIM`. The kernel switches to its own stack
   before reclaiming it.
 - **GDT/IDT:** the firmware's own, left in place (now unmapped under the loader's page tables).
-  The kernel installs its own first thing.
+  `kernelEntry` (the entry stub) installs a temporary boot GDT (code+data only) and a null IDT
+  (limit 0, so any exception before the real IDT exists triple-faults immediately rather than
+  running with a stale one) before calling `kernelMain`, which then installs the real GDT/TSS/
+  IDT from §7.1 (`archCpuTablesInit()`, D-072).
 
 ### 5.5 UEFI loader flow (D-068)
 1. Get the LoadedImage and SimpleFileSystem protocols, then read and parse `/bong/boot.cfg`
@@ -421,8 +424,11 @@ space, so kernel mappings never need to be synced between them.
 - **User ASLR:** the PIE base, mmap base, stack, and heap are randomized, with at least 28
   bits of entropy for mmap.
 - **Kernel RNG:** an entropy pool fed by RDSEED/RDRAND, `BootInfo.randomSeed`, and interrupt
-  timing, feeding a ChaCha20-based CSPRNG (`randomGetBytes`). Stack canaries are seeded from
-  it at boot.
+  timing, feeding a ChaCha20-based CSPRNG (`randomGetBytes`), arriving in M2.6.
+- **Stack canaries:** `__stack_chk_guard` is derived once from `BootInfo.randomSeed` at the top
+  of `kernelMain`, before the CSPRNG exists (`stackGuardInit()`, D-074) -- not from the CSPRNG,
+  since re-deriving it later would fail the canary check of any frame still live at that point.
+  It is never re-derived.
 
 ---
 
@@ -438,10 +444,21 @@ space, so kernel mappings never need to be synced between them.
 - **FPU/SIMD:** saved and restored eagerly on context switch, with XSAVE/XSAVEOPT (or FXSAVE
   as a fallback). Kernel code never uses FP or SIMD, except inside explicit
   `fpuBegin()`/`fpuEnd()` sections (AES-NI, fast memcpy later).
-- **GDT (one per CPU):** null, kernel code, kernel data, user code32 (placeholder, needed for
-  the STAR layout), user data, user code64, then the TSS.
-- **IDT:** shared by all CPUs. Each CPU gets 16 KiB IST stacks: IST1 for #DF, IST2 for NMI,
-  IST3 for #MC.
+- **GDT (one per CPU; M2.1 builds one static instance for the BSP, moved into `CpuLocal`
+  unmodified by M3.5):** 0x00 null, 0x08 kernel code64, 0x10 kernel data, 0x18 a **null**
+  placeholder reserving the STAR "user code32" slot (loading it always `#GP`s -- ring 3 can
+  never reach compatibility mode), 0x20 user data, 0x28 user code64 (both DPL3, unused before
+  M4), 0x30 a 16-byte TSS descriptor. The TSS has `iopbOffset = sizeof(Tss)` (no I/O bitmap) and
+  `rsp0 = 0` until M4 sets it per thread (D-072).
+- **IDT:** shared by all CPUs, 256 interrupt gates (not trap gates, so nothing can nest and
+  overwrite CR2 before the #PF handler reads it) at DPL0; only vectors 0-31 (the CPU exceptions)
+  are present in M2.1, vectors 32-255 are filled in starting M3.2. Each CPU gets 16 KiB IST
+  stacks, each in its own linker `PT_LOAD` with an unmapped guard page below it: IST1 for #DF,
+  IST2 for NMI, IST3 for #MC; every other vector uses IST0 (the current stack). In M2.1
+  (BSP-only, single stack set) the #DF/NMI/#MC handlers are terminal -- they report and panic,
+  never `iretq` -- since an IST entry always reloads RSP from the TSS and a nested exception on
+  the same IST index would overwrite the frame already there. #BP (`int3`) is never fatal
+  anywhere: the handler logs it and resumes (D-072).
 
 ### 7.2 Interrupt vectors
 | Vectors | Use |
@@ -1039,8 +1056,9 @@ a reset to CRASH.
 - **klog:** levels (error, warn, info, debug, trace), per-subsystem tags, and output to serial
   plus fbcon plus a ring buffer (`dmesg`).
 - **Panic screen:** reason, registers, CPU number, current thread, and a **symbolized
-  backtrace**. Frame pointers are kept, and the kernel embeds a compressed symbol table. Other
-  CPUs are stopped by IPI.
+  backtrace**. Frame pointers are kept, and the kernel embeds a compressed symbol table
+  (`ksyms`, `docs/specs/ksyms.md`, D-073) built by a two-pass link (`tools/mksyms`) and read by
+  `symbolize()`/`backtracePrint()` (M2.1). Other CPUs are stopped by IPI (from M3.5).
 - **Debugger:** `make gdb` runs QEMU's gdbstub with symbols loaded. `make debug` adds
   `-d int,cpu_reset` logging.
 - **Userspace crashes:** the crashing process's registers and backtrace go to `logd`, and

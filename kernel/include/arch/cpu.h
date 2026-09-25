@@ -10,4 +10,10 @@
 
 #include "cpu-impl.h"
 
+/* Builds and installs the real GDT/TSS/IDT (ARCHITECTURE §7.1, D-072), replacing the loader-era
+ * temporary tables. Called exactly once from kernelMain, before anything else touches interrupt
+ * state; a second call panics. No locks; IF must be 0. BSP-only until M3.5 gives every AP its own
+ * copy. */
+void archCpuTablesInit(void);
+
 #endif

@@ -6,8 +6,11 @@
 #include "klog.h"
 #include "ktest.h"
 #include "panic.h"
+#include "stack-protector.h"
+#include "symbolize.h"
 
 #include <arch/cpu.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -61,9 +64,14 @@ static void kernelPrintMemoryMapSummary(const BootInfo *bi) {
 }
 
 /* No locks; boot-time only (called exactly once, from entry.asm, on the kernel's own boot stack);
- * never returns. */
-_Noreturn void kernelMain(const BootInfo *bi) {
+ * never returns. Marked no_stack_protector (D-074): this is the one frame that's still live when
+ * stackGuardInit() changes __stack_chk_guard underneath it, so it must not itself be canary-
+ * checked (and clang won't inline a protected callee into it, so nothing else silently loses
+ * protection either). */
+__attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi) {
     serialInit();
+    archCpuTablesInit(); /* real GDT/TSS/IDT (ARCHITECTURE §7.1, D-072): from here on, exceptions
+                          * get a symbolized backtrace instead of triple-faulting */
     klogInit();
 
     const char *why = "unknown";
@@ -77,6 +85,9 @@ _Noreturn void kernelMain(const BootInfo *bi) {
         panic("bootinfo: %s", why);
     }
 
+    bool seedOk = stackGuardInit(bi->randomSeed); /* D-074: before any other protected frame that
+                                                   * outlives this call; never done again */
+
     liveBootInfo = bi;
     bootInfoCopy = *bi;
     /* Nothing reads randomSeed out of bootInfoCopy (only the live BootInfo page matters, and only
@@ -88,6 +99,12 @@ _Noreturn void kernelMain(const BootInfo *bi) {
     for (size_t i = 0; i < sizeof(bootInfoCopy.randomSeed); i++) {
         seedWipe[i] = 0;
     }
+
+    klogWrite(KLOG_INFO, "cpu", "GDT/TSS/IDT installed (IST1=#DF IST2=NMI IST3=#MC)");
+    klogWrite(seedOk ? KLOG_INFO : KLOG_WARN, "hardening", "stack guard seeded%s",
+              seedOk ? "" : " from a weak (TSC) fallback -- boot seed was empty");
+    klogWrite(KLOG_INFO, "ksyms", "%u symbols", symbolizeCount());
+
     const char *srcCmdline = (const char *)(uintptr_t)(bi->hhdmBase + bi->cmdlinePhys);
     uint32_t i = 0;
     for (; i < BOOTINFO_CMDLINE_MAX - 1 && srcCmdline[i] != '\0'; i++) {

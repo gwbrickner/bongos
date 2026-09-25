@@ -1,62 +1,21 @@
 /* See panic.h. */
 #include "panic.h"
 
+#include "backtrace.h"
 #include "format.h"
 #include "klog.h"
 #include "ktest.h"
-#include "sections.h"
 
 #include <arch/cpu.h>
 #include <arch/qemu.h>
+#include <arch/trap.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 
-static bool panicking = false;
+static int panicDepth = 0;
 
-_Noreturn void panic(const char *fmt, ...) {
-    archDisableInterrupts();
-    if (panicking) {
-        archHaltForever();
-    }
-    panicking = true;
-
-    char message[200];
-    va_list ap;
-    va_start(ap, fmt);
-    kvsnprintf(message, sizeof(message), fmt, ap);
-    va_end(ap);
-
-    char banner[256];
-    ksnprintf(banner, sizeof(banner), "\r\nPANIC: %s\n", message);
-    klogRaw(banner);
-
-    /* Raw frame-pointer backtrace: -fno-omit-frame-pointer keeps rbp chained through every
-     * function's prologue, so this needs no symbol table (that arrives in M2.1). Stops at a NULL
-     * rbp (kernelMain's own frame has none below it, since entry.asm zeroed rbp before calling
-     * it) or once rbp strays outside the boot stack -- a corrupted chain must not walk into
-     * unmapped or unrelated memory. */
-    uint64_t rbp = archFramePointer();
-    uint64_t stackBottom = (uint64_t)(uintptr_t)kernelBootStackBottom;
-    uint64_t stackTop = (uint64_t)(uintptr_t)kernelBootStackTop;
-    for (int frame = 0; frame < 16 && rbp != 0; frame++) {
-        /* frameWords[1] reads 8 bytes starting at rbp+8, so rbp must leave a full 16 bytes (both
-         * saved-rbp and return-address words) inside the mapped stack, not just 1; and rbp must be
-         * 8-aligned, since every legitimate frame pointer is (a corrupted chain landing on an
-         * unaligned address is exactly the kind of thing this bounds check exists to catch). */
-        if ((rbp & 7) != 0 || rbp < stackBottom || rbp > stackTop - 16) {
-            break;
-        }
-        const uint64_t *frameWords = (const uint64_t *)(uintptr_t)rbp;
-        uint64_t savedRbp = frameWords[0];
-        uint64_t returnAddr = frameWords[1];
-
-        char frameLine[64];
-        ksnprintf(frameLine, sizeof(frameLine), "  #%d 0x%016llx\n", frame, returnAddr);
-        klogRaw(frameLine);
-        rbp = savedRbp;
-    }
-
+static _Noreturn void panicExit(const char *message) {
     if (ktestIsActive()) {
         const char *name = ktestCurrentName();
         char failLine[256];
@@ -65,6 +24,61 @@ _Noreturn void panic(const char *fmt, ...) {
         klogRaw(failLine);
         archDebugExit(0x11);
     }
-
     archHaltForever();
+}
+
+static _Noreturn void panicV(const TrapFrame *frame, uint64_t callerFp, const char *fmt,
+                             va_list ap) {
+    archDisableInterrupts();
+    panicDepth++;
+
+    char message[200];
+    kvsnprintf(message, sizeof(message), fmt, ap);
+    va_end(ap);
+
+    if (panicDepth >= 3) {
+        archHaltForever();
+    }
+    if (panicDepth == 2) {
+        klogRaw("\r\nPANIC while already panicking; halting\n");
+        panicExit(message);
+    }
+
+    char banner[256];
+    ksnprintf(banner, sizeof(banner), "\r\nPANIC: %s\n", message);
+    klogRaw(banner);
+
+    if (frame != NULL) {
+        archTrapFrameDump(frame);
+        backtracePrint(archTrapFramePc(frame), archTrapFrameFp(frame));
+    } else {
+        backtracePrint(0, callerFp);
+    }
+
+    /* A ktest deliberately provoking this exact panic recovers instead of the fatal path below --
+     * checked only after the full report above prints, so a recovered panic still leaves the same
+     * symbolized banner/backtrace in the log that a real one would (ARCHITECTURE §24's "panic
+     * output includes a symbolized backtrace" guarantee doesn't stop applying just because a
+     * ktest was the one that triggered it). */
+    if (ktestPanicExpected(message)) {
+        klogRaw("ktest: expected panic caught\n");
+        panicDepth = 0;
+        ktestPanicRecover();
+    }
+
+    panicExit(message);
+}
+
+_Noreturn void panic(const char *fmt, ...) {
+    uint64_t callerFp = archFramePointer(); /* always_inline: this is panic()'s own rbp, whose
+                                             * frame record points at panic()'s *caller* */
+    va_list ap;
+    va_start(ap, fmt);
+    panicV(NULL, callerFp, fmt, ap);
+}
+
+_Noreturn void panicTrap(const TrapFrame *f, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    panicV(f, 0, fmt, ap);
 }

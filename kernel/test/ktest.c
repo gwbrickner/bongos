@@ -5,6 +5,7 @@
 #include "format.h"
 #include "klog.h"
 
+#include <arch/jmp.h>
 #include <arch/qemu.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -23,6 +24,45 @@ extern const KtestCase *const ktestsEnd[];
 
 static bool ktestModeActive = false;
 static const KtestCase *ktestRunning = NULL;
+
+#define KTEST_PANIC_PREFIX_MAX 64
+static bool panicExpectArmed = false;
+static char panicExpectPrefix[KTEST_PANIC_PREFIX_MAX];
+static ArchJmpBuf panicExpectJmp;
+
+void ktestArmExpectedPanic(KtestCtx *ktestCtx, const char *prefix) {
+    (void)ktestCtx;
+    if (!ktestModeActive) {
+        return;
+    }
+    uint32_t i = 0;
+    for (; i < KTEST_PANIC_PREFIX_MAX - 1 && prefix[i] != '\0'; i++) {
+        panicExpectPrefix[i] = prefix[i];
+    }
+    panicExpectPrefix[i] = '\0';
+    panicExpectArmed = true;
+}
+
+ArchJmpBuf *ktestPanicJmpBuf(void) {
+    return &panicExpectJmp;
+}
+
+bool ktestPanicExpected(const char *message) {
+    if (!panicExpectArmed) {
+        return false;
+    }
+    for (uint32_t i = 0; panicExpectPrefix[i] != '\0'; i++) {
+        if (message[i] != panicExpectPrefix[i]) {
+            return false;
+        }
+    }
+    panicExpectArmed = false;
+    return true;
+}
+
+_Noreturn void ktestPanicRecover(void) {
+    archJmpRestore(&panicExpectJmp, 1);
+}
 
 bool ktestIsActive(void) {
     return ktestModeActive;
@@ -141,8 +181,14 @@ void ktestRunFromCmdline(const char *cmdline) {
 
         ktestRunning = tc;
         KtestCtx ctx = {tc, false};
+        panicExpectArmed = false; /* defensive: a prior test must already have disarmed this */
         tc->fn(&ctx);
         ktestRunning = NULL;
+
+        if (panicExpectArmed) {
+            panicExpectArmed = false;
+            ktestFail(&ctx, __FILE__, __LINE__, "expected panic did not occur");
+        }
 
         if (ctx.failed) {
             realFailed++;

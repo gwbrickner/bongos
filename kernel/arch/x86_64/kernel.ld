@@ -1,5 +1,7 @@
-/* Kernel linker script (ARCHITECTURE §5.1/§6.1/§6.3, D-061). Produces exactly 4 PT_LOADs (R+X,
- * R, RW, and RW/NOBITS for the boot stack), each W^X. Link with:
+/* Kernel linker script (ARCHITECTURE §5.1/§6.1/§6.3/§7.1, D-061/D-072). Produces exactly 7
+ * PT_LOADs (R+X, R, RW, and four RW/NOBITS stacks -- the boot stack plus IST1/2/3, D-072 --
+ * each with its own unmapped guard page below it), each W^X, within ELF_MAX_SEGMENTS (8). Link
+ * with:
  *   ld.lld -T kernel/arch/x86_64/kernel.ld -nostdlib -static --emit-relocs \
  *          -z max-page-size=0x1000 --build-id=none --orphan-handling=error
  * --orphan-handling=error is deliberate: any unexpected alloc section (.got, .init_array, ...)
@@ -10,12 +12,16 @@ ENTRY(kernelEntry)
 KERNEL_LINK_BASE       = 0xFFFFFFFF80000000;
 KERNEL_WINDOW_SIZE     = 0x20000000; /* 512 MiB, ARCHITECTURE §6.1 */
 KERNEL_BOOT_STACK_SIZE = 0x4000;     /* 16 KiB, ARCHITECTURE §6.2 */
+KERNEL_IST_STACK_SIZE  = 0x4000;     /* 16 KiB per IST stack, ARCHITECTURE §7.1 */
 
 PHDRS {
     text   PT_LOAD FLAGS(5); /* R X */
     rodata PT_LOAD FLAGS(4); /* R   */
     data   PT_LOAD FLAGS(6); /* R W */
     stack  PT_LOAD FLAGS(6); /* R W, NOBITS; an unmapped guard page sits below it */
+    ist1   PT_LOAD FLAGS(6); /* R W, NOBITS; #DF stack, its own unmapped guard page below it */
+    ist2   PT_LOAD FLAGS(6); /* R W, NOBITS; NMI stack, its own unmapped guard page below it */
+    ist3   PT_LOAD FLAGS(6); /* R W, NOBITS; #MC stack, its own unmapped guard page below it */
 }
 
 SECTIONS {
@@ -39,6 +45,11 @@ SECTIONS {
         KEEP(*(.ktests))
         ktestsEnd = .;
     } :rodata
+    .ksyms : ALIGN(8) {
+        kernelKsymsStart = .;
+        KEEP(*(.ksyms))
+        kernelKsymsEnd = .;
+    } :rodata
     . = ALIGN(4096);
     kernelRodataEnd = .;
 
@@ -60,6 +71,28 @@ SECTIONS {
         KEEP(*(.bootstack))
         kernelBootStackTop = .;
     } :stack
+
+    . = ALIGN(4096); . += 4096; /* unmapped guard page below IST1 */
+    .iststack1 (NOLOAD) : ALIGN(4096) {
+        kernelIst1StackBottom = .;
+        KEEP(*(.iststack1))
+        kernelIst1StackTop = .;
+    } :ist1
+
+    . = ALIGN(4096); . += 4096; /* unmapped guard page below IST2 */
+    .iststack2 (NOLOAD) : ALIGN(4096) {
+        kernelIst2StackBottom = .;
+        KEEP(*(.iststack2))
+        kernelIst2StackTop = .;
+    } :ist2
+
+    . = ALIGN(4096); . += 4096; /* unmapped guard page below IST3 */
+    .iststack3 (NOLOAD) : ALIGN(4096) {
+        kernelIst3StackBottom = .;
+        KEEP(*(.iststack3))
+        kernelIst3StackTop = .;
+    } :ist3
+
     . = ALIGN(4096);
     kernelImageEnd = .;
 
@@ -97,3 +130,9 @@ ASSERT(kernelImageEnd - kernelImageStart <= KERNEL_WINDOW_SIZE,
        "kernel.ld: image exceeds the 512 MiB kernel window")
 ASSERT(kernelBootStackTop - kernelBootStackBottom == KERNEL_BOOT_STACK_SIZE,
        "kernel.ld: boot stack must be exactly 16 KiB")
+ASSERT(kernelIst1StackTop - kernelIst1StackBottom == KERNEL_IST_STACK_SIZE,
+       "kernel.ld: IST1 (#DF) stack must be exactly 16 KiB")
+ASSERT(kernelIst2StackTop - kernelIst2StackBottom == KERNEL_IST_STACK_SIZE,
+       "kernel.ld: IST2 (NMI) stack must be exactly 16 KiB")
+ASSERT(kernelIst3StackTop - kernelIst3StackBottom == KERNEL_IST_STACK_SIZE,
+       "kernel.ld: IST3 (#MC) stack must be exactly 16 KiB")
