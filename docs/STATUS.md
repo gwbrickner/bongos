@@ -5,8 +5,10 @@ _Main-line status. Parallel-lane sessions don't edit this file; they track progr
 
 ## Current milestone
 **M2.1 GDT, IDT, exceptions, hardening runtime** -- in progress (see `docs/logs/M2.1.md`).
-Consulting the `architect` subagent first (interrupts/exceptions per CLAUDE.md); implementation
-not yet started.
+Architect design received (D-072 through D-078). Step 1's GDT+TSS half is built and loads at
+runtime (`kernel/arch/x86_64/cpu-init.c`, called first thing in `kernelMain`); a `qemu-tester`
+boot-regression check is in flight. IDT/exception stubs, symbol table, UBSan, stack-protector
+reseed, and the ktest fault-catch mechanism are still to come.
 
 ## Phase
 1: Acapulco Gold
@@ -62,12 +64,12 @@ not yet started.
   `docs/logs/M1.4.md`'s reviewer-round entries. PR #4 merged.
 
 ## Next step
-M2.1 is in progress (`docs/logs/M2.1.md`). Waiting on the `architect` subagent's design response
-for the GDT/TSS/IDT layout, IST stack allocation, exception-stub generation, the C-level
-TrapFrame/handler design, the compressed-symbol-table embedding approach, UBSan runtime scope,
-and the ktest-recoverable-fault mechanism (how a ktest deliberately triggers #PF/#UD/a stack
-smash and has the handler report PASS/FAIL and continue to the next ktest instead of panicking).
-Once it returns: record any new D-0xx decisions, then implement step 1 (GDT+TSS+IDT) first.
+Once the pending `qemu-tester` boot check on the GDT/TSS change confirms no regression, continue
+M2.1 step 1's IDT half: `kernel/arch/x86_64/trap-entry.asm` (256-vector stub table + common
+trampoline), `trap-frame.h`, `trap.c` (`trapDispatch`, IDT gate builder), extending
+`archCpuInitBsp()` to build+load the real IDT (D-074). Then: KSYM v1 symbol table + `tools/ksyms`
+(D-075), UBSan runtime (D-076), stack-protector reseed (D-077), and `archTrapCatch` + the
+prescribed ktests (D-078). Full design is in `docs/logs/M2.1.md` and DECISIONS.md D-072-D-078.
 
 ## Blockers
 _(none)_

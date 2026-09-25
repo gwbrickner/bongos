@@ -7,6 +7,7 @@
 #include "ktest.h"
 #include "panic.h"
 
+#include <arch/cpu-init.h>
 #include <arch/cpu.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -63,6 +64,11 @@ static void kernelPrintMemoryMapSummary(const BootInfo *bi) {
 /* No locks; boot-time only (called exactly once, from entry.asm, on the kernel's own boot stack);
  * never returns. */
 _Noreturn void kernelMain(const BootInfo *bi) {
+    /* First: installs the real GDT/TSS (ARCHITECTURE §7.1, D-072), replacing entry.asm's
+     * temporary boot GDT, so every fault from here on (once the IDT joins this same init
+     * sequence in the next M2.1 step) is reported rather than triple-faulting. */
+    archCpuInitBsp();
+
     serialInit();
     klogInit();
 

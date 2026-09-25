@@ -29,9 +29,9 @@ KERNEL_CFLAGS += $(if $(filter 1,$(RELEASE)),-O2,-O1)
 # with byte-identical glyphs.
 KERNEL_C_SOURCES := $(sort $(wildcard kernel/core/*.c) $(wildcard kernel/drivers/serial/*.c) \
                            $(wildcard kernel/drivers/fbcon/*.c) $(wildcard kernel/test/*.c) \
-                           kernel/arch/x86_64/qemu.c boot/common/fbtext.c \
-                           boot/common/boot-status.c) $(CONSOLE_FONT_C)
-KERNEL_ASM_SOURCES := kernel/arch/x86_64/entry.asm
+                           $(wildcard kernel/arch/x86_64/*.c) $(wildcard kernel/arch/x86_64/test/*.c) \
+                           boot/common/fbtext.c boot/common/boot-status.c) $(CONSOLE_FONT_C)
+KERNEL_ASM_SOURCES := $(sort $(wildcard kernel/arch/x86_64/*.asm))
 
 KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD)/%.o,$(KERNEL_C_SOURCES))
 KERNEL_ASM_OBJECTS := $(patsubst %.asm,$(KERNEL_BUILD)/%.o,$(KERNEL_ASM_SOURCES))
