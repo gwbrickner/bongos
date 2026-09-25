@@ -1,14 +1,12 @@
-/* See kernel/include/arch/cpu-init.h. GDT + TSS (ARCHITECTURE §7.1, D-072): one static BSP-only
- * table built and loaded at runtime -- a TSS base address can't be expressed in a static
- * initializer, and building at runtime is KASLR-safe. IDT construction/loading joins this same
- * init sequence in the next step (LIDT must come after LTR: an IST gate taken before TR is valid
- * reads IST from garbage and triple-faults), so archCpuInitBsp() currently only installs the
- * GDT/TSS and leaves entry.asm's temporary null IDT in place -- no behavior change yet, since a
- * limit-0 IDT was already going to triple-fault on any exception either way. */
+/* See kernel/include/arch/cpu-init.h. GDT + TSS + IDT (ARCHITECTURE §7.1/§7.2, D-072/D-074): one
+ * static BSP-only table built and loaded at runtime -- a TSS base address can't be expressed in a
+ * static initializer, and building at runtime is KASLR-safe. LIDT runs *after* LTR: an IST gate
+ * taken before TR is valid reads IST from garbage and triple-faults. */
 #include <arch/cpu-init.h>
 
 #include "include/cpu-impl.h"
 #include "include/gdt.h"
+#include "include/trap-impl.h"
 
 #include "panic.h"
 #include "sections.h"
@@ -94,4 +92,6 @@ void archCpuInitBsp(void) {
     };
     archLoadGdt(&gdtr);
     archLoadTss(GDT_SEL_TSS);
+
+    trapIdtInit(); /* must come after archLoadTss(): see this file's top comment */
 }

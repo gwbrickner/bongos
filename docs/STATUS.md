@@ -5,10 +5,12 @@ _Main-line status. Parallel-lane sessions don't edit this file; they track progr
 
 ## Current milestone
 **M2.1 GDT, IDT, exceptions, hardening runtime** -- in progress (see `docs/logs/M2.1.md`).
-Architect design received (D-072 through D-078). Step 1's GDT+TSS half is built and loads at
-runtime (`kernel/arch/x86_64/cpu-init.c`, called first thing in `kernelMain`); a `qemu-tester`
-boot-regression check is in flight. IDT/exception stubs, symbol table, UBSan, stack-protector
-reseed, and the ktest fault-catch mechanism are still to come.
+Architect design received (D-072 through D-078). Step 1's GDT+TSS half is confirmed working under
+real QEMU. The IDT half (256 exception stubs, `trapDispatch`, panic report format, a shared
+multi-stack backtrace helper, `panic()` split into reusable `panicEnter`/`panicFinish`, and a new
+`trap_int3_resumes` ktest) is now also built; a `qemu-tester` boot-regression check specifically
+watching for that ktest's PASS result is in flight. Symbol table, UBSan, stack-protector reseed,
+and the ktest fault-catch mechanism are still to come.
 
 ## Phase
 1: Acapulco Gold
