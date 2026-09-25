@@ -4,10 +4,11 @@ _Main-line status. Parallel-lane sessions don't edit this file; they track progr
 **Last updated:** 2026-09-25 (M1.4 done, reviewed, PR open)
 
 ## Current milestone
-None in progress. M1.4 is done and reviewed (see `docs/logs/M1.4.md`); PR open,
-`needs-owner: yes` (D-068 touches the boot handoff ABI, memory management/PAT, and an on-disk
-format). **Next: M2.1 GDT, IDT, exceptions, hardening runtime**, once M1.4 merges. Needs the
-`architect` subagent first (paging/interrupts per CLAUDE.md).
+None in progress. M1.4 is done and reviewed (see `docs/logs/M1.4.md`); PR #4
+(https://github.com/gwbrickner/bongos/pull/4) open, `Reviewer: PASS`, `needs-owner: yes` (D-068
+touches the boot handoff ABI, memory management/PAT, and an on-disk format). **Next: M2.1 GDT,
+IDT, exceptions, hardening runtime**, once M1.4 merges. Needs the `architect` subagent first
+(paging/interrupts per CLAUDE.md).
 
 ## Phase
 1: Acapulco Gold
@@ -60,7 +61,7 @@ format). **Next: M2.1 GDT, IDT, exceptions, hardening runtime**, once M1.4 merge
   serial-drain bug that could hide a failing ktest's output, and a font glyph collision ('S'/'5'
   identical) -- all 9 fixed, verified individually and then together (`make format-check`,
   `make host-tests` 131/131, `make image`, `make test` including regenerated GUI references), see
-  `docs/logs/M1.4.md`'s reviewer-round entries. PR open, `Reviewer: PASS`, `needs-owner: yes`.
+  `docs/logs/M1.4.md`'s reviewer-round entries. PR #4 open, `Reviewer: PASS`, `needs-owner: yes`.
 
 ## Next step
 Once M1.4's PR is reviewed/merged by the owner, start M2.1 (GDT, IDT, exceptions, hardening
