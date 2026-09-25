@@ -13,6 +13,7 @@
 #include "backtrace.h"
 #include "format.h"
 #include "klog.h"
+#include "ksym.h"
 #include "panic.h"
 
 #include <stddef.h>
@@ -117,10 +118,12 @@ static _Noreturn void trapReportAndPanic(const TrapFrame *f, uint64_t cr2) {
         klogRaw(cr2Line);
     }
 
+    char sym[80];
+    ksymSymbolize(f->rip, sym, sizeof(sym));
     char regLine[200];
     ksnprintf(regLine, sizeof(regLine),
-              "  RIP=0x%016llx CS=0x%llx SS=0x%llx RFLAGS=0x%llx RSP=0x%016llx\n",
-              (unsigned long long)f->rip, (unsigned long long)f->cs, (unsigned long long)f->ss,
+              "  RIP=0x%016llx <%s> CS=0x%llx SS=0x%llx RFLAGS=0x%llx RSP=0x%016llx\n",
+              (unsigned long long)f->rip, sym, (unsigned long long)f->cs, (unsigned long long)f->ss,
               (unsigned long long)f->rflags, (unsigned long long)f->rsp);
     klogRaw(regLine);
     ksnprintf(regLine, sizeof(regLine),

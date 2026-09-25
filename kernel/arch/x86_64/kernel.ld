@@ -46,6 +46,14 @@ SECTIONS {
         KEEP(*(.ktests))
         ktestsEnd = .;
     } :rodata
+    /* After .ktests, not before: text/rodata layout up to this point must stay identical between
+     * the two-pass link's pass 1 and pass 2 (D-075, docs/specs/ksyms.md), so no function's
+     * address can depend on .ksyms's own size. */
+    .ksyms : ALIGN(8) {
+        ksymsStart = .;
+        KEEP(*(.ksyms))
+        ksymsEnd = .;
+    } :rodata
     . = ALIGN(4096);
     kernelRodataEnd = .;
 

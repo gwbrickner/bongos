@@ -25,5 +25,7 @@ extern const uint8_t kernelIst2Bottom[];
 extern const uint8_t kernelIst2Top[];
 extern const uint8_t kernelIst3Bottom[];
 extern const uint8_t kernelIst3Top[];
+extern const uint8_t ksymsStart[];
+extern const uint8_t ksymsEnd[];
 
 #endif

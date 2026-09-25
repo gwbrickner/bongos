@@ -26,7 +26,9 @@ KERNEL_CFLAGS += $(if $(filter 1,$(RELEASE)),-O2,-O1)
 # fbcon (kernel/drivers/fbcon) links boot/common/fbtext.c's glyph-blit primitive and
 # boot-status.c (for logging BootStatus failures), plus mk/font.mk's generated font data --
 # the same files the loader itself links, so the loader's menu and the kernel's console draw
-# with byte-identical glyphs.
+# with byte-identical glyphs. The generated KSYM blob (KSYMS_EMPTY_C/KSYMS_C, D-075 below) is
+# deliberately NOT in this list -- it needs a different object per link pass, so it's added
+# explicitly at each $(ld.lld) invocation instead of once here.
 KERNEL_C_SOURCES := $(sort $(wildcard kernel/core/*.c) $(wildcard kernel/drivers/serial/*.c) \
                            $(wildcard kernel/drivers/fbcon/*.c) $(wildcard kernel/test/*.c) \
                            $(wildcard kernel/arch/x86_64/*.c) $(wildcard kernel/arch/x86_64/test/*.c) \
@@ -46,10 +48,46 @@ $(KERNEL_BUILD)/%.o: %.asm
 	@mkdir -p $(dir $@)
 	$(KERNEL_AS) -f elf64 -g -F dwarf -o $@ $<
 
-$(KERNEL_ELF): $(KERNEL_OBJECTS) $(KERNEL_LD)
+# KSYM v1 (D-075, docs/specs/ksyms.md): the kernel's own final symbol addresses have to be
+# embedded in that same binary, so it's linked twice. Pass 1 links with an empty placeholder blob
+# (tools/ksyms empty); tools/ksyms gen reads pass 1's own symtab to build the real blob; pass 2
+# (the real $(KERNEL_ELF)) links with that. `.ksyms` sits in .rodata *after* .ktests (kernel.ld),
+# so no function's address differs between the two passes -- ksyms check re-verifies that by
+# byte-comparing a fresh encoding of the final ELF's own symbols against what actually shipped in
+# its .ksyms section, failing (and deleting) the build on any mismatch.
+KSYMS_DIR   := $(BUILD)/tools/ksyms
+KSYMS_BIN   := $(KSYMS_DIR)/ksyms
+KSYMS_SRCS  := tools/ksyms/main.c tools/ksyms/elf-read.c tools/ksyms/ksyms-encode.c
+KSYMS_HDRS  := tools/ksyms/elf-read.h tools/ksyms/ksyms-encode.h
+
+$(KSYMS_BIN): $(KSYMS_SRCS) $(KSYMS_HDRS)
+	@mkdir -p $(dir $@)
+	clang -std=c17 -Wall -Wextra -Werror -O1 -o $@ $(KSYMS_SRCS)
+
+KSYMS_EMPTY_C := $(BUILD)/gen/ksyms-empty.c
+KSYMS_C       := $(BUILD)/gen/ksyms.c
+KSYMS_EMPTY_OBJECT := $(patsubst %.c,$(KERNEL_BUILD)/%.o,$(KSYMS_EMPTY_C))
+KSYMS_OBJECT        := $(patsubst %.c,$(KERNEL_BUILD)/%.o,$(KSYMS_C))
+KERNEL_PASS1_ELF := $(KERNEL_BUILD)/kernel.pass1.elf
+
+$(KSYMS_EMPTY_C): $(KSYMS_BIN)
+	@mkdir -p $(dir $@)
+	$(KSYMS_BIN) empty > $@
+
+$(KERNEL_PASS1_ELF): $(KERNEL_OBJECTS) $(KSYMS_EMPTY_OBJECT) $(KERNEL_LD)
 	@mkdir -p $(dir $@)
 	ld.lld -T $(KERNEL_LD) -nostdlib -static --emit-relocs -z max-page-size=0x1000 \
-		--build-id=none --orphan-handling=error -o $@ $(KERNEL_OBJECTS)
+		--build-id=none --orphan-handling=error -o $@ $(KERNEL_OBJECTS) $(KSYMS_EMPTY_OBJECT)
+
+$(KSYMS_C): $(KSYMS_BIN) $(KERNEL_PASS1_ELF)
+	@mkdir -p $(dir $@)
+	$(KSYMS_BIN) gen $(KERNEL_PASS1_ELF) > $@
+
+$(KERNEL_ELF): $(KERNEL_OBJECTS) $(KSYMS_OBJECT) $(KERNEL_LD) $(KSYMS_BIN)
+	@mkdir -p $(dir $@)
+	ld.lld -T $(KERNEL_LD) -nostdlib -static --emit-relocs -z max-page-size=0x1000 \
+		--build-id=none --orphan-handling=error -o $@ $(KERNEL_OBJECTS) $(KSYMS_OBJECT)
+	@$(KSYMS_BIN) check $@ || { rm -f $@; exit 1; }
 
 .PHONY: kernel
 kernel: branding $(KERNEL_ELF)
