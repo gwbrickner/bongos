@@ -76,7 +76,7 @@ workflow is green on the PR.
 
 **Done when:** `make test` boots the loader under OVMF and sees the banner.
 
-### [ ] M1.3 Kernel skeleton + real handoff `needs-owner`
+### [x] M1.3 Kernel skeleton + real handoff `needs-owner`
 **Needs:** M1.2
 1. Kernel side:
    - `kernel.ld` (higher half at `0xFFFFFFFF80000000`, sections aligned for W^X)

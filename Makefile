@@ -10,6 +10,7 @@ RELEASE ?= 0   # wired to -O2 (vs. debug -O1 + UBSan/lock validator) starting wi
 include mk/branding.mk
 include mk/format.mk
 include mk/host-tests.mk
+include mk/kernel.mk
 include mk/image.mk
 include mk/qemu.mk
 include mk/test.mk
