@@ -1,10 +1,19 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M2.1 merged (PR #5); M2.2 Physical memory manager done, [PR #6](https://github.com/gwbrickner/bongos/pull/6) open; M2.3 is next)
+**Last updated:** 2026-09-25 (M2.3 Kernel paging started, resuming from "Next milestone")
 
 ## Current milestone
-None in progress. **M2.2 Physical memory manager** is done -- see `docs/logs/M2.2.md` for the full
+**M2.3 Kernel paging** is in progress -- see `docs/logs/M2.3.md` for the plan and running log.
+Working on the current session's pinned branch `claude/vigilant-planck-fxpto9` (up to date with
+`main`, which has M1.1-M2.2 merged) rather than a fresh `m2-3-kernel-paging` branch -- the cloud
+session's own environment instructions pin the branch, overriding CLAUDE.md's per-milestone-branch
+convention here; since nothing else is on top of `main` on this branch, it's equivalent in
+practice. Next step: consult the `architect` subagent for the paging design (CLAUDE.md
+consult-first list), then implement ROADMAP.md M2.3 steps 1-6 in `kernel/arch/x86_64/` and
+`kernel/mm/`.
+
+**M2.2 Physical memory manager** is done -- see `docs/logs/M2.2.md` for the full
 writeup and its Summary section for the release notes. ROADMAP.md's M2.2 box is checked. The
 `reviewer` subagent's first pass found one Critical finding (a real double-free bug: freeing the
 *upper* half of a buddy pair could abandon its own head page in a stale allocated state, letting a
