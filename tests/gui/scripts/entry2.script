@@ -1,0 +1,4 @@
+# Boots the second entry ("Safe mode") over serial digit selection and confirms its cmdline.
+expect loader: menu ready
+send 2
+expect boot: cmdline: "ktest=all menutest=2 cpus=1 nomodules fbcon=on"

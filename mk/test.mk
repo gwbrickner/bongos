@@ -3,15 +3,31 @@
 # `make image` but with tests/harness/ktest-boot.cfg baked in, so the kernel runs `ktest=all` and
 # reports PASS/FAIL through the real isa-debug-exit/KTEST protocol (D-063) instead of the
 # --expect-serial banner-match bridge M1.2 used before the kernel existed (D-057). The release/USB
-# image (build/bongos.img) never runs ktests or writes port 0xF4.
-.PHONY: test test-full _check-ktest-pass
-test: image
+# image (build/bongos.img) never runs ktests or writes port 0xF4. `make test` also runs the M1.4
+# GUI screenshot tests (D-070, tests/gui/run.sh) and a countdown smoke test against the shipped
+# boot.cfg, on top of the ktest matrix.
+.PHONY: test test-full _check-ktest-pass gui-test update-refs
+test: image imgdiff
 	tests/harness/run-matrix.sh tests/harness/matrix.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix.conf
+	tests/gui/run.sh --fw uefi
+	tests/harness/run-qemu.sh --image $(IMAGE) --name countdown-smoke --timeout 30 \
+		--expect-serial "loader: timeout, booting default" --expect-serial "kernel: init done"
 
 test-full: image
 	tests/harness/run-matrix.sh tests/harness/matrix-full.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix-full.conf
+
+# Re-runs the GUI tests alone (skips the ktest matrix and countdown smoke) -- useful while
+# iterating on a screenshot test without waiting on the rest of `make test`.
+gui-test: image imgdiff
+	tests/gui/run.sh --fw uefi
+
+# Captures fresh GUI test reference PNGs. The caller must view every regenerated PNG and record
+# why in the milestone log before committing (CLAUDE.md: regenerating a reference to turn a
+# failing test green counts as weakening it).
+update-refs: image imgdiff
+	tests/gui/run.sh --fw uefi --update-refs
 
 # A QEMU exit code of 33 (run-qemu.sh) only proves *some* ktest passed -- if bootinfo_test.c were
 # ever accidentally dropped, or bootinfo_valid renamed, `make test` would still report PASS on

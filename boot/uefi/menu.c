@@ -137,14 +137,21 @@ uint32_t loaderMenuRun(EFI_SYSTEM_TABLE *st, const char *text, uint64_t textLen,
     BootMenuState state;
     bootMenuInit(&state, cfg);
 
-    drawMenu(fx, &state, cfg->entryCount);
-    serialPrintMenu(cfg->entryCount, cfg->defaultIndex);
-    /* Printed only after drawing: this is the harness's screendump sync marker (D-070). */
-    loaderSerialWriteString("loader: menu ready\n");
-
     EFI_BOOT_SERVICES *bs = st->BootServices;
     EFI_SIMPLE_TEXT_INPUT_PROTOCOL *conIn = st->ConIn;
+    /* Reset *before* printing the "menu ready" sync marker (found the hard way: a GUI test
+     * script's `send` can follow right on the heels of its `expect "loader: menu ready"` with no
+     * intervening delay, and EFI_SIMPLE_TEXT_INPUT_PROTOCOL.Reset()'s "reset the input device
+     * hardware" can discard any keystroke that arrived between resume and this call -- if Reset
+     * ran after the marker, a fast-enough `send` would be silently swallowed here rather than
+     * seen by the WaitForKey loop below). */
     conIn->Reset(conIn, FALSE);
+
+    drawMenu(fx, &state, cfg->entryCount);
+    serialPrintMenu(cfg->entryCount, cfg->defaultIndex);
+    /* Printed only after drawing and after Reset: this is the harness's sync marker (D-070) for
+     * both screendump timing and "it's now safe to send a key". */
+    loaderSerialWriteString("loader: menu ready\n");
 
     bool useTimer = state.timeoutSec != BOOT_CFG_TIMEOUT_FOREVER;
     EFI_EVENT timerEvent = NULL;

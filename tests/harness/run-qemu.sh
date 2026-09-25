@@ -19,11 +19,16 @@ usage: run-qemu.sh [options]
   --expect-serial S banner-match mode: PASS once every given S has appeared on serial, instead of
                      waiting on the isa-debug-exit/KTEST protocol (for milestones before the
                      kernel exists, e.g. M1.2's loader, which only prints and halts). Repeatable.
+  --script FILE     GUI-test mode (D-070): starts QEMU paused (-S) with the serial port and QMP
+                     on unix sockets, then hands off to tests/harness/qemu-script.py to run FILE
+                     (expect/screendump/send steps) before letting the guest (ktest=all) drive
+                     QEMU to its own isa-debug-exit, mapped to PASS/FAIL/HANG as usual.
+                     Screendumps land in build/shots/NAME-<step-name>.ppm.
 Monitor socket: build/run/NAME.monitor (screendump, sendkey, system_powerdown).
 Serial log:     build/logs/NAME.serial.log
 USAGE
 }
-IMAGE=build/bongos.img FW=uefi CPUS=1 MEM=512 TIMEOUT=120 NAME="" DEBUG=0 INTERACTIVE=0 GDBMODE=0 EXTRA=""
+IMAGE=build/bongos.img FW=uefi CPUS=1 MEM=512 TIMEOUT=120 NAME="" DEBUG=0 INTERACTIVE=0 GDBMODE=0 EXTRA="" SCRIPT=""
 EXPECT_PATTERNS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -31,6 +36,7 @@ while [ $# -gt 0 ]; do
         --mem) MEM=$2; shift 2 ;; --timeout) TIMEOUT=$2; shift 2 ;; --name) NAME=$2; shift 2 ;;
         --debug) DEBUG=1; shift ;; --interactive) INTERACTIVE=1; shift ;; --gdb) GDBMODE=1; shift ;;
         --extra) EXTRA=$2; shift 2 ;; --expect-serial) EXPECT_PATTERNS+=("$2"); shift 2 ;;
+        --script) SCRIPT=$2; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option $1"; usage; exit 2 ;;
     esac
@@ -88,6 +94,62 @@ fi
 if [ "$INTERACTIVE" = 1 ]; then
     # shellcheck disable=SC2086
     exec "${BASE[@]}" -serial stdio $EXTRA
+fi
+
+if [ -n "$SCRIPT" ]; then
+    # GUI-test mode (D-070): QEMU starts paused so qemu-script.py can connect both sockets before
+    # any guest code runs; the script itself issues `cont`. Serial goes over a chardev socket
+    # (not `-serial file:`, which is output-only and can't carry the menu key presses `send`
+    # steps write) alongside the usual HMP `-monitor` and the new QMP socket `screendump` needs.
+    : > "$LOG"
+    SERIAL_SOCK="build/run/$NAME.serial.sock"
+    QMP_SOCK="build/run/$NAME.qmp"
+    rm -f "$SERIAL_SOCK" "$QMP_SOCK"
+    SHOTS_DIR="build/shots"
+    mkdir -p "$SHOTS_DIR"
+    # shellcheck disable=SC2086
+    "${BASE[@]}" -display none -S \
+        -chardev "socket,id=ser0,path=$SERIAL_SOCK,server=on,wait=off" -serial chardev:ser0 \
+        -qmp "unix:$QMP_SOCK,server=on,wait=off" \
+        $EXTRA < /dev/null &
+    qemupid=$!
+    trap 'kill "$qemupid" 2>/dev/null' EXIT
+
+    python3 tests/harness/qemu-script.py --serial "$SERIAL_SOCK" --qmp "$QMP_SOCK" \
+        --log "$LOG" --shots "$SHOTS_DIR" --prefix "$FW" --timeout "$TIMEOUT" "$SCRIPT"
+    scriptStatus=$?
+
+    # The script's own steps are done; the guest's `ktest=all` cmdline still needs to run its
+    # ktests and drive QEMU to isa-debug-exit on its own, within whatever's left of the timeout.
+    SECONDS=0
+    while kill -0 "$qemupid" 2>/dev/null && [ "$SECONDS" -lt "$TIMEOUT" ]; do
+        sleep 0.2
+    done
+    if kill -0 "$qemupid" 2>/dev/null; then
+        kill "$qemupid" 2>/dev/null
+        wait "$qemupid" 2>/dev/null
+        qemuExit=124
+    else
+        wait "$qemupid"
+        qemuExit=$?
+    fi
+    trap - EXIT
+
+    if [ "$scriptStatus" -ne 0 ]; then
+        echo "RESULT $NAME: ERROR (script $SCRIPT failed; see above and $LOG)"
+        exit 1
+    fi
+
+    fails=$(grep -c '^KTEST FAIL' "$LOG" 2>/dev/null || true)
+    case $qemuExit in
+        33)  echo "RESULT $NAME: PASS"; exit 0 ;;
+        35)  echo "RESULT $NAME: FAIL ($fails failing ktests; see $LOG)" ;;
+        124) echo "RESULT $NAME: HANG (qemu did not exit after the script completed; see $LOG)" ;;
+        0)   echo "RESULT $NAME: CRASH (reset/triple fault or poweroff before reporting; see $LOG)" ;;
+        *)   echo "RESULT $NAME: ERROR (qemu exit $qemuExit; see $LOG)" ;;
+    esac
+    grep '^KTEST FAIL' "$LOG" 2>/dev/null | head -n 10
+    exit 1
 fi
 
 if [ "${#EXPECT_PATTERNS[@]}" -gt 0 ]; then
