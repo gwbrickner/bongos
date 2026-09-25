@@ -1,27 +1,24 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M2.1 done, reviewer PASS, [PR #5](https://github.com/gwbrickner/bongos/pull/5) open; M2.2 is next)
+**Last updated:** 2026-09-25 (M2.1 merged (PR #5); M2.2 Physical memory manager in progress)
 
 ## Current milestone
-None in progress. **M2.1 GDT, IDT, exceptions, hardening runtime** is done -- see `docs/logs/
-M2.1.md` for the full writeup and its Summary section for the release notes. ROADMAP.md's M2.1 box
-is checked. The `reviewer` subagent found no Critical findings on the full milestone diff; all 8
-Should-fix items it raised were fixed (see the log's reviewer-round entry) -- a `ubsanReporting`
-recursion-guard ordering bug, a UBSan RIP that resolved to the wrong function, a still-armed-catch
-race that could misattribute an unrelated later fault, incomplete RFLAGS clearing on a caught-fault
-resume, an `archTrapCatchResume` that depended on stack memory the very mechanism under test could
-corrupt (fixed at the root, not just worked around), a missing automated check that a panic
-report's backtrace is actually symbolized, and a missing contract comment on `trapDispatch`. PR
-open against `main`, `needs-owner: yes` (D-045/§25 -- interrupts, security-sensitive stack-
-protector/UBSan runtimes, and a boot-ABI change to the kernel ELF's PT_LOAD count, D-073).
+**M2.2 Physical memory manager** (`needs-owner`, ROADMAP.md), branch `claude/bongos-resume-status-jwzkbk`
+(session-assigned; see log for why this replaces the `m2-2-<slug>` convention). In progress -- see
+`docs/logs/M2.2.md` for the plan and running log. M2.1 (below) is done and merged.
 
-**Next milestone: M2.2 Physical memory manager** (`needs-owner`, ROADMAP.md). Needs M2.1, now
-done. Steps: an early bump allocator over the BootInfo map; the `Page` array at the metadata
-region (ARCHITECTURE §6.1); a buddy allocator (orders 0-10, DMA32/NORMAL zones); a per-CPU page
-cache (BSP-only for now); reclaiming `LOADER_RECLAIM` memory after switching stacks (see "Questions
-for owner" below -- this step's wording may need an owner decision before it starts). Consult the
-`architect` subagent first (memory management is on CLAUDE.md's consult-first list).
+**M2.1 GDT, IDT, exceptions, hardening runtime**: merged to `main` via
+[PR #5](https://github.com/gwbrickner/bongos/pull/5). ROADMAP.md's M2.1 box is checked. The
+`reviewer` subagent found no Critical findings on the full milestone diff; all 8 Should-fix items
+it raised were fixed (see the log's reviewer-round entry) -- a `ubsanReporting` recursion-guard
+ordering bug, a UBSan RIP that resolved to the wrong function, a still-armed-catch race that could
+misattribute an unrelated later fault, incomplete RFLAGS clearing on a caught-fault resume, an
+`archTrapCatchResume` that depended on stack memory the very mechanism under test could corrupt
+(fixed at the root, not just worked around), a missing automated check that a panic report's
+backtrace is actually symbolized, and a missing contract comment on `trapDispatch`. Merged against
+`main`, was `needs-owner: yes` (D-045/§25 -- interrupts, security-sensitive stack-protector/UBSan
+runtimes, and a boot-ABI change to the kernel ELF's PT_LOAD count, D-073).
 
 ## Phase
 1: Acapulco Gold
@@ -96,14 +93,13 @@ for owner" below -- this step's wording may need an owner decision before it sta
   missing contract comment) -- all fixed, see `docs/logs/M2.1.md`'s reviewer-round entry.
 
 ## Next step
-M2.1's PR is being opened now (title `M2.1: GDT, IDT, exceptions, hardening runtime`, body from
-`.github/pull_request_template.md`, `Reviewer: PASS`, `needs-owner: yes`). Once it's open: a fresh
-session (or this one, if continuing) starts M2.2 following the normal session protocol -- create
-branch `m2-2-<slug>`, copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.2.md`, consult the `architect`
-subagent for the physical memory manager's design (buddy allocator layout, the `Page` array's
-exact placement in the metadata region, per-CPU page cache API shape), then implement incrementally
-per the session protocol (build+test+commit after every working step). See the M2.2 summary above
-and ROADMAP.md's own M2.2 section for the full step list.
+M2.2 is in progress on `docs/logs/M2.2.md`. Consult the `architect` subagent for the physical
+memory manager's design (buddy allocator layout, the `Page` array's exact placement in the
+metadata region, per-CPU page cache API shape, and how to handle the LOADER_RECLAIM-timing
+question below), then implement incrementally per the session protocol (build+test+commit after
+every working step): early bump allocator -> `Page` array -> buddy allocator (DMA32/NORMAL,
+orders 0-10) -> BSP page cache -> the 4 ktests -> `/proc/meminfo`-style boot totals. See
+`docs/logs/M2.2.md` for the concrete sub-step breakdown once the architect's design lands.
 
 ## Blockers
 _(none)_
