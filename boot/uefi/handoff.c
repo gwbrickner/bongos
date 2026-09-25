@@ -443,24 +443,32 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     }
 
     uint32_t selectedIndex = cfg.defaultIndex;
-    if (cfg.timeoutSec > 0 && fb.phys != 0) {
+    if (cfg.timeoutSec > 0) {
+        /* ARCHITECTURE §5.2: the menu runs on screen *and* serial whenever there's a timeout to
+         * show one for -- never skipped outright just because no framebuffer came up. `fxPtr`
+         * stays NULL (serial-only) unless a usable framebuffer geometry is actually available;
+         * loaderMenuRun()/drawRow()/drawCountdown() all tolerate a NULL fx (D-071). */
         BootFbText fx;
-        /* Pre-ExitBootServices, every physical address the firmware hands out (including a GOP
-         * framebuffer BAR) is still directly usable as a pointer -- the same trick
-         * bootPhysToPtr() documents for BootInfo/the kernel image. This is not the kernel's HHDM
-         * mapping (built later, after the menu, once the final framebuffer is known). */
-        BootStatus fxSt = fbTextInit(&fx, (uint8_t *)bootPhysToPtr(fb.phys), fb.width, fb.height,
-                                     fb.pitch, fb.redShift, fb.redSize, fb.greenShift, fb.greenSize,
-                                     fb.blueShift, fb.blueSize);
-        if (fxSt == BOOT_OK) {
-            selectedIndex = loaderMenuRun(st, cfgText, cfgTextLen, &cfg, &fx);
+        BootFbText *fxPtr = NULL;
+        if (fb.phys != 0) {
+            /* Pre-ExitBootServices, every physical address the firmware hands out (including a
+             * GOP framebuffer BAR) is still directly usable as a pointer -- the same trick
+             * bootPhysToPtr() documents for BootInfo/the kernel image. This is not the kernel's
+             * HHDM mapping (built later, after the menu, once the final framebuffer is known). */
+            BootStatus fxSt =
+                fbTextInit(&fx, (uint8_t *)bootPhysToPtr(fb.phys), fb.width, fb.height, fb.pitch,
+                          fb.redShift, fb.redSize, fb.greenShift, fb.greenSize, fb.blueShift,
+                          fb.blueSize);
+            if (fxSt == BOOT_OK) {
+                fxPtr = &fx;
+            } else {
+                loaderSerialWriteString(
+                    "loader: framebuffer geometry unusable for the menu; continuing serial-only\n");
+            }
         } else {
-            loaderSerialWriteString("loader: framebuffer geometry unusable for the menu; booting "
-                                    "the default entry\n");
+            loaderSerialWriteString("loader: no framebuffer available; menu is serial-only\n");
         }
-    } else if (cfg.timeoutSec > 0) {
-        loaderSerialWriteString("loader: no framebuffer available; booting the default entry "
-                                "without a menu\n");
+        selectedIndex = loaderMenuRun(st, cfgText, cfgTextLen, &cfg, fxPtr);
     }
 
     BootCfgEntry entry;

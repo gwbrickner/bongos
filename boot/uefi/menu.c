@@ -36,8 +36,14 @@ static BootKey classifyKey(const EFI_INPUT_KEY *k) {
 }
 
 /* "N. <name>", highlighted (bg 4/fg 15) when selected, plain (bg 0/fg 7) otherwise -- fills the
- * row's background first so the highlight bar extends past the name itself. */
+ * row's background first so the highlight bar extends past the name itself. A no-op when `fx` is
+ * NULL (ARCHITECTURE §5.2: no framebuffer -- the menu still runs, serial-only, D-071); every
+ * fbText* call below already tolerates a NULL fx itself, but `fx->cols` is read directly here
+ * before any of them are reached, so the guard has to come first. */
 static void drawRow(BootFbText *fx, uint32_t row, uint32_t index, bool selected) {
+    if (fx == NULL) {
+        return;
+    }
     char line[BOOT_CFG_NAME_MAX + 8];
     uint32_t pos = 0;
     line[pos++] = (char)('0' + (index + 1)); /* index+1 is 1-9: BOOT_CFG_MAX_ENTRIES is 9 */
@@ -72,7 +78,11 @@ static void writeUintInto(char *buf, uint32_t *pos, uint32_t bufCap, uint32_t v)
     }
 }
 
+/* No-op when `fx` is NULL -- see drawRow's comment. */
 static void drawCountdown(BootFbText *fx, uint32_t row, const BootMenuState *state) {
+    if (fx == NULL) {
+        return;
+    }
     fbTextFillRow(fx, row, 2, fx->cols, 0);
     if (!state->countdownActive || state->timeoutSec == BOOT_CFG_TIMEOUT_FOREVER) {
         return;

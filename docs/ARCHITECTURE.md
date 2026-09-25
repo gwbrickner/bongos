@@ -289,8 +289,10 @@ value means "not provided" for `fb.phys`, `initrdPhys`/`initrdSize`, `rsdpPhys`,
 2. Pick the GOP mode using the *global* `resolution` and set it (see "GOP mode selection"
    below) -- before the menu, since the menu needs a framebuffer. `EnableCursor(FALSE)` first.
    After this point the loader never calls `ConOut` again (GraphicsConsole doesn't know the mode
-   changed and would blit at stale geometry); errors go to the framebuffer text renderer plus
-   raw COM1 only.
+   changed and would blit at stale geometry); errors go to raw COM1 only (D-071: the
+   framebuffer text renderer exists post-GOP, but no error path draws to it in M1.4 -- every
+   failure after this point already has a serial diagnostic, and a boot that can't reach this far
+   has no menu to show one on either way).
 3. Show the menu if `timeout > 0` (arrow keys/Enter/1-9 via `ConIn` only -- never poll COM1
    receive before `ExitBootServices`, since OVMF's TerminalDxe owns it). Resolve the chosen (or
    default/timed-out) entry.

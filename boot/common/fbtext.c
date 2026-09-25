@@ -79,15 +79,17 @@ BootStatus fbTextInit(BootFbText *fx, uint8_t *pixels, uint32_t width, uint32_t 
     return BOOT_OK;
 }
 
+/* One aligned 32-bit store per pixel, not 4 separate byte stores: pitchBytes and px*4 are always
+ * multiples of 4 (fbTextInit rejects any pitchBytes that isn't), so the cast is always aligned.
+ * Every write to this memory goes through here, so its effective type stays uint32_t throughout
+ * (fbtext/fbcon never read the framebuffer back to observe it any other way). */
 static void putPixel(BootFbText *fx, uint32_t px, uint32_t py, uint32_t color) {
     if (px >= fx->width || py >= fx->height) {
         return;
     }
-    uint8_t *dst = fx->pixels + (uint64_t)py * fx->pitchBytes + (uint64_t)px * 4u;
-    dst[0] = (uint8_t)(color & 0xFF);
-    dst[1] = (uint8_t)((color >> 8) & 0xFF);
-    dst[2] = (uint8_t)((color >> 16) & 0xFF);
-    dst[3] = (uint8_t)((color >> 24) & 0xFF);
+    uint32_t *dst =
+        (uint32_t *)(fx->pixels + (uint64_t)py * fx->pitchBytes + (uint64_t)px * 4u);
+    *dst = color;
 }
 
 static uint32_t paletteColor(const BootFbText *fx, uint8_t idx) {

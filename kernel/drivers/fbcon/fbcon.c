@@ -33,24 +33,27 @@ static void drawCell(uint32_t row, uint32_t col) {
     fbTextPutChar(&fx, row, col, ch, fg, bg);
 }
 
-static void redrawAll(void) {
-    for (uint32_t r = 0; r < fx.rows; r++) {
-        for (uint32_t c = 0; c < fx.cols; c++) {
-            drawCell(r, c);
-        }
-    }
-}
-
+/* Redraws only the cells whose shadow value actually changed, instead of every cell on screen:
+ * on real hardware, with the framebuffer mapped UC-/UC until M2.3 remaps it WC (D-068), a full
+ * redrawAll() on every newline makes scrolling very slow. Most rows shift unchanged from the row
+ * below, so this is typically just the bottom row's worth of draws, not the whole screen's. */
 static void scroll(void) {
     for (uint32_t r = 1; r < fx.rows; r++) {
         for (uint32_t c = 0; c < fx.cols; c++) {
-            cells[r - 1][c] = cells[r][c];
+            uint16_t moved = cells[r][c];
+            if (cells[r - 1][c] != moved) {
+                cells[r - 1][c] = moved;
+                drawCell(r - 1, c);
+            }
         }
     }
     for (uint32_t c = 0; c < fx.cols; c++) {
+        uint16_t before = cells[fx.rows - 1][c];
         setCell(fx.rows - 1, c, ' ', curFg, curBg);
+        if (cells[fx.rows - 1][c] != before) {
+            drawCell(fx.rows - 1, c);
+        }
     }
-    redrawAll();
 }
 
 static void newline(void) {
