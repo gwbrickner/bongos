@@ -121,7 +121,7 @@ TEST(bootCfgZeroSectionsGivesOneImplicitEntry) {
 
 TEST(bootCfgEntriesInheritGlobalsAndCanOverride) {
     const char *text = "kernel = /bong/kernel.elf\ncmdline = loglevel=info\n\n"
-                       "[bongOS]\n\n"
+                       "[Default]\n\n"
                        "[Safe mode]\ncmdline = cpus=1 nomodules fbcon=on\n";
     BootCfg cfg;
     ASSERT_EQ(bootCfgParse(text, strlen(text), &cfg), BOOT_OK);
@@ -129,7 +129,7 @@ TEST(bootCfgEntriesInheritGlobalsAndCanOverride) {
 
     BootCfgEntry e0;
     ASSERT_EQ(bootCfgResolveEntry(text, strlen(text), &cfg, 0, &e0), BOOT_OK);
-    ASSERT_STREQ(e0.name, "bongOS");
+    ASSERT_STREQ(e0.name, "Default");
     ASSERT_STREQ(e0.kernel, "/bong/kernel.elf");
     ASSERT_STREQ(e0.cmdline, "loglevel=info");
 
@@ -164,7 +164,7 @@ TEST(bootCfgDefaultByIndex) {
 }
 
 TEST(bootCfgDefaultByName) {
-    const char *text = "default = Safe mode\n[bongOS]\n[Safe mode]\n";
+    const char *text = "default = Safe mode\n[Default]\n[Safe mode]\n";
     BootCfg cfg;
     ASSERT_EQ(bootCfgParse(text, strlen(text), &cfg), BOOT_OK);
     ASSERT_EQ(cfg.defaultIndex, (uint32_t)1);

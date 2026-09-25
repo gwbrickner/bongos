@@ -31,7 +31,7 @@ Status fbconInit(const BootFramebuffer *fb, uint64_t hhdmBase);
 void fbconWrite(const char *s, size_t n);
 
 /* Sets the ANSI palette index (0-15) used by subsequent fbconWrite() calls; out-of-range values
- * are clamped to 0 by the underlying fbtext glyph draw. */
+ * are masked to their low 4 bits (17 becomes 1, not 0). */
 void fbconSetColor(uint8_t fg, uint8_t bg);
 
 /* Clears the screen to the current background color and resets the cursor to (0, 0). A no-op if

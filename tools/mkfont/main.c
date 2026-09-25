@@ -1,4 +1,4 @@
-/* tools/mkfont: builds bongOS's console font (ARCHITECTURE §5.2/§19, ROADMAP M1.4, D-069). A
+/* tools/mkfont: builds the console font (ARCHITECTURE §5.2/§19, ROADMAP M1.4, D-069). A
  * host tool (own clang, no cross flags), per ARCHITECTURE §0's host-tool exception.
  *
  * Two subcommands:
@@ -218,7 +218,7 @@ static void cmdC(const char *symbol, const char *inPath, const char *outPath) {
     if (magic != PSF2_MAGIC || version != 0 || headersize != PSF2_HEADERSIZE || flags != 0 ||
         length != FONT_LENGTH || charsize != FONT_HEIGHT || height != FONT_HEIGHT ||
         width != FONT_WIDTH) {
-        die("mkfont: %s: not a valid bongOS console PSF2 file (unexpected header)\n", inPath);
+        die("mkfont: %s: not a valid console PSF2 file (unexpected header)\n", inPath);
     }
 
     uint8_t *body = malloc((size_t)length * charsize);
