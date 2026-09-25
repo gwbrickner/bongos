@@ -12,8 +12,11 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # (parsers, bongfs, crypto...). Their own directories are added to the include path so a test
 # file can '#include "gpt.h"' without a relative path. boot/uefi/guids.c has no freestanding- or
 # cross-target-specific code, so it builds fine with the host's native clang too.
+# $(CONSOLE_FONT_C) (mk/font.mk): fbtext.c links against the generated font data (fontConsolePsf),
+# not a wildcard match under boot/common/*.c, so it's listed explicitly; Make builds it first since
+# it's its own target with its own rule.
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c boot/uefi/guids.c \
-                        $(wildcard boot/common/*.c)
+                        $(wildcard boot/common/*.c) $(CONSOLE_FONT_C)
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h $(wildcard boot/uefi/include/efi/*.h) \
                         $(wildcard boot/common/include/*.h)
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common
