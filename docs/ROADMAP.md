@@ -115,7 +115,7 @@ workflow is green on the PR.
 
 ## Phase 2: Blue Dream (CPU and memory core)
 
-### [ ] M2.1 GDT, IDT, exceptions, hardening runtime
+### [ ] M2.1 GDT, IDT, exceptions, hardening runtime `needs-owner`
 **Needs:** M1.3
 1. Kernel GDT (layout §7.1) + TSS with IST1-3. IDT with all 32 exception stubs. The handler prints the vector, error code, registers, CR2, and a symbolized backtrace.
 2. Embed a compressed kernel symbol table in the image (post-link step) and add `symbolize()`.
