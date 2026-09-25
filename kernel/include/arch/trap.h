@@ -12,7 +12,14 @@ uint64_t archBreakpointHits(void);
 
 /* What archTrapCatch() actually caught: a CPU vector (`kind` is one of the TRAP_CATCH_VEC(v)
  * bits, and vector/errorCode/cr2 are the fault's own), or a software-raised kind
- * (TRAP_CATCH_STACK_SMASH/TRAP_CATCH_UBSAN, where only `rip` is meaningful). */
+ * (TRAP_CATCH_STACK_SMASH/TRAP_CATCH_UBSAN, where only `rip` is meaningful). For the software-
+ * raised kinds, `rip` is a *return address* (`__builtin_return_address(0)`, taken from wherever
+ * archTrapCatchSoftware() was called), not the instruction that actually tripped -- and since
+ * that call is always its caller's last statement (both `__stack_chk_fail()` and UBSan's
+ * `report()` are `_Noreturn`), the byte right after it can be the *next* function entirely if the
+ * compiler emitted no epilogue there. Symbolize `rip - 1`, matching how every other return-address
+ * backtrace frame in this kernel is looked up (kernel/core/backtrace.c's `printFrame`,
+ * `isReturnAddr`) -- never `rip` directly. */
 typedef struct {
     uint64_t kind;
     uint64_t vector;
@@ -30,8 +37,11 @@ typedef struct {
  * back here instead of panicking, `*out` (if non-NULL) is filled with what was caught, and this
  * returns true. Returns false if `fn` ran to completion with nothing caught. ktest-only (panics if
  * called outside a ktest run), one-shot, non-nesting (panics if already armed), and can never
- * catch NMI/#DF/#MC (D-074 keeps those always-fatal; panics if `mask` includes one of them). No
- * locks; not reentrant. */
+ * catch NMI/#DF/#MC (D-074 keeps those always-fatal; panics if `mask` includes one of them) or
+ * #BP (vector 3; trapDispatch() resumes it unconditionally before archTrapCatch ever sees it, so
+ * a catch could never fire -- panics if `mask` includes it) or any bit outside the vectors 0-31 /
+ * TRAP_CATCH_STACK_SMASH / TRAP_CATCH_UBSAN range (panics on any other set bit, so a typo'd mask
+ * fails loudly instead of silently matching nothing). No locks; not reentrant. */
 bool archTrapCatch(uint64_t mask, void (*fn)(void *), void *arg, TrapCatchInfo *out);
 
 /* For __stack_chk_fail()/the UBSan handlers only: if a catch is armed and its mask includes

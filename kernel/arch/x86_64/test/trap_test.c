@@ -51,11 +51,12 @@ static void trapPfWriteTrigger(void *arg) {
     *p = 0x42;
 }
 
-/* ROADMAP M2.1's "page fault reports CR2 correctly": a read one page below the boot stack's
- * bottom lands squarely in kernel.ld's unmapped guard page (D-073), so this is a real #PF, not a
- * simulated one. Checks CR2 (SDM Vol 3A §4.7: holds the exact faulting linear address) and the
- * error code's P bit (0: the guard page has no mapping at all, so the fault is "not present", not
- * a permission violation) and W bit (0: this is a read). */
+/* ROADMAP M2.1's "page fault reports CR2 correctly": a read 8 bytes below the boot stack's bottom
+ * lands squarely in kernel.ld's unmapped guard page (a full page, D-073, so any offset short of a
+ * whole page below the bottom works equally well), so this is a real #PF, not a simulated one.
+ * Checks CR2 (SDM Vol 3A §4.7: holds the exact faulting linear address) and the error code's P bit
+ * (0: the guard page has no mapping at all, so the fault is "not present", not a permission
+ * violation) and W bit (0: this is a read). */
 KTEST(trap_pf_read_cr2) {
     const uint8_t *guardAddr = kernelBootStackBottom - 8;
     TrapCatchInfo info;

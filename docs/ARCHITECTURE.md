@@ -1068,13 +1068,18 @@ serial. The run ends by writing to the `isa-debug-exit` port (0xF4): `0x10` mean
 a reset to CRASH.
 
 **Deliberately faulting a ktest (M2.1, D-078):** a ktest that needs to prove the kernel *detects*
-a real fault (a deliberate #PF, #UD, or stack smash) without ending the whole test run calls
-`archTrapCatch(mask, fn, arg, &info)`, which runs `fn` with a saved callee-saved-register
-context; if the fault fires and its vector/kind is in `mask`, the trap handler prints the normal
-report (still exercising the symbolized backtrace), then redirects execution back to
-`archTrapCatch`'s caller instead of panicking. One-shot, non-nesting, ktest-only (`archTrapCatch`
-itself panics if called outside a ktest run), and it can never catch NMI/#DF/#MC -- those stay
-always-fatal (§7.2).
+a real fault (a deliberate #PF, #UD) or a software-checked violation (a stack smash, a UBSan trip)
+without ending the whole test run calls `archTrapCatch(mask, fn, arg, &info)`, which runs `fn`
+with a saved callee-saved-register context. A matching **hardware fault** (vector 0-31) prints the
+normal report first (still exercising the symbolized backtrace) before redirecting execution back
+to `archTrapCatch`'s caller; a matching **software trip** (`TRAP_CATCH_STACK_SMASH`/
+`TRAP_CATCH_UBSAN`, offered by `__stack_chk_fail()`/the UBSan handlers via
+`archTrapCatchSoftware()`) is deliberately silent on serial and redirects immediately -- the ktest
+itself reports PASS/FAIL, and the point of catching it there is to *avoid* the loud panic report a
+real, uncaught trip still prints. Either way, `*info` is filled in with what was caught. One-shot,
+non-nesting, ktest-only (`archTrapCatch` itself panics if called outside a ktest run), and it can
+never catch NMI/#DF/#MC or #BP -- those stay always-fatal, or (#BP) already resume unconditionally
+before archTrapCatch ever sees them (§7.2).
 
 ---
 

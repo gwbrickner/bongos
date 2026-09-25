@@ -3,6 +3,8 @@
 #ifndef KERNEL_ARCH_X86_64_TRAP_IMPL_H
 #define KERNEL_ARCH_X86_64_TRAP_IMPL_H
 
+#include "trap-frame.h"
+
 #include <stdint.h>
 
 /* Builds and loads the 256-entry IDT (D-074), then re-enables faults from here on being reported
@@ -11,8 +13,12 @@
  * why IDT setup isn't part of archCpuInitBsp's own GDT/TSS step. No locks, boot-time-only. */
 void trapIdtInit(void);
 
-/* How many times #BP (int3) has fired and resumed since boot -- ARCHITECTURE §23's `int3 resumes`
- * ktest checks this went up by exactly 1. No locks (single-threaded, IF=0 throughout M2.1). */
-uint64_t archBreakpointHits(void);
+/* trap-entry.asm's trapCommon calls this once it has built a TrapFrame on the stack. Never called
+ * from anywhere else, so no header outside this arch-internal one declares it. No locks; called
+ * with IF=0 (no IRQ source is wired up before M3.2, so this never runs reentrantly); may not
+ * sleep. `f` points into the interrupted context's own stack (or an IST stack for #DF/NMI/#MC) --
+ * never touched after this returns or redirects it, since trapCommon's `iretq` reads it exactly
+ * once more on the way out. */
+void trapDispatch(TrapFrame *f);
 
 #endif

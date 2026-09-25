@@ -11,7 +11,12 @@ section .text
 extern trapDispatch
 
 global trapStubsStart:function
-global trapStubsEnd:function
+; :data (not :function): this is a zero-length boundary marker sitting at the exact same address
+; as trapCommon (the very next instruction), not a function in its own right. Marking it :function
+; would give KSYM v1 (tools/ksyms, D-075) two same-address STT_FUNC candidates to dedup between
+; trapStubsEnd and trapCommon's own proper `global trapCommon:function` below, arbitrarily by name
+; rather than cleanly excluding it.
+global trapStubsEnd:data 0
 trapStubsStart:
 
 %assign v 0
@@ -77,19 +82,28 @@ trapCommon:
 .end:
 
 ; archTrapCatch's setjmp/longjmp-style register save/resume (ARCHITECTURE §23, D-078). TrapCatchCtx
-; (kernel/arch/x86_64/trap.c) is 7 qwords in exactly this order -- rsp, rbx, rbp, r12, r13, r14,
-; r15 -- at offsets 0/8/16/24/32/40/48; this file and that struct must stay in sync by hand.
+; (kernel/arch/x86_64/trap.c) is 8 qwords in exactly this order -- rsp, rbx, rbp, r12, r13, r14,
+; r15, retAddr -- at offsets 0/8/16/24/32/40/48/56 (trap.c's own _Static_asserts enforce the C
+; side; this file's offsets must stay in sync by hand).
 ;
 ; uint32_t archTrapCatchCall(TrapCatchCtx *ctx, void (*fn)(void *), void *arg);
 ; rdi=ctx, rsi=fn, rdx=arg (SysV AMD64 ABI). Saves every callee-saved register `fn` (or anything it
-; calls) might clobber, then calls `fn(arg)`. Returns 0 if `fn` returned normally. If a fault or a
-; software trip (archTrapCatchSoftware) redirects execution to archTrapCatchResume below instead,
-; *that* call "returns" here a second time with eax=1 -- ctx->rsp was saved *before* the local
-; `push rbp` here, so restoring it unwinds straight back past this function's own prologue to
-; exactly this point, without ever executing this function's own epilogue for real.
+; calls) might clobber, plus this call's own return address (`retAddr`), then calls `fn(arg)`.
+; Returns 0 if `fn` returned normally. If a fault or a software trip (archTrapCatchSoftware)
+; redirects execution to archTrapCatchResume below instead, *that* call "returns" here a second
+; time with eax=1. retAddr is saved separately, not read back off the stack at resume time the way
+; a real `ret` would: `fn` runs with archTrapCatch's ktest-supplied code in full control of the
+; stack below this frame, and a wild write reaching all the way up to `[ctx.rsp]` (the slot a naive
+; `ret`-based resume would depend on) would silently corrupt the resume target instead of just
+; failing the catch it was meant to demonstrate -- exactly what the first version of
+; stack_protector_detects_smash hit (docs/logs/M2.1.md, D-078's ktests). Saving retAddr in `ctx`
+; itself (global memory, never touched by `fn`'s stack writes) makes the resume independent of
+; stack contents entirely.
 global archTrapCatchCall:function
 archTrapCatchCall:
     mov  [rdi], rsp
+    mov  rax, [rsp]                   ; this call's own return address, before anything else moves rsp
+    mov  [rdi+56], rax
     mov  [rdi+8], rbx
     mov  [rdi+16], rbp
     mov  [rdi+24], r12
@@ -105,16 +119,20 @@ archTrapCatchCall:
     ret
 
 ; void archTrapCatchResume(TrapCatchCtx *ctx); -- rdi=ctx. Restores every register archTrapCatchCall
-; saved, including RSP, then `ret`s -- which pops whatever archTrapCatchCall's *own* return address
-; was (saved as part of ctx->rsp's snapshot), transferring control back to archTrapCatchCall's
-; caller as if archTrapCatchCall had just returned normally, except with eax=1. Never returns to
-; its own caller in the ordinary sense (its C declaration is `_Noreturn` for exactly this reason):
-; called either from trapDispatch() after redirecting a TrapFrame's RIP/RSP/RDI here (so the CPU's
-; own `iretq` is what actually transfers control into this function), or directly from
-; archTrapCatchSoftware() for a software-raised catch.
+; saved, including RSP, then jumps to the saved retAddr -- transferring control back to
+; archTrapCatchCall's caller at the exact instruction after its `call`, as if archTrapCatchCall had
+; just returned normally, except with eax=1. `add rsp, 8` accounts for the return-address slot a
+; real `ret` would have popped; this resume never reads that slot's actual contents (see
+; archTrapCatchCall's comment above -- that's the whole point). Never returns to its own caller in
+; the ordinary sense (its C declaration is `_Noreturn` for exactly this reason): called either from
+; trapDispatch() after redirecting a TrapFrame's RIP/RSP/RDI here (so the CPU's own `iretq` is what
+; actually transfers control into this function), or directly from archTrapCatchSoftware() for a
+; software-raised catch.
 global archTrapCatchResume:function
 archTrapCatchResume:
+    mov  r10, [rdi+56]                ; saved retAddr, read before rdi's own pointee (ctx) is touched
     mov  rsp, [rdi]
+    add  rsp, 8                       ; skip the return-address slot a real `ret` would have popped
     mov  rbx, [rdi+8]
     mov  rbp, [rdi+16]
     mov  r12, [rdi+24]
@@ -122,7 +140,7 @@ archTrapCatchResume:
     mov  r14, [rdi+40]
     mov  r15, [rdi+48]
     mov  eax, 1
-    ret
+    jmp  r10
 
 ; One pointer per vector, in vector order, for the C-side IDT builder (kernel/arch/x86_64/trap.c)
 ; to read gate offsets from without 256 `extern` declarations. R_X86_64_64 relocations, so this

@@ -58,10 +58,10 @@ _Noreturn void panic(const char *fmt, ...) {
     ksnprintf(banner, sizeof(banner), "\r\nPANIC: %s\n", message);
     klogRaw(banner);
 
-    /* -fno-omit-frame-pointer keeps rbp chained through every function's prologue, so this needs
-     * no symbol table yet (that's the very next M2.1 step, KSYM v1) -- backtracePrint() stops at
-     * a NULL rbp (kernelMain's own frame has none below it, since entry.asm zeroed rbp before
-     * calling it) or once rbp strays outside every known kernel stack. */
+    /* -fno-omit-frame-pointer keeps rbp chained through every function's prologue; backtracePrint()
+     * symbolizes each frame against the kernel's embedded KSYM v1 blob (D-075) and stops at a NULL
+     * rbp (kernelMain's own frame has none below it, since entry.asm zeroed rbp before calling it)
+     * or once rbp strays outside every known kernel stack. */
     backtracePrint(0, archFramePointer());
 
     panicFinish(message);

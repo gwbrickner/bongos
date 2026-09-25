@@ -36,9 +36,13 @@ typedef struct {
     Tss tss;
 } ArchCpuTables;
 
-/* aligned(128): the TSS must never straddle a page boundary the same way any other structure the
- * CPU reads directly shouldn't; 128 is comfortably more than enough headroom for 104 bytes while
- * staying a cheap, simple alignment (no need to reach for a full 4096-byte alignment here). */
+/* aligned(128): a cheap, simple alignment for a structure the CPU reads directly, comfortably more
+ * than the 104-byte Tss needs. Doesn't by itself guarantee the Tss (at offset 64, after gdt[8])
+ * never straddles a 4 KiB page boundary -- that depends on where the linker/allocator actually
+ * places bspTables, not just its alignment -- but that's harmless in 64-bit mode regardless: unlike
+ * 32-bit mode's hardware task-switch, nothing here reads the TSS as a single monolithic unit that
+ * a page boundary could split unsafely; the CPU (and archLoadTss()) only ever access individual
+ * fields by their own byte offset. */
 static ArchCpuTables bspTables __attribute__((aligned(128)));
 static bool bspInitDone = false;
 

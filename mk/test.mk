@@ -34,6 +34,13 @@ update-refs: image imgdiff
 # klog_format alone, silently losing the actual ROADMAP Done-when guarantee. So explicitly grep
 # every configuration's serial log for the literal line the bootinfo_valid ktest prints on success,
 # and fail loudly if it's missing from any of them.
+#
+# Same reasoning for M2.1's other Done-when clause, "panic output includes a symbolized
+# backtrace" (ROADMAP.md): trap_ud_caught passing only proves archTrapCatch redirected execution
+# correctly, not that the printed report's backtrace was actually symbolized rather than a raw
+# "?" -- so also grep for the exact frame #0 line trapPrintReport's backtracePrint call prints for
+# that test (kernel/arch/x86_64/test/trap_test.c's trapUdTrigger, kernel/core/backtrace.c's
+# printFrame format), confirmed against a real serial log before being pinned down here.
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus rest; do \
@@ -42,6 +49,10 @@ _check-ktest-pass:
 	    log="build/logs/$$name.serial.log"; \
 	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF 'KTEST PASS bootinfo_valid'; then \
 	        echo "make test: $$log does not contain 'KTEST PASS bootinfo_valid' (ROADMAP Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^  #0 0x[0-9a-f]{16} trapUdTrigger\+0x'; then \
+	        echo "make test: $$log does not contain a symbolized 'trapUdTrigger+0x...' backtrace frame (ROADMAP Done-when guarantee not met)"; \
 	        status=1; \
 	    fi; \
 	done < "$(MATRIX)"; \
