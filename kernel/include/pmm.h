@@ -40,6 +40,7 @@ typedef struct {
     uint64_t pageTablePages;   /* subset of earlyPages: page tables mapping the Page array */
     uint64_t lowReservedPages; /* USABLE below 1 MiB, withheld from the buddy allocator */
     uint64_t unmappedPages;    /* USABLE at or beyond the 64 TiB HHDM window */
+    uint64_t reclaimedPages;   /* LOADER_RECLAIM handed to the buddy allocator (M2.3, D-089) */
     uint64_t zoneManagedPages[PMM_ZONE_COUNT];
     uint64_t zoneFreePages[PMM_ZONE_COUNT];
     uint64_t typePages[BOOT_MEM_FRAMEBUFFER + 1]; /* indexed by BootMemType */
@@ -118,6 +119,18 @@ void pmmGetStats(PmmStats *out);
  * self-check line that must read "OK" (usablePages == managedPages + earlyPages +
  * lowReservedPages + unmappedPages). No locks beyond pmmGetStats's; boot-time only. */
 void pmmPrintMeminfo(void);
+
+/* Hands every LOADER_RECLAIM range the pmm recorded during pmmInit() (its own `PmmMap.
+ * loaderReclaim[]`, ROADMAP M2.3 step 6, D-089) to the buddy allocator via pmmAddFreeRange() --
+ * clipped to >= 1 MiB (D-080's low-memory withholding still applies) and with `keepPagePhys`'s
+ * page (the BootInfo page, still needed until M2.6) carved out and left RESERVED. Every reclaimed
+ * byte is zeroed through the HHDM first (a loader stack or its page-table pool can hold RNG/seed
+ * residue or other loader-controlled data). Panics if vmmKernelTablesActive() is false (the loader
+ * page tables -- and, on real hardware, its identity-mapped trampoline page -- are part of what
+ * gets reclaimed, so this would otherwise free memory the CPU is still using for address
+ * translation) or if `keepPagePhys` isn't 4 KiB-aligned. Boot-time only, BSP, IF=0; called once,
+ * from kernelMain after vmmInit(). Locks: pmmLock. IRQ-safe: yes. May sleep: no. */
+void pmmReclaimLoaderMemory(uint64_t keepPagePhys);
 
 /* The kind of the most recent pmmBug() call, for ktests that catch it via archTrapCatch
  * (TRAP_CATCH_KERNEL_BUG) to assert what actually happened. PMM_BUG_NONE if none has happened yet.

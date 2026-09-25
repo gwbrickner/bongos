@@ -48,6 +48,10 @@ update-refs: image imgdiff
 # the meminfo self-check's "OK" line (pmmPrintMeminfo(), kernel/mm/pmm.c) confirming the printed
 # totals actually matched the BootInfo map rather than just having printed *something*.
 PMM_REQUIRED_KTESTS := pmm_alloc_free_stress pmm_no_leak pmm_zone_correctness pmm_double_free
+# Same reasoning again for M2.3's Done-when clauses (ROADMAP.md, D-086..D-090): the ktests proving
+# W^X is enforced (not just printed) and that LOADER_RECLAIM was actually reclaimed.
+PAGING_REQUIRED_KTESTS := paging_text_write_faults paging_data_exec_faults paging_fb_wc \
+                         vmm_map_unmap loader_reclaimed
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus mem; do \
@@ -68,9 +72,19 @@ _check-ktest-pass:
 	            status=1; \
 	        fi; \
 	    done; \
-	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF '[info] meminfo: check: MemTotal == MemManaged + PageArray + LowReserved + Unmapped: OK'; then \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF '[info] meminfo: check: MemTotal + Reclaimed == MemManaged + PageArray + LowReserved + Unmapped: OK'; then \
 	        echo "make test: $$log does not contain a passing meminfo self-check (ROADMAP M2.2 Done-when guarantee not met)"; \
 	        status=1; \
 	    fi; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^\[info\] vmm: W\^X verified: '; then \
+	        echo "make test: $$log does not contain 'vmm: W^X verified: ...' (ROADMAP M2.3 Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
+	    for t in $(PAGING_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M2.3 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
 	done < "$(MATRIX)"; \
 	exit $$status

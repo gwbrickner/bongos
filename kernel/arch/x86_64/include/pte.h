@@ -7,6 +7,9 @@
 
 #define X86_PTE_P         (1ULL << 0)
 #define X86_PTE_W         (1ULL << 1)
+#define X86_PTE_US        (1ULL << 2)
+#define X86_PTE_PWT       (1ULL << 3) /* PAT index bit 0 (D-087: WB=0, WC=1 at index 0/1) */
+#define X86_PTE_PCD       (1ULL << 4) /* PAT index bit 1 -- unused (no UC mapping exists yet) */
 #define X86_PTE_PS        (1ULL << 7)
 #define X86_PTE_G         (1ULL << 8)
 #define X86_PTE_NX        (1ULL << 63)
@@ -16,10 +19,10 @@
 #define X86_PTE_SIZE_2M (1ULL << 21)
 #define X86_PTE_SIZE_1G (1ULL << 30)
 
-/* The Page array's leaf mapping (D-079): RW-/NX/global, WB (PWT=PCD=0 selects PAT index 0, the
- * firmware's power-on default WB entry -- ARCHITECTURE §6.3 doesn't reprogram the PAT until
- * M2.3). Non-leaf (PML4E/PDPTE/PDE-as-pointer) entries are always P|W only, same convention as
- * the loader's ptGetOrAllocTable(). */
+/* The Page array's leaf mapping (D-079): RW-/NX/global, WB (PWT=PCD=0 selects PAT index 0 --
+ * D-087's kernel PAT layout keeps index 0 = WB, same as the firmware's power-on default, so this
+ * mapping's meaning is unchanged by M2.3's PAT reprogramming). Non-leaf (PML4E/PDPTE/PDE-as-
+ * pointer) entries are always P|W only, same convention as the loader's ptGetOrAllocTable(). */
 #define X86_PTE_FLAGS_PAGE_ARRAY (X86_PTE_P | X86_PTE_W | X86_PTE_NX | X86_PTE_G)
 
 #endif

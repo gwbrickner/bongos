@@ -114,4 +114,54 @@ static inline uint64_t archReadTsc(void) {
     return ((uint64_t)hi << 32) | lo;
 }
 
+/* SDM Vol 2 `CPUID`: `regs[0..3]` receive EAX/EBX/ECX/EDX for leaf `leaf`, subleaf `subleaf`
+ * (ECX on entry; pass 0 for leaves that don't use it). No red-zone/PIC concerns here (the kernel
+ * is built -fno-pic, -mno-red-zone), so EBX is an ordinary clobberable GPR. No locks, IRQ-safe,
+ * pure with respect to visible kernel state. */
+static inline void archCpuid(uint32_t leaf, uint32_t subleaf, uint32_t regs[4]) {
+    __asm__ volatile("cpuid"
+                     : "=a"(regs[0]), "=b"(regs[1]), "=c"(regs[2]), "=d"(regs[3])
+                     : "a"(leaf), "c"(subleaf));
+}
+
+/* SDM Vol 2 `RDMSR`/`WRMSR`. No locks; not IRQ-safe (changes/reads privileged CPU state); caller's
+ * responsibility that `msr` is valid on this CPU (an invalid MSR takes #GP, unhandled here). */
+static inline uint64_t archRdmsr(uint32_t msr) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((uint64_t)hi << 32) | lo;
+}
+static inline void archWrmsr(uint32_t msr, uint64_t value) {
+    __asm__ volatile("wrmsr" ::"c"(msr), "a"((uint32_t)value), "d"((uint32_t)(value >> 32))
+                     : "memory");
+}
+
+/* CR0/CR3/CR4 writes (ARCHITECTURE §6.3's PAT/CR4-protections/CR3-switch sequence, M2.3). The
+ * "memory" clobber is load-bearing: these change how every subsequent memory access is
+ * interpreted (paging mode, write-protect, cache-disable, ...), so the compiler must never
+ * reorder an ordinary load/store across one. No locks; not IRQ-safe; boot-time/arch-init only. */
+static inline void archWriteCr0(uint64_t v) {
+    __asm__ volatile("mov %0, %%cr0" ::"r"(v) : "memory");
+}
+static inline void archWriteCr3(uint64_t v) {
+    __asm__ volatile("mov %0, %%cr3" ::"r"(v) : "memory");
+}
+static inline void archWriteCr4(uint64_t v) {
+    __asm__ volatile("mov %0, %%cr4" ::"r"(v) : "memory");
+}
+
+/* SDM Vol 2 `WBINVD`: writes back and invalidates every internal cache -- part of the PAT-
+ * reprogramming procedure (SDM Vol 3A §11.11.8/§11.12.4, D-087). No locks; not IRQ-safe; slow
+ * (flushes real hardware caches; under QEMU/TCG it's cheap). */
+static inline void archWbinvd(void) {
+    __asm__ volatile("wbinvd" ::: "memory");
+}
+
+/* SDM Vol 2 `INVLPG`: invalidates every TLB/paging-structure-cache entry for the page containing
+ * `va` (global entries included). No locks; IRQ-safe; caller's responsibility that `va` is
+ * canonical. */
+static inline void archInvlpg(uint64_t va) {
+    __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
+}
+
 #endif

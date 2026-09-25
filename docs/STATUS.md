@@ -1,7 +1,8 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M2.3 Kernel paging started, resuming from "Next milestone")
+**Last updated:** 2026-09-25 (M2.3 Kernel paging implementation done, ktests/host-tests passing;
+running the full `make test`/`make test-full` harness next)
 
 ## Current milestone
 **M2.3 Kernel paging** is in progress -- see `docs/logs/M2.3.md` for the plan and running log.
@@ -9,9 +10,21 @@ Working on the current session's pinned branch `claude/vigilant-planck-fxpto9` (
 `main`, which has M1.1-M2.2 merged) rather than a fresh `m2-3-kernel-paging` branch -- the cloud
 session's own environment instructions pin the branch, overriding CLAUDE.md's per-milestone-branch
 convention here; since nothing else is on top of `main` on this branch, it's equivalent in
-practice. Next step: consult the `architect` subagent for the paging design (CLAUDE.md
-consult-first list), then implement ROADMAP.md M2.3 steps 1-6 in `kernel/arch/x86_64/` and
-`kernel/mm/`.
+practice. Design consulted with the `architect` subagent first (D-086..D-090, docs/logs/M2.3.md).
+All ROADMAP M2.3 steps implemented: the kernel's own PML4 (HHDM rebuild, per-section kernel image
+permissions, eager kernel-half PDPTs, Page-array subtree adopted from the loader's tables), CR3
+switch, PAT reprogrammed (WC framebuffer), SMEP/SMAP/UMIP, `vmmMapKernel`/`vmmUnmapKernel` + a
+pure/host-tested KVA allocator, W^X verification (boot log shows `vmm: W^X verified: ...`), and
+LOADER_RECLAIM reclaim (`pmm: reclaimed 4264 KiB ...`). All 26 ktests pass (5 new: 
+`paging_text_write_faults`, `paging_data_exec_faults`, `paging_fb_wc`, `vmm_map_unmap`,
+`loader_reclaimed`) and all 160 `make host-tests` cases pass (9 new KVA-allocator cases). Verified
+booting `build/bongos.img`/`build/bongos-ktest.img` directly under QEMU with no errors. **Next
+step:** run the full `make test`/`make test-full` harness (screenshot tests + the memory-diversity
+matrix-full row) via the `qemu-tester` subagent, then the `reviewer` subagent on the full diff,
+fix findings, update this file's Current-milestone summary with the reviewer outcome, check
+ROADMAP.md's M2.3 box (already checked pre-review -- revert if review finds a Critical that isn't
+fixed before the PR), and open the PR (`needs-owner: yes` -- paging, security-sensitive CR3/PAT/
+CR4 changes, and a `kernelBootInfo()` contract change, D-045/§25).
 
 **M2.2 Physical memory manager** is done -- see `docs/logs/M2.2.md` for the full
 writeup and its Summary section for the release notes. ROADMAP.md's M2.2 box is checked. The
