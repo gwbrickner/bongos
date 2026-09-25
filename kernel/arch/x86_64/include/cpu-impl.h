@@ -25,6 +25,13 @@ static inline _Noreturn void archHaltForever(void) {
     }
 }
 
+/* Spin-wait hint (SDM Vol 2B `PAUSE`): reduces power/bus contention in a busy-wait loop and
+ * avoids a memory-order mis-speculation penalty on exit from the loop. No locks, boot-time/IRQ-
+ * safe: a single instruction with no side effect other than the hint itself. */
+static inline void archPause(void) {
+    __asm__ volatile("pause");
+}
+
 /* Returns the caller's own `rbp`, for a raw frame-pointer backtrace walk (panic.c). Marked
  * always_inline (not just the usual `static inline` hint): if this ever compiled as a real
  * out-of-line call, the `mov %rbp` inside it would read *this function's own* frame, one level

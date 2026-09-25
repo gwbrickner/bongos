@@ -23,8 +23,14 @@ KERNEL_CFLAGS := --target=x86_64-unknown-elf -std=c17 -ffreestanding -nostdlib -
 # -O2, same otherwise (ARCHITECTURE §3).
 KERNEL_CFLAGS += $(if $(filter 1,$(RELEASE)),-O2,-O1)
 
+# fbcon (kernel/drivers/fbcon) links boot/common/fbtext.c's glyph-blit primitive and
+# boot-status.c (for logging BootStatus failures), plus mk/font.mk's generated font data --
+# the same files the loader itself links, so the loader's menu and the kernel's console draw
+# with byte-identical glyphs.
 KERNEL_C_SOURCES := $(sort $(wildcard kernel/core/*.c) $(wildcard kernel/drivers/serial/*.c) \
-                           $(wildcard kernel/test/*.c) kernel/arch/x86_64/qemu.c)
+                           $(wildcard kernel/drivers/fbcon/*.c) $(wildcard kernel/test/*.c) \
+                           kernel/arch/x86_64/qemu.c boot/common/fbtext.c \
+                           boot/common/boot-status.c) $(CONSOLE_FONT_C)
 KERNEL_ASM_SOURCES := kernel/arch/x86_64/entry.asm
 
 KERNEL_C_OBJECTS := $(patsubst %.c,$(KERNEL_BUILD)/%.o,$(KERNEL_C_SOURCES))

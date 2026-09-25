@@ -64,6 +64,34 @@ bool cmdlineFindKtest(const char *cmdline, char *out, size_t outCap) {
     return true;
 }
 
+bool cmdlineHasToken(const char *cmdline, const char *token) {
+    if (cmdline == NULL || token == NULL) {
+        return false;
+    }
+    const char *p = cmdline;
+    while (*p != '\0') {
+        while (cmdlineIsSep(*p)) {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        const char *tokStart = p;
+        while (*p != '\0' && !cmdlineIsSep(*p)) {
+            p++;
+        }
+        size_t tokLen = (size_t)(p - tokStart);
+        size_t i = 0;
+        while (i < tokLen && token[i] != '\0' && tokStart[i] == token[i]) {
+            i++;
+        }
+        if (i == tokLen && token[i] == '\0') {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Standard iterative wildcard match (a single backtrack point is enough for a single '*' class of
  * pattern): no recursion, bounded by strlen(name) iterations (ARCHITECTURE §4 forbids unbounded
  * recursion in the kernel). */
