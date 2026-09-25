@@ -87,8 +87,7 @@ static void putPixel(BootFbText *fx, uint32_t px, uint32_t py, uint32_t color) {
     if (px >= fx->width || py >= fx->height) {
         return;
     }
-    uint32_t *dst =
-        (uint32_t *)(fx->pixels + (uint64_t)py * fx->pitchBytes + (uint64_t)px * 4u);
+    uint32_t *dst = (uint32_t *)(fx->pixels + (uint64_t)py * fx->pitchBytes + (uint64_t)px * 4u);
     *dst = color;
 }
 

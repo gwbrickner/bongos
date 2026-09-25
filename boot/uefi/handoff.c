@@ -132,7 +132,7 @@ static void handoffMapFramebuffer(PtBuilder *pt, LoaderAlloc *allocs, uint32_t *
     uint64_t checkPa, checkFlags;
     bool alreadyMapped = false;
     for (uint64_t va = BOOTINFO_HHDM_BASE + fbBase; va < BOOTINFO_HHDM_BASE + fbEnd;
-        va += HANDOFF_PAGE_SIZE) {
+         va += HANDOFF_PAGE_SIZE) {
         if (ptLookup(pt, va, &checkPa, &checkFlags) == BOOT_OK) {
             alreadyMapped = true;
             break;
@@ -455,10 +455,9 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
              * GOP framebuffer BAR) is still directly usable as a pointer -- the same trick
              * bootPhysToPtr() documents for BootInfo/the kernel image. This is not the kernel's
              * HHDM mapping (built later, after the menu, once the final framebuffer is known). */
-            BootStatus fxSt =
-                fbTextInit(&fx, (uint8_t *)bootPhysToPtr(fb.phys), fb.width, fb.height, fb.pitch,
-                          fb.redShift, fb.redSize, fb.greenShift, fb.greenSize, fb.blueShift,
-                          fb.blueSize);
+            BootStatus fxSt = fbTextInit(&fx, (uint8_t *)bootPhysToPtr(fb.phys), fb.width,
+                                         fb.height, fb.pitch, fb.redShift, fb.redSize,
+                                         fb.greenShift, fb.greenSize, fb.blueShift, fb.blueSize);
             if (fxSt == BOOT_OK) {
                 fxPtr = &fx;
             } else {
@@ -683,12 +682,11 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         uint64_t fbEnd = bootAlignUp(fbEndUnaligned, HANDOFF_PAGE_SIZE);
         uint64_t fbFirstVa = BOOTINFO_HHDM_BASE + fbBase;
         uint64_t fbLastVa = BOOTINFO_HHDM_BASE + fbEnd - HANDOFF_PAGE_SIZE;
-        selfCheckOk = ptLookup(&pt, fbFirstVa, &checkPa, &checkFlags) == BOOT_OK &&
-                      checkPa == fbBase && (checkFlags & PT_PCD) != 0 &&
-                      (checkFlags & PT_NX) != 0 && (checkFlags & PT_W) != 0 &&
-                      ptLookup(&pt, fbLastVa, &checkPa, &checkFlags) == BOOT_OK &&
-                      (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0 &&
-                      (checkFlags & PT_W) != 0;
+        selfCheckOk =
+            ptLookup(&pt, fbFirstVa, &checkPa, &checkFlags) == BOOT_OK && checkPa == fbBase &&
+            (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0 && (checkFlags & PT_W) != 0 &&
+            ptLookup(&pt, fbLastVa, &checkPa, &checkFlags) == BOOT_OK &&
+            (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0 && (checkFlags & PT_W) != 0;
     }
     if (!selfCheckOk) {
         loaderSerialWriteString("loader: page-table self-check failed\n");

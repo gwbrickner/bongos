@@ -54,10 +54,10 @@ TEST(fbconTabAdvancesToNextMultipleOfEight) {
     ASSERT_EQ(fbconInit(&fb, 0), STATUS_OK);
     ASSERT_EQ(fbconCols(), 80u);
 
-    fbconWrite("a", 1);   /* cursorCol: 0 -> 1 */
-    fbconWrite("\t", 1);  /* tab from col 1 -> col 8 */
-    fbconWrite("b", 1);   /* col 8 -> 9 */
-    fbconWrite("\t", 1);  /* col 9 -> 16 */
+    fbconWrite("a", 1);  /* cursorCol: 0 -> 1 */
+    fbconWrite("\t", 1); /* tab from col 1 -> col 8 */
+    fbconWrite("b", 1);  /* col 8 -> 9 */
+    fbconWrite("\t", 1); /* col 9 -> 16 */
     /* No assertion on internal cursor state (private to fbcon.c) -- this just exercises the
      * normal, non-edge-case path alongside the cols==1 regression above. */
     free(buf);
