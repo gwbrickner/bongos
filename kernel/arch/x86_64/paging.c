@@ -373,9 +373,11 @@ void archPagingBuildKernel(const BootInfo *bi, const BootMemRegion *map, uint32_
                               X86_PTE_P | X86_PTE_W | X86_PTE_NX | X86_PTE_G, true);
             }
             if (roStart < roEnd) {
-                /* 4 KiB leaves only here (allowLarge=false): archPagingVerifyWx()'s D-090(g)
-                 * alias check (findLeafPte()) only understands 4 KiB leaves -- a 2 MiB/1 GiB RO
-                 * leaf here would make that check silently pass without ever inspecting it. */
+                /* 4 KiB leaves only here (allowLarge=false, D-091(1)): a deliberate choice, not a
+                 * verifier limitation -- checkLeaf()'s D-090(g) alias check now copes with any
+                 * leaf size via findAnyLeafEntry(), but keeping this specific carve-out small and
+                 * 4 KiB-granular avoids ever needing to split a large leaf later if some future
+                 * change wants to adjust the boundary by less than 2 MiB. */
                 buildMapRange(BOOTINFO_HHDM_BASE + roStart, roStart, roEnd - roStart,
                               X86_PTE_P | X86_PTE_NX | X86_PTE_G, false);
             }
@@ -534,6 +536,19 @@ static bool findAnyLeafEntry(uint64_t va, uint64_t *outEntry) {
     return true;
 }
 
+/* findAnyLeafEntry() at `BOOTINFO_HHDM_BASE + pa`, bounded to the 64 TiB HHDM window: past that
+ * point the computed VA lands in the KVA region, the Page array, or the kernel image slot instead
+ * of any real alias of `pa`, and treating whatever leaf happens to sit there as "the alias" would
+ * be a false positive/negative, not a real conflict. Shared by both of paging.c's alias checks
+ * (checkLeaf()'s D-090(g) writability check and archMapPages' WC/WB anti-aliasing check) so the
+ * bound can't drift out of sync between them. */
+static bool hhdmLeafEntry(uint64_t pa, uint64_t *outEntry) {
+    if (pa >= BOOTINFO_HHDM_SIZE) {
+        return false;
+    }
+    return findAnyLeafEntry(BOOTINFO_HHDM_BASE + pa, outEntry);
+}
+
 static void checkLeaf(uint64_t va, uint64_t entry, uint64_t leafSize, uint64_t textStart,
                       uint64_t textEnd, uint64_t *leafCount, uint64_t *execLeafCount) {
     if (!(entry & X86_PTE_G)) {
@@ -554,13 +569,12 @@ static void checkLeaf(uint64_t va, uint64_t entry, uint64_t leafSize, uint64_t t
     }
     (*execLeafCount)++;
     /* D-090 point (g): the HHDM alias of this same physical frame must never be writable, or a
-     * write through the direct map could modify supposedly-read-only executable code.
-     * findAnyLeafEntry() (not findLeafPte()) is required here: the text+rodata carve-out is
-     * 4 KiB-only (D-091), but this check must still hold even if that ever changed, and it costs
-     * nothing to make it leaf-size-independent now. */
+     * write through the direct map could modify supposedly-read-only executable code. Goes
+     * through the same hhdmLeafEntry() the anti-aliasing check uses, so it copes with any leaf
+     * size and stays bounded to the actual HHDM window. */
     uint64_t pa = entry & X86_PTE_ADDR_MASK;
     uint64_t hhdmEntry;
-    if (findAnyLeafEntry(BOOTINFO_HHDM_BASE + pa, &hhdmEntry) && (hhdmEntry & X86_PTE_W)) {
+    if (hhdmLeafEntry(pa, &hhdmEntry) && (hhdmEntry & X86_PTE_W)) {
         panic("vmm: W^X verify: HHDM alias of text frame 0x%llx is writable",
               (unsigned long long)pa);
     }
@@ -661,27 +675,16 @@ static void clearLeaf(uint64_t va) {
     *pte = 0;
 }
 
-/* Looks up `pa`'s current HHDM alias (via findAnyLeafEntry(), any leaf size) and reports whether
- * it's WC. `*outPresent` is false if `pa` is at or past the 64 TiB HHDM window (BOOTINFO_HHDM_
- * SIZE) -- past that point `BOOTINFO_HHDM_BASE + pa` lands in the KVA region, the Page array, or
- * the kernel image slot instead of any real alias of `pa`, and treating whatever leaf happens to
- * sit there as "the alias" would be a false positive/negative, not a real conflict -- or if the
- * HHDM rebuild simply never mapped `pa` at all (a RESERVED/BAD range, D-086). Used by
- * archMapPages' anti-aliasing check (SDM Vol 3A §11.12.4): checking `pmmPhysToPage() != NULL`
- * alone is wrong in both directions (ACPI_NVS is HHDM-WB but not pmm-managed; FRAMEBUFFER is
- * HHDM-WC and pmm-unmanaged), where this walks the real mapping instead of a proxy for it. */
+/* Looks up `pa`'s current HHDM alias (via hhdmLeafEntry(), any leaf size, bounded to the HHDM
+ * window) and reports whether it's WC. `*outPresent` is false if `pa` is past the window or the
+ * HHDM rebuild simply never mapped it (a RESERVED/BAD range, D-086). Used by archMapPages' anti-
+ * aliasing check (SDM Vol 3A §11.12.4): checking `pmmPhysToPage() != NULL` alone is wrong in both
+ * directions (ACPI_NVS is HHDM-WB but not pmm-managed; FRAMEBUFFER is HHDM-WC and pmm-unmanaged),
+ * where this walks the real mapping instead of a proxy for it. */
 static bool hhdmAliasIsWc(uint64_t pa, bool *outPresent) {
-    if (pa >= BOOTINFO_HHDM_SIZE) {
-        *outPresent = false;
-        return false;
-    }
     uint64_t entry;
-    if (!findAnyLeafEntry(BOOTINFO_HHDM_BASE + pa, &entry)) {
-        *outPresent = false;
-        return false;
-    }
-    *outPresent = true;
-    return (entry & X86_PTE_PWT) != 0;
+    *outPresent = hhdmLeafEntry(pa, &entry);
+    return *outPresent && (entry & X86_PTE_PWT) != 0;
 }
 
 /* CPUID.80000008H:EAX[7:0] (SDM Vol 2): the physical address width this CPU actually implements.

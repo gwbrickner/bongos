@@ -87,8 +87,11 @@ bool pmmEarlyWasAllocated(uint64_t pfn) {
      * from its original endPfn), so the consumed portion of range i is exactly
      * [current (shrunk) usable[i].endPfn, earlyOriginalEndPfn[i]) -- everything at or above the
      * final cursor and below where the range originally ended. Only meaningful after
-     * pmmEarlySeal(); before that, usable[i].endPfn is still the original value and this would
-     * always report false. */
+     * pmmEarlySeal(): before that, usable[i].endPfn is still the original value, so this would
+     * always report false instead of a real answer -- panic rather than silently misreport. */
+    if (!earlySealed) {
+        panic("pmm: pmmEarlyWasAllocated() called before pmmEarlySeal()");
+    }
     for (uint32_t i = 0; i < earlyMap->usableCount; i++) {
         if (pfn >= earlyMap->usable[i].endPfn && pfn < earlyOriginalEndPfn[i]) {
             return true;

@@ -105,16 +105,18 @@ static void pagingTextHhdmAliasWriteTrigger(void *arg) {
 
 KTEST(paging_text_hhdm_alias_readonly) {
     const BootInfo *bi = kernelBootInfo();
-    /* Three probes: the second byte of text, the last byte of text, and the first byte of rodata
-     * -- the carve-out covers [kernelPhysBase, roPhysEnd) as one range (D-091), so a bug that only
-     * got one boundary right could still leave the other end (or a rodata-only regression, since
-     * rodata's own alias isn't otherwise separately probed anywhere) writable. */
-    uint64_t offsets[3] = {
+    /* Four probes spanning the whole carve-out: the second byte of text, the last byte of text,
+     * the first byte of rodata, and the last byte of rodata -- the carve-out covers
+     * [kernelPhysBase, roPhysEnd) as one range (D-091), so a bug that only got one boundary right
+     * could still leave another edge (or a rodata-only regression, since rodata's own alias isn't
+     * otherwise separately probed anywhere) writable. */
+    uint64_t offsets[4] = {
         0x10,
         (uint64_t)(uintptr_t)(kernelTextEnd - 1) - (uint64_t)(uintptr_t)kernelImageStart,
         (uint64_t)(uintptr_t)kernelRodataStart - (uint64_t)(uintptr_t)kernelImageStart,
+        (uint64_t)(uintptr_t)(kernelRodataEnd - 1) - (uint64_t)(uintptr_t)kernelImageStart,
     };
-    for (uint32_t i = 0; i < 3; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
         volatile uint8_t *aliasAddr =
             (volatile uint8_t *)(uintptr_t)(bi->hhdmBase + bi->kernelPhysBase + offsets[i]);
         TrapCatchInfo info;
@@ -125,4 +127,13 @@ KTEST(paging_text_hhdm_alias_readonly) {
         KTEST_ASSERT_EQ(info.cr2, (uint64_t)(uintptr_t)aliasAddr);
         KTEST_ASSERT_EQ(info.errorCode & 0x3, 0x3); /* P=1 (present), W=1 (write) */
     }
+
+    /* The carve-out must not be too large either: the HHDM alias of the first data byte (just
+     * past rodata) has to still be writable, or a future off-by-one in roPhysEnd's computation
+     * would silently make part of .data read-only through the direct map. */
+    volatile uint8_t *dataAlias =
+        (volatile uint8_t *)(uintptr_t)(bi->hhdmBase + bi->kernelPhysBase +
+                                        ((uint64_t)(uintptr_t)kernelDataStart -
+                                         (uint64_t)(uintptr_t)kernelImageStart));
+    *dataAlias = *dataAlias;
 }
