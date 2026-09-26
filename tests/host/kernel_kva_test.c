@@ -108,28 +108,61 @@ TEST(kvaFreeRejectsOutOfBounds) {
     ASSERT_TRUE(kvaFree(&st, 0x30000, 0x1000) == STATUS_ERR_INVALID);
 }
 
-TEST(kvaFreeFailsWhenExtentTableFull) {
+/* D-098 superseded the old "kvaFreeFailsWhenExtentTableFull" test: that test relied on
+ * legitimately reaching a full, maximally-fragmented extent table by way of KVA_MAX_EXTENTS+1
+ * live reservations, a state kvaAlloc()'s new liveCount admission cap (KVA_MAX_EXTENTS-1 = 511
+ * live reservations) makes unreachable through any well-behaved caller -- see kva-internal.h's
+ * kvaFree() contract comment for why that cap is enough to prove the table can never actually
+ * fill up on a legitimate free. These two tests replace it: one confirms the cap itself rejects
+ * a kvaAlloc() purely on live-reservation count (plenty of address space remains), the other
+ * confirms that freeing under the heaviest fragmentation the cap allows never fails. */
+TEST(kvaAllocRejectsAtLiveCap) {
     KvaState st;
-    /* KVA_MAX_EXTENTS+1 single-page allocations, each immediately followed by a "spacer"
-     * allocation that stays allocated forever -- so freeing every non-spacer one produces
-     * KVA_MAX_EXTENTS isolated free extents (boxed in by still-allocated spacers on both sides,
-     * never coalescing), with no room left for one more. */
-    uint64_t pageStride = 0x1000 + 2 * KVA_GUARD_SIZE; /* what one kvaAlloc(0x1000, ...) consumes */
-    uint64_t totalAllocs = 2 * (uint64_t)KVA_MAX_EXTENTS + 1;
-    kvaStateInit(&st, 0, totalAllocs * pageStride);
+    uint32_t cap = KVA_MAX_EXTENTS - 1;
+    uint64_t pageStride = 0x1000 + 2 * KVA_GUARD_SIZE;
+    kvaStateInit(&st, 0, (uint64_t)(cap + 4) * pageStride); /* generous address-space headroom */
 
-    uint64_t vas[KVA_MAX_EXTENTS + 1];
-    for (uint32_t i = 0; i < KVA_MAX_EXTENTS + 1; i++) {
-        ASSERT_TRUE(kvaAlloc(&st, 0x1000, &vas[i]) == STATUS_OK);
-        if (i < KVA_MAX_EXTENTS) {
-            uint64_t spacerVa;
-            ASSERT_TRUE(kvaAlloc(&st, 0x1000, &spacerVa) == STATUS_OK);
+    uint64_t va, firstVa = 0;
+    for (uint32_t i = 0; i < cap; i++) {
+        ASSERT_TRUE(kvaAlloc(&st, 0x1000, &va) == STATUS_OK);
+        if (i == 0) {
+            firstVa = va;
         }
     }
-    for (uint32_t i = 0; i < KVA_MAX_EXTENTS; i++) {
-        ASSERT_TRUE(kvaFree(&st, vas[i], 0x1000) == STATUS_OK);
+    ASSERT_EQ(st.liveCount, cap);
+    /* Rejected purely by the admission cap, not by address-space exhaustion (there's a whole
+     * untouched extent left at the top of the range). */
+    ASSERT_TRUE(kvaAlloc(&st, 0x1000, &va) == STATUS_ERR_NO_MEMORY);
+
+    /* Freeing one makes room again. */
+    ASSERT_TRUE(kvaFree(&st, firstVa, 0x1000) == STATUS_OK);
+    ASSERT_EQ(st.liveCount, cap - 1);
+    ASSERT_TRUE(kvaAlloc(&st, 0x1000, &va) == STATUS_OK);
+    ASSERT_EQ(st.liveCount, cap);
+}
+
+TEST(kvaFreeNeverFailsUnderMaxFragmentation) {
+    KvaState st;
+    /* Pair each "target" allocation with a "spacer" that stays allocated, boxing every target in
+     * on both sides so freeing it can never coalesce -- the same construction the old test used,
+     * scaled to what the liveCount cap actually allows (511 live reservations total, so at most
+     * 255 target/spacer pairs). */
+    uint32_t pairs = (KVA_MAX_EXTENTS - 1) / 2;
+    uint64_t pageStride = 0x1000 + 2 * KVA_GUARD_SIZE;
+    kvaStateInit(&st, 0, (uint64_t)(2 * pairs + 4) * pageStride);
+
+    uint64_t targets[256];
+    for (uint32_t i = 0; i < pairs; i++) {
+        ASSERT_TRUE(kvaAlloc(&st, 0x1000, &targets[i]) == STATUS_OK);
+        uint64_t spacerVa;
+        ASSERT_TRUE(kvaAlloc(&st, 0x1000, &spacerVa) == STATUS_OK);
     }
-    /* This is D-088's recorded, accepted limit, not a crash: the caller (kernel/mm/vmm.c's
-     * vmmKvaFree) turns this into a panic rather than corrupting state. */
-    ASSERT_TRUE(kvaFree(&st, vas[KVA_MAX_EXTENTS], 0x1000) == STATUS_ERR_INVALID);
+    ASSERT_EQ(st.liveCount, 2 * pairs);
+
+    /* Every target is isolated by its own spacer -- freeing all of them produces `pairs` isolated
+     * free extents, well within KVA_MAX_EXTENTS, and every single free must succeed. */
+    for (uint32_t i = 0; i < pairs; i++) {
+        ASSERT_TRUE(kvaFree(&st, targets[i], 0x1000) == STATUS_OK);
+    }
+    ASSERT_EQ(st.count, (uint32_t)(pairs + 1)); /* pairs isolated gaps + the untouched tail */
 }

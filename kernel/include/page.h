@@ -24,11 +24,18 @@ typedef enum {
 } PageState;
 
 #define PAGE_F_POISONED (1u << 0) /* KERNEL_DEBUG only: holds PMM_POISON since its last free */
+/* M2.4, D-095: ownership of an ALLOCATED page, orthogonal to PageState. At most one of these is
+ * ever set; `privateWord` then holds the owning `Slab*`/`VmallocArea*`. The owner clears both the
+ * flag and privateWord on every page of its block before pmmFreePages() -- pmmValidateForFree()
+ * (kernel/mm/pmm.c) refuses to free a page that still carries one (PMM_BUG_OWNED_PAGE). */
+#define PAGE_F_SLAB        (1u << 1) /* kernel/mm/slab.c: privateWord = Slab* */
+#define PAGE_F_VMALLOC     (1u << 2) /* kernel/mm/vmalloc.c: privateWord = VmallocArea* */
+#define PAGE_F_OWNER_MASK  (PAGE_F_SLAB | PAGE_F_VMALLOC)
 
 /* Deliberately zero-filled == PAGE_STATE_RESERVED, so mapping in a fresh (already-zeroed) page-
  * array page needs no separate init pass (kernel/mm/early.c). `object`/`objectIndex`/`mapcount`
  * are declared now (ARCHITECTURE §6.2) but unused until VmObject exists (M4+); `privateWord` is
- * free for an owner to use (M2.4's slab allocator stores a `Slab*` there). */
+ * free for an owner to use (M2.4: PAGE_F_SLAB/PAGE_F_VMALLOC above). */
 typedef struct Page {
     uint8_t state;           /* 0  PageState */
     uint8_t order;           /* 1  valid for BUDDY/ALLOCATED heads */
