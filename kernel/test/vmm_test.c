@@ -22,6 +22,7 @@ static void vmmReadTrigger(void *arg) {
  * vmalloc caller depends on: VMM_EXEC, a VA outside the KVA region, a double map, and the WC-over-
  * RAM anti-aliasing check (D-088). */
 KTEST(vmm_map_unmap) {
+    const BootInfo *bi = kernelBootInfo();
     Page *page;
     KTEST_ASSERT(pmmAllocPages(0, PMM_FLAG_ZERO, &page) == STATUS_OK);
     uint64_t pa = pmmPageToPhys(page);
@@ -48,6 +49,12 @@ KTEST(vmm_map_unmap) {
     uint64_t va2;
     KTEST_ASSERT(vmmKvaAlloc(4096, &va2) == STATUS_OK);
     KTEST_ASSERT(vmmMapKernel(va2, pa, 4096, VMM_CACHE_WC) == STATUS_ERR_INVALID); /* anti-alias */
+
+    /* D-090 point (g), reachable through the KVA path rather than the HHDM: a writable mapping of
+     * the kernel's own text physical range must be refused, or vmmMapKernel would be a second way
+     * to defeat W^X the boot-time verifier (which only ever inspects the HHDM alias) never sees.
+     */
+    KTEST_ASSERT(vmmMapKernel(va2, bi->kernelPhysBase, 4096, VMM_WRITE) == STATUS_ERR_INVALID);
 
     KTEST_ASSERT(vmmUnmapKernel(va, 4096) == STATUS_OK);
     KTEST_ASSERT(vmmLookupKernel(va, &outPa, &outFlags) == STATUS_ERR_NOT_FOUND);

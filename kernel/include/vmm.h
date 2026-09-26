@@ -46,10 +46,13 @@ bool vmmKernelTablesActive(void);
  * `[pa, pa+size)` with `flags` (VMM_WRITE/VMM_CACHE_WB|WC; VMM_EXEC returns
  * STATUS_ERR_UNSUPPORTED -- the module loader gets its own executable-range API later). Every leaf
  * is global, 4 KiB, and a fresh 0->1 transition: returns STATUS_ERR_INVALID if any page in the
- * range is already mapped, out of the KVA region, misaligned, or requests a cache type that
- * conflicts with that physical page's existing HHDM alias (SDM Vol 3A §11.12.4: mapping one
- * physical page with two memory types is unsupported). Returns STATUS_ERR_NO_MEMORY if a table
- * page can't be allocated, after rolling back any leaves this call already wrote. Locks: vmmLock
+ * range is already mapped, out of the KVA region, misaligned, past this CPU's MAXPHYADDR (or
+ * `pa+size` overflows), requests VMM_WRITE over any part of the kernel's own text+rodata physical
+ * range (D-090 point g: never a second, KVA-side writable alias of read-only executable memory),
+ * or requests a cache type that conflicts with that physical page's existing HHDM alias (SDM Vol
+ * 3A §11.12.4: mapping one physical page with two memory types is unsupported). Returns
+ * STATUS_ERR_NO_MEMORY if a table page can't be allocated, after rolling back any leaves this call
+ * already wrote. Locks: vmmLock
  * (IRQ-disable only, D-088 -- mirrors the pmm's D-081 lock, same single-CPU/IF=0 justification).
  * Lock order: vmmLock -> pmmLock. IRQ-safe: yes. May sleep: no. Panics if called before vmmInit().
  */
@@ -80,9 +83,13 @@ Status vmmLookupKernel(uint64_t va, uint64_t *outPa, VmmFlags *outFlags);
 Status vmmKvaAlloc(uint64_t size, uint64_t *outVa);
 
 /* Returns a `[va, va+size)` range (plus its guard pages) that vmmKvaAlloc() handed out, `size`
- * exactly matching that call. Cannot fail: any misuse (an unrecognized range, a double free) is a
- * kernel bug and panics via panicBug() (D-082's pattern). Caller's responsibility to have already
- * unmapped anything still mapped in the range. Locks: vmmLock. IRQ-safe: yes. May sleep: no. */
+ * exactly matching that call. Any misuse (an unrecognized range, a double free) is a kernel bug
+ * and panics via panicBug() (D-082's pattern) -- and so, separately, does a *correct* call that
+ * can't be recorded because the KVA extent table is already full of other free ranges
+ * (KVA_MAX_EXTENTS=512, D-088/D-091: a recorded, accepted capacity limit, not misuse, but this
+ * function has no way to report it other than panicking, since it returns nothing). No current
+ * M2.3 caller comes anywhere near that limit. Caller's responsibility to have already unmapped
+ * anything still mapped in the range. Locks: vmmLock. IRQ-safe: yes. May sleep: no. */
 void vmmKvaFree(uint64_t va, uint64_t size);
 
 #endif

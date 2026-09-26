@@ -36,14 +36,20 @@
  * sets it) can't change a mapping's type. */
 #define X86_PAT_VALUE 0x0007010600070106ULL
 
-#define ARCH_PML4_KERNEL_START      256u
-#define ARCH_PML4_KERNEL_END        512u
-#define ARCH_PML4_PAGE_ARRAY_START  448u /* VM_PAGE_ARRAY_BASE >> 39 & 511 */
-#define ARCH_PML4_PAGE_ARRAY_END    480u /* VM_PAGE_ARRAY_END   >> 39 & 511 */
+#define ARCH_PML4_KERNEL_START     256u
+#define ARCH_PML4_KERNEL_END       512u
+#define ARCH_PML4_PAGE_ARRAY_START 448u /* VM_PAGE_ARRAY_BASE >> 39 & 511 */
+#define ARCH_PML4_PAGE_ARRAY_END   480u /* VM_PAGE_ARRAY_END   >> 39 & 511 */
 
 static uint64_t kernelPml4Phys;
 static bool tablesActive = false;
 static bool has1GPages = false;
+/* [kernelRoPhysStart, kernelRoPhysEnd): the kernel's text+rodata physical range, set once by
+ * archPagingBuildKernel() -- archMapPages() checks a writable KVA request against this so
+ * vmmMapKernel() can never create a second, writable alias of the kernel's own read-only
+ * executable memory (D-090 point g would otherwise only cover the HHDM alias, not a KVA one). */
+static uint64_t kernelRoPhysStart;
+static uint64_t kernelRoPhysEnd;
 
 static inline uint32_t pml4Index(uint64_t va) {
     return (uint32_t)((va >> 39) & 511);
@@ -116,8 +122,7 @@ static void buildMapRange(uint64_t va, uint64_t pa, uint64_t size, uint64_t leaf
         }
 
         if (allowLarge && has1GPages && (va & (X86_PTE_SIZE_1G - 1)) == 0 &&
-            (pa & (X86_PTE_SIZE_1G - 1)) == 0 && size >= X86_PTE_SIZE_1G &&
-            pa >= X86_PTE_SIZE_2M) {
+            (pa & (X86_PTE_SIZE_1G - 1)) == 0 && size >= X86_PTE_SIZE_1G && pa >= X86_PTE_SIZE_2M) {
             uint32_t i3 = pdptIndex(va);
             if (pdpt[i3] & X86_PTE_P) {
                 panic("vmm: PDPT conflict building the kernel HHDM at va=0x%llx",
@@ -132,7 +137,8 @@ static void buildMapRange(uint64_t va, uint64_t pa, uint64_t size, uint64_t leaf
 
         uint64_t *pd;
         if (getOrAllocTable(pdpt, pdptIndex(va), &pd) != STATUS_OK) {
-            panic("vmm: out of memory building the kernel PD for va=0x%llx", (unsigned long long)va);
+            panic("vmm: out of memory building the kernel PD for va=0x%llx",
+                  (unsigned long long)va);
         }
 
         if (allowLarge && (va & (X86_PTE_SIZE_2M - 1)) == 0 && (pa & (X86_PTE_SIZE_2M - 1)) == 0 &&
@@ -151,7 +157,8 @@ static void buildMapRange(uint64_t va, uint64_t pa, uint64_t size, uint64_t leaf
 
         uint64_t *pt;
         if (getOrAllocTable(pd, pdIndex(va), &pt) != STATUS_OK) {
-            panic("vmm: out of memory building the kernel PT for va=0x%llx", (unsigned long long)va);
+            panic("vmm: out of memory building the kernel PT for va=0x%llx",
+                  (unsigned long long)va);
         }
         uint32_t i1 = ptIndex(va);
         if (pt[i1] & X86_PTE_P) {
@@ -165,19 +172,19 @@ static void buildMapRange(uint64_t va, uint64_t pa, uint64_t size, uint64_t leaf
     }
 }
 
-/* D-086: the Page-array PML4 slots (448-479) are *adopted*, not re-mapped -- pmmInit() already
- * built that subtree entirely out of bump-allocator pages before vmmInit() ever runs. Every table
- * page under an adopted slot must still be PAGE_STATE_RESERVED bump memory (never something
- * M2.3's own pmmAllocPages() calls above have since handed out) and never a LOADER_RECLAIM page --
- * pmmInit()'s own early-map.c contract already guarantees the latter by construction (the bump
- * allocator only ever consumes USABLE ranges), but PAGE_STATE_RESERVED alone can't prove it here:
- * LOADER_RECLAIM frames are *also* RESERVED at this point in boot (pmmReclaimLoaderMemory() hasn't
- * run yet), so the state check alone would pass just as happily on a LOADER_RECLAIM page as on a
- * genuine bump-allocator one. The explicit pmmPhysInLoaderReclaim() check is what actually rules
- * that out. */
+/* D-086/D-091: the Page-array PML4 slots (448-479) are *adopted*, not re-mapped -- pmmInit()
+ * already built that subtree entirely out of bump-allocator pages before vmmInit() ever runs.
+ * Every table page under an adopted slot must be genuine bump-allocator memory. PAGE_STATE_
+ * RESERVED alone can't prove that: a KERNEL/INITRD/ACPI_RECLAIM/LOADER_RECLAIM frame is *also*
+ * RESERVED at this point in boot (none of those have been reclaimed yet), so the state check alone
+ * would pass just as happily on any of them as on a genuine bump-allocator page. The positive
+ * pmmPhysIsEarlyAlloc() check is what actually proves it: it's true only for the portion of an
+ * originally-USABLE range the bump allocator itself consumed, which by early.c's own contract
+ * (pmmEarlyInit() only ever iterates `PmmMap.usable[]`) is disjoint from every other managed type.
+ */
 static void validateReservedTablePage(uint64_t phys) {
     Page *p = pmmPhysToPage(phys);
-    if (p == NULL || p->state != PAGE_STATE_RESERVED || pmmPhysInLoaderReclaim(phys)) {
+    if (p == NULL || p->state != PAGE_STATE_RESERVED || !pmmPhysIsEarlyAlloc(phys)) {
         panic("vmm: Page-array table page 0x%llx is not reserved bump-allocator memory",
               (unsigned long long)phys);
     }
@@ -220,7 +227,7 @@ void archPatInit(void) {
      * WRMSR (SDM step 5) -- that only works if PGE was actually 1 to begin with, which
      * ARCHITECTURE §5.4 guarantees the loader always leaves set; asserted rather than trusted
      * silently, the same way. */
-    uint64_t rflags = archIrqSave();
+    uint64_t rflags = archIrqSave(); /* restored below -- this is an assertion, not a lock */
     if (rflags & (1ULL << 9)) {
         panic("archPatInit: interrupts are enabled (IF=1), violating the boot-time contract");
     }
@@ -244,6 +251,7 @@ void archPatInit(void) {
     }
     klogWrite(KLOG_INFO, "vmm", "IA32_PAT=0x%016llx (WB/WC/UC-/UC)",
               (unsigned long long)X86_PAT_VALUE);
+    archIrqRestore(rflags);
 }
 
 void archPagingBuildKernel(const BootInfo *bi, const BootMemRegion *map, uint32_t mapCount) {
@@ -298,11 +306,15 @@ void archPagingBuildKernel(const BootInfo *bi, const BootMemRegion *map, uint32_
     uint64_t textPhysStart = bi->kernelPhysBase;
     uint64_t roPhysEnd = bi->kernelPhysBase + ((uint64_t)(uintptr_t)kernelRodataEnd -
                                                (uint64_t)(uintptr_t)kernelImageStart);
-    /* The carve-out below assumes [textPhysStart, roPhysEnd) lies entirely inside exactly one
-     * BOOT_MEM_KERNEL region -- true by construction of the loader's handoff (it allocates the
-     * whole image as one contiguous region and records it as the sole KERNEL entry), but nothing
-     * upstream of this function actually enforces "exactly one" for an arbitrary memory map, so
-     * confirm it explicitly rather than silently mismapping permissions on a malformed one. */
+    kernelRoPhysStart = textPhysStart;
+    kernelRoPhysEnd = roPhysEnd;
+    /* bootInfoCheckRefs() (kernel/core/bootinfo.c) already required, at boot validation time, that
+     * [kernelPhysBase, kernelPhysBase+kernelSize) -- which bootInfoCheckHeader() already pins
+     * exactly equal to [textPhysStart, roPhysEnd)'s superset [kernelImageStart, kernelImageEnd) --
+     * sit inside a single KERNEL-type region, so this repeats a check that already passed rather
+     * than guarding against a case that could still reach here. It stays as defense-in-depth
+     * specifically for *this* function's own arithmetic (roStart/roEnd below), not because the
+     * memory map could otherwise be malformed at this point. */
     {
         bool contained = false;
         for (uint32_t i = 0; i < mapCount; i++) {
@@ -353,7 +365,8 @@ void archPagingBuildKernel(const BootInfo *bi, const BootMemRegion *map, uint32_
              * directly) so a KERNEL region that doesn't fully straddle [textPhysStart, roPhysEnd)
              * -- padding the loader added beyond the image, say -- can never make the "before" or
              * "after" piece below compute a length that reaches past this region's own bounds. */
-            uint64_t roStart = textPhysStart < base ? base : (textPhysStart > end ? end : textPhysStart);
+            uint64_t roStart =
+                textPhysStart < base ? base : (textPhysStart > end ? end : textPhysStart);
             uint64_t roEnd = roPhysEnd < roStart ? roStart : (roPhysEnd > end ? end : roPhysEnd);
             if (base < roStart) {
                 buildMapRange(BOOTINFO_HHDM_BASE + base, base, roStart - base,
@@ -482,6 +495,45 @@ static uint64_t *findLeafPte(uint64_t va) {
     return &pt[ptIndex(va)];
 }
 
+/* Walks the live kernel PML4 for `va` at *any* leaf size (4 KiB/2 MiB/1 GiB) and returns the raw
+ * leaf entry via `*outEntry`, or false if `va` isn't mapped at all. Unlike findLeafPte() (4-KiB-
+ * leaf-only, correct for the KVA region and the framebuffer's always-4K leaf), this understands
+ * the HHDM's large leaves too -- needed by both the W^X verifier's alias-writability check
+ * (checkLeaf(), below) and archMapPages' anti-aliasing check (hhdmAliasIsWc()), which target
+ * arbitrary HHDM addresses that may well be covered by a 2 MiB/1 GiB leaf. */
+static bool findAnyLeafEntry(uint64_t va, uint64_t *outEntry) {
+    uint64_t *pml4 = tableAt(kernelPml4Phys);
+    uint64_t e4 = pml4[pml4Index(va)];
+    if (!(e4 & X86_PTE_P)) {
+        return false;
+    }
+    uint64_t *pdpt = tableAt(e4);
+    uint64_t e3 = pdpt[pdptIndex(va)];
+    if (!(e3 & X86_PTE_P)) {
+        return false;
+    }
+    if (e3 & X86_PTE_PS) {
+        *outEntry = e3;
+        return true;
+    }
+    uint64_t *pd = tableAt(e3);
+    uint64_t e2 = pd[pdIndex(va)];
+    if (!(e2 & X86_PTE_P)) {
+        return false;
+    }
+    if (e2 & X86_PTE_PS) {
+        *outEntry = e2;
+        return true;
+    }
+    uint64_t *pt = tableAt(e2);
+    uint64_t e1 = pt[ptIndex(va)];
+    if (!(e1 & X86_PTE_P)) {
+        return false;
+    }
+    *outEntry = e1;
+    return true;
+}
+
 static void checkLeaf(uint64_t va, uint64_t entry, uint64_t leafSize, uint64_t textStart,
                       uint64_t textEnd, uint64_t *leafCount, uint64_t *execLeafCount) {
     if (!(entry & X86_PTE_G)) {
@@ -490,8 +542,7 @@ static void checkLeaf(uint64_t va, uint64_t entry, uint64_t leafSize, uint64_t t
     bool w = (entry & X86_PTE_W) != 0;
     bool x = (entry & X86_PTE_NX) == 0;
     if (w && x) {
-        panic("vmm: W^X verify: leaf at 0x%llx is writable AND executable",
-              (unsigned long long)va);
+        panic("vmm: W^X verify: leaf at 0x%llx is writable AND executable", (unsigned long long)va);
     }
     (*leafCount)++;
     if (!x) {
@@ -503,10 +554,13 @@ static void checkLeaf(uint64_t va, uint64_t entry, uint64_t leafSize, uint64_t t
     }
     (*execLeafCount)++;
     /* D-090 point (g): the HHDM alias of this same physical frame must never be writable, or a
-     * write through the direct map could modify supposedly-read-only executable code. */
+     * write through the direct map could modify supposedly-read-only executable code.
+     * findAnyLeafEntry() (not findLeafPte()) is required here: the text+rodata carve-out is
+     * 4 KiB-only (D-091), but this check must still hold even if that ever changed, and it costs
+     * nothing to make it leaf-size-independent now. */
     uint64_t pa = entry & X86_PTE_ADDR_MASK;
-    uint64_t *hhdmPte = findLeafPte(BOOTINFO_HHDM_BASE + pa);
-    if (hhdmPte != NULL && (*hhdmPte & X86_PTE_P) && (*hhdmPte & X86_PTE_W)) {
+    uint64_t hhdmEntry;
+    if (findAnyLeafEntry(BOOTINFO_HHDM_BASE + pa, &hhdmEntry) && (hhdmEntry & X86_PTE_W)) {
         panic("vmm: W^X verify: HHDM alias of text frame 0x%llx is writable",
               (unsigned long long)pa);
     }
@@ -572,7 +626,7 @@ void archPagingVerifyWx(void) {
                 uint64_t va2 = va3 | ((uint64_t)i2 << 21);
                 if (e2 & X86_PTE_PS) {
                     checkLeaf(va2, e2, X86_PTE_SIZE_2M, textStart, textEnd, &leafCount,
-                             &execLeafCount);
+                              &execLeafCount);
                     continue;
                 }
                 uint64_t *pt = tableAt(e2);
@@ -586,7 +640,7 @@ void archPagingVerifyWx(void) {
                     }
                     uint64_t va1 = va2 | ((uint64_t)i1 << 12);
                     checkLeaf(va1, e1, X86_PTE_SIZE_4K, textStart, textEnd, &leafCount,
-                             &execLeafCount);
+                              &execLeafCount);
                 }
             }
         }
@@ -607,45 +661,27 @@ static void clearLeaf(uint64_t va) {
     *pte = 0;
 }
 
-/* Looks up `pa`'s current HHDM alias in the live kernel PML4 at *any* leaf size (large HHDM
- * leaves included, unlike findLeafPte() which is 4-KiB-leaf-only) and reports whether it's WC.
- * `*outPresent` is false if the HHDM doesn't map `pa` at all (RESERVED/BAD physical ranges the
- * HHDM rebuild skipped, D-086) -- nothing to conflict with in that case. Used by archMapPages'
- * anti-aliasing check (SDM Vol 3A §11.12.4): checking `pmmPhysToPage() != NULL` alone is wrong in
- * both directions (ACPI_NVS is HHDM-WB but not pmm-managed; FRAMEBUFFER is HHDM-WC and pmm-
- * unmanaged), where this walks the real mapping instead of a proxy for it. */
+/* Looks up `pa`'s current HHDM alias (via findAnyLeafEntry(), any leaf size) and reports whether
+ * it's WC. `*outPresent` is false if `pa` is at or past the 64 TiB HHDM window (BOOTINFO_HHDM_
+ * SIZE) -- past that point `BOOTINFO_HHDM_BASE + pa` lands in the KVA region, the Page array, or
+ * the kernel image slot instead of any real alias of `pa`, and treating whatever leaf happens to
+ * sit there as "the alias" would be a false positive/negative, not a real conflict -- or if the
+ * HHDM rebuild simply never mapped `pa` at all (a RESERVED/BAD range, D-086). Used by
+ * archMapPages' anti-aliasing check (SDM Vol 3A §11.12.4): checking `pmmPhysToPage() != NULL`
+ * alone is wrong in both directions (ACPI_NVS is HHDM-WB but not pmm-managed; FRAMEBUFFER is
+ * HHDM-WC and pmm-unmanaged), where this walks the real mapping instead of a proxy for it. */
 static bool hhdmAliasIsWc(uint64_t pa, bool *outPresent) {
-    uint64_t va = BOOTINFO_HHDM_BASE + pa;
-    uint64_t *pml4 = tableAt(kernelPml4Phys);
-    uint64_t e4 = pml4[pml4Index(va)];
-    if (!(e4 & X86_PTE_P)) {
+    if (pa >= BOOTINFO_HHDM_SIZE) {
         *outPresent = false;
         return false;
     }
-    uint64_t *pdpt = tableAt(e4);
-    uint64_t e3 = pdpt[pdptIndex(va)];
-    if (!(e3 & X86_PTE_P)) {
+    uint64_t entry;
+    if (!findAnyLeafEntry(BOOTINFO_HHDM_BASE + pa, &entry)) {
         *outPresent = false;
         return false;
     }
-    if (e3 & X86_PTE_PS) {
-        *outPresent = true;
-        return (e3 & X86_PTE_PWT) != 0;
-    }
-    uint64_t *pd = tableAt(e3);
-    uint64_t e2 = pd[pdIndex(va)];
-    if (!(e2 & X86_PTE_P)) {
-        *outPresent = false;
-        return false;
-    }
-    if (e2 & X86_PTE_PS) {
-        *outPresent = true;
-        return (e2 & X86_PTE_PWT) != 0;
-    }
-    uint64_t *pt = tableAt(e2);
-    uint64_t e1 = pt[ptIndex(va)];
-    *outPresent = (e1 & X86_PTE_P) != 0;
-    return *outPresent && (e1 & X86_PTE_PWT) != 0;
+    *outPresent = true;
+    return (entry & X86_PTE_PWT) != 0;
 }
 
 /* CPUID.80000008H:EAX[7:0] (SDM Vol 2): the physical address width this CPU actually implements.
@@ -663,7 +699,15 @@ static uint64_t physAddrLimit(void) {
         archCpuid(0x80000008u, 0, regs);
         bits = regs[0] & 0xFFu;
     }
-    limit = (bits >= 64) ? UINT64_MAX : (((uint64_t)1 << bits) - 1);
+    /* Clamped to the SDM's own guaranteed range: some hypervisors report 0 here (which would
+     * otherwise make physAddrLimit() return 0 -- indistinguishable from "not computed yet" -- and
+     * reject every mapping), and nothing this CPU can address needs more than 52 bits. */
+    if (bits < 36) {
+        bits = 36;
+    } else if (bits > 52) {
+        bits = 52;
+    }
+    limit = ((uint64_t)1 << bits) - 1;
     return limit;
 }
 
@@ -682,6 +726,12 @@ Status archMapPages(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags) {
         return STATUS_ERR_UNSUPPORTED;
     }
     if ((flags & ~(VmmFlags)VMM_FLAGS_VALID) != 0) {
+        return STATUS_ERR_INVALID;
+    }
+    /* D-090 point (g) covers the HHDM alias; without this, a caller could still get a *second*,
+     * writable alias of the kernel's own read-only executable memory through the KVA region --
+     * archPagingVerifyWx() only ever inspects the HHDM alias, so it would never notice. */
+    if ((flags & VMM_WRITE) && pa < kernelRoPhysEnd && kernelRoPhysStart < pa + size) {
         return STATUS_ERR_INVALID;
     }
 

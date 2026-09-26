@@ -105,14 +105,24 @@ static void pagingTextHhdmAliasWriteTrigger(void *arg) {
 
 KTEST(paging_text_hhdm_alias_readonly) {
     const BootInfo *bi = kernelBootInfo();
-    uint64_t textPhys = bi->kernelPhysBase;
-    volatile uint8_t *aliasAddr =
-        (volatile uint8_t *)(uintptr_t)(bi->hhdmBase + textPhys + 0x10);
-    TrapCatchInfo info;
-    bool caught = archTrapCatch(TRAP_CATCH_VEC(14), pagingTextHhdmAliasWriteTrigger,
-                                (void *)(uintptr_t)aliasAddr, &info);
-    KTEST_ASSERT(caught);
-    KTEST_ASSERT_EQ(info.vector, 14);
-    KTEST_ASSERT_EQ(info.cr2, (uint64_t)(uintptr_t)aliasAddr);
-    KTEST_ASSERT_EQ(info.errorCode & 0x3, 0x3); /* P=1 (present), W=1 (write) */
+    /* Three probes: the second byte of text, the last byte of text, and the first byte of rodata
+     * -- the carve-out covers [kernelPhysBase, roPhysEnd) as one range (D-091), so a bug that only
+     * got one boundary right could still leave the other end (or a rodata-only regression, since
+     * rodata's own alias isn't otherwise separately probed anywhere) writable. */
+    uint64_t offsets[3] = {
+        0x10,
+        (uint64_t)(uintptr_t)(kernelTextEnd - 1) - (uint64_t)(uintptr_t)kernelImageStart,
+        (uint64_t)(uintptr_t)kernelRodataStart - (uint64_t)(uintptr_t)kernelImageStart,
+    };
+    for (uint32_t i = 0; i < 3; i++) {
+        volatile uint8_t *aliasAddr =
+            (volatile uint8_t *)(uintptr_t)(bi->hhdmBase + bi->kernelPhysBase + offsets[i]);
+        TrapCatchInfo info;
+        bool caught = archTrapCatch(TRAP_CATCH_VEC(14), pagingTextHhdmAliasWriteTrigger,
+                                    (void *)(uintptr_t)aliasAddr, &info);
+        KTEST_ASSERT(caught);
+        KTEST_ASSERT_EQ(info.vector, 14);
+        KTEST_ASSERT_EQ(info.cr2, (uint64_t)(uintptr_t)aliasAddr);
+        KTEST_ASSERT_EQ(info.errorCode & 0x3, 0x3); /* P=1 (present), W=1 (write) */
+    }
 }

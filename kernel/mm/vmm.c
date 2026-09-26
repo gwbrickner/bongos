@@ -109,13 +109,13 @@ void vmmKvaFree(uint64_t va, uint64_t size) {
      * construction. */
     if (!vmmRangeInKva(va, size)) {
         panicBug("vmm: kvaFree: range outside the KVA region va=0x%llx size=0x%llx",
-                (unsigned long long)va, (unsigned long long)size);
+                 (unsigned long long)va, (unsigned long long)size);
     }
     uint64_t irqFlags = vmmLock();
     Status st = kvaFree(&kvaState, va, size);
     vmmUnlock(irqFlags);
     if (st != STATUS_OK) {
         panicBug("vmm: kvaFree: invalid range va=0x%llx size=0x%llx", (unsigned long long)va,
-                (unsigned long long)size);
+                 (unsigned long long)size);
     }
 }

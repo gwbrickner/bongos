@@ -125,16 +125,8 @@ Page *pmmPhysToPage(uint64_t phys) {
     return pmmPfnValid(pfn) ? pageFromPfn(pfn) : NULL;
 }
 
-bool pmmPhysInLoaderReclaim(uint64_t phys) {
-    uint64_t end = phys + 4096;
-    for (uint32_t i = 0; i < pmmMap.loaderReclaimCount; i++) {
-        uint64_t rangeBase = pmmMap.loaderReclaim[i].physBase;
-        uint64_t rangeEnd = rangeBase + pmmMap.loaderReclaim[i].length;
-        if (phys < rangeEnd && rangeBase < end) {
-            return true;
-        }
-    }
-    return false;
+bool pmmPhysIsEarlyAlloc(uint64_t phys) {
+    return pmmEarlyWasAllocated(phys >> 12);
 }
 
 uint64_t pmmHhdmBase(void) {
@@ -498,18 +490,21 @@ void pmmReclaimLoaderMemory(uint64_t keepPagePhys) {
         }
         reclaimed += pmmReclaimPiece(base, end - base, keepPagePhys);
     }
-    pmmReclaimedPagesValue += reclaimed;
 
     /* Independent sanity bound (not a full re-derivation, which would just repeat the loop
      * above): reclaiming can never exceed the raw LOADER_RECLAIM total pmmMapScan() recorded at
      * boot, before any of this function's own clipping/splitting logic ran. Catches, for example,
-     * a bug that double-counts a piece or free a range into the wrong zone's ledger. */
+     * a bug that double-counts a piece or free a range into the wrong zone's ledger. Checked
+     * *before* publishing `reclaimed` into pmmReclaimedPagesValue, so a panic here never leaves
+     * the stats snapshot other code reads (pmmGetStats()) reflecting a count this very check just
+     * proved untrustworthy. */
     if (reclaimed > pmmMap.typePages[BOOT_MEM_LOADER_RECLAIM]) {
         panic("pmm: reclaim: reclaimed %llu pages, more than the %llu ever recorded as "
               "LOADER_RECLAIM",
               (unsigned long long)reclaimed,
               (unsigned long long)pmmMap.typePages[BOOT_MEM_LOADER_RECLAIM]);
     }
+    pmmReclaimedPagesValue += reclaimed;
 
     klogWrite(KLOG_INFO, "pmm", "reclaimed %llu KiB of LOADER_RECLAIM (kept BootInfo page 0x%llx)",
               (unsigned long long)reclaimed * 4, (unsigned long long)keepPagePhys);
