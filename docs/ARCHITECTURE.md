@@ -282,7 +282,11 @@ value means "not provided" for `fb.phys`, `initrdPhys`/`initrdSize`, `rsdpPhys`,
     (Loader{Code,Data}, BootServices{Code,Data}, Runtime{Code,Data}, Conventional, ACPIReclaim,
     ACPINVS), clipped at the 64 TiB HHDM window, at `hhdmBase = 0xFFFF800000000000`, using 1 GiB
     pages (or 2 MiB pages without PDPE1GB); MMIO, reserved, persistent, and unaccepted memory are
-    never HHDM-mapped (D-059), **except** the framebuffer (D-068, below)
+    never HHDM-mapped (D-059), **except** the framebuffer (D-068, below). This loader-built HHDM
+    is temporary: M2.3 (D-086) rebuilds a narrower one from the BootInfo memory map itself --
+    USABLE/LOADER_RECLAIM/KERNEL/INITRD/ACPI_RECLAIM/ACPI_NVS only (RESERVED/BAD dropped
+    entirely; ACPI's RSDP, for instance, is not HHDM-reachable after M2.3), with the kernel's own
+    text+rodata physical range carved out read-only
   - the kernel image at `kernelVirtBase` (slid when KASLR is on)
   - an identity mapping of the loader's trampoline page only; the kernel removes it
   - if `fb.phys != 0`, the framebuffer (`[fb.phys, fb.phys + pitch*height)`, rounded to page
@@ -372,7 +376,10 @@ the mode only if it differs from the current one, then re-read `Mode->Info` and
 | `0xFFFFFFFFA0000000`-`0xFFFFFFFFEFFFFFFF` | loadable modules (within ±2 GiB of the kernel for `-mcmodel=kernel`) |
 
 The PML4 entries 256-511 (the kernel half) are allocated at boot and shared by every address
-space, so kernel mappings never need to be synced between them.
+space, so kernel mappings never need to be synced between them. M2.3 (D-086) allocates all 256 of
+them eagerly, from the pmm, as part of building the kernel's own PML4, and never writes any of
+them again afterward -- every later address space (M4+) and the SMP AP trampoline PML4 (M3.5)
+copies these 256 entries by value rather than syncing individual mappings into them.
 
 ### 6.2 Physical memory
 1. **`Page` array (M2.2, D-079):** one 64-byte `Page` per managed physical frame (state/order/
@@ -403,22 +410,46 @@ space, so kernel mappings never need to be synced between them.
    guard pages.
 6. **Kernel stacks:** 16 KiB plus a guard page, in the kernel virtual area.
 7. **Reclaim:** `LOADER_RECLAIM` is handed to the buddy allocator once the kernel switches to its
-   own page tables and no longer needs the loader's (M2.3, D-083 -- superseding this section's
-   earlier "after switching stacks" wording, which predates the kernel having its own page tables
-   at all); `ACPI_RECLAIM` once ACPI tables are parsed (M3.1); `INITRD` once it's no longer needed
-   (M5.5).
+   own page tables and no longer needs the loader's (M2.3, D-083/D-089 -- superseding this
+   section's earlier "after switching stacks" wording, which predates the kernel having its own
+   page tables at all), via `pmmReclaimLoaderMemory()`, which keeps the one BootInfo page reserved
+   until M2.6; `ACPI_RECLAIM` once ACPI tables are parsed (M3.1); `INITRD` once it's no longer
+   needed (M5.5).
 
 ### 6.3 Paging
 - 4-level paging. Kernel mappings are marked global.
 - **Permissions:** kernel text is R-X, rodata is R--, and data, bss, and the direct map are
-  RW-/NX. No mapping is ever both writable and executable, in the kernel or in userspace.
-- **PAT:** WB by default, **WC for framebuffers** (this matters a lot on real hardware), and
-  UC for MMIO.
-- **CPU protections:** SMEP, SMAP, and UMIP are on when supported. The kernel touches user
+  RW-/NX. No mapping is ever both writable and executable, in the kernel or in userspace. M2.3's
+  `archPagingVerifyWx()` (D-090) walks the live kernel PML4 and panics on any violation
+  (including a writable HHDM alias of an executable frame); it logs `vmm: W^X verified: ...` on
+  success, and runs once at boot plus again from a ktest.
+- **PAT (M2.3, D-087):** `IA32_PAT` = `0x0007010600070106` -- index 0/4 WB (the power-on
+  default, unchanged), index 1/5 **WC** (was WT; used for framebuffers), index 2/6 UC- (unchanged
+  -- the loader's own pre-M2.3 framebuffer fallback, D-068/D-071, relies on this), index 3/7 UC
+  (for MMIO, once anything maps it that way). Programmed via the SDM Vol 3A §11.11.8/§11.12.4
+  MP-safe procedure (cache-disable, WBINVD, flush, WRMSR, WBINVD, flush, restore), read back and
+  checked. No mapping ever sets the PTE's PAT bit; only PWT selects WC.
+- **Kernel page tables (M2.3, D-086):** built entirely from `pmmAllocPages()` (order 0, zeroed)
+  after `pmmInit()`, on top of the still-active loader tables, then activated by toggling
+  CR4.PGE off, loading CR3, and toggling CR4.PGE back on (flushes every TLB/paging-structure-
+  cache entry both times, so no stale loader-global entry survives the switch). The Page-array
+  PML4 subtree (slots 448-479) is adopted from the loader's tables by value, not rebuilt.
+- **CPU protections:** SMEP, SMAP, and UMIP are on when supported (M2.3, `archCpuEnableProtections()`,
+  checked against CPUID). The kernel touches user
   memory only through `copyFromUser`, `copyToUser`, and `copyStringFromUser` (STAC/CLAC plus
   an exception fixup table).
 - **PCID:** enabled when present (a later milestone). Without it, switching CR3 does a full flush.
 - **TLB shootdown:** by IPI, with a batched list of invalidations. Kernel threads use lazy TLB.
+  M2.3's `vmmMapKernel`/`vmmUnmapKernel` (D-088) invalidate only the local CPU (`archTlbInvalidate
+  KernelRange()`, one INVLPG per page) -- M3.5 replaces that one function's body with a real
+  shootdown once SMP exists, nothing else in `kernel/mm/vmm.c` changes.
+- **Kernel virtual area (M2.3, D-088):** `vmmMapKernel`/`vmmUnmapKernel`/`vmmLookupKernel`
+  (`kernel/include/vmm.h`) hand out 4 KiB RW/RO, WB/WC mappings within `[VM_KVA_BASE,
+  VM_KVA_END)` (§6.1), backed by a pure, host-tested first-fit extent allocator
+  (`kernel/mm/kva.c`) that reserves an unmapped guard page on each side of every allocation.
+  `VMM_EXEC` is rejected until a module loader needs it. A WC request over a physical page the
+  pmm already manages (and so already maps WB via the HHDM) is rejected too (SDM Vol 3A §11.12.4:
+  one physical page can't have two memory types at once).
 
 ### 6.4 Address spaces and VM objects
 - **`AddressSpace`:** the PML4, a red-black tree of `VmRegion`s keyed by start address, a

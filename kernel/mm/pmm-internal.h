@@ -99,6 +99,13 @@ void pmmEarlySeal(void);
  * locks; IRQ-safe; pure. */
 uint64_t pmmEarlyUsedPages(void);
 
+/* True if `pfn` lies in the portion of some originally-USABLE range the bump allocator actually
+ * consumed -- i.e. genuinely bump-allocator memory, as opposed to merely still being
+ * PAGE_STATE_RESERVED for some other reason (a KERNEL/INITRD/ACPI_RECLAIM/LOADER_RECLAIM frame is
+ * RESERVED too, at least until its own later reclaim, but was never bump-allocated). Only
+ * meaningful after pmmEarlySeal() has run. No locks; IRQ-safe; pure. */
+bool pmmEarlyWasAllocated(uint64_t pfn);
+
 /* --- buddy.c: pure buddy-allocator core (host-tested by tests/host/kernel_buddy_test.c) --- */
 
 typedef struct {

@@ -12,12 +12,20 @@
 KTEST(bootinfo_valid) {
     const BootInfo *bi = kernelBootInfo();
     const char *why = "";
-    KTEST_ASSERT(bootInfoValidate(bi, &why) == STATUS_OK);
+    /* Not the full bootInfoValidate(): that includes bootInfoCheckRefs(), which asserts the
+     * memory-map array/BootInfo page/cmdline all live inside a LOADER_RECLAIM region -- true of
+     * the *original* loader handoff (kernelMain already ran the full check on it, once, before
+     * pmmReclaimLoaderMemory() ran), but no longer true of kernelBootInfo()'s M2.3 snapshot copy
+     * (D-089), whose memMapPhys deliberately points at pmm-owned storage instead. Header shape and
+     * memory-map-array sanity are still exactly what the snapshot should satisfy. */
+    KTEST_ASSERT(bootInfoCheckHeader(bi, &why) == STATUS_OK);
     KTEST_ASSERT_EQ(bi->version, BOOTINFO_VERSION);
     KTEST_ASSERT_EQ(bi->kernelVirtBase, (uint64_t)(uintptr_t)kernelImageStart);
 
-    const BootMemRegion *regions =
-        (const BootMemRegion *)(uintptr_t)(bi->hhdmBase + bi->memMapPhys);
+    uint32_t regionCount = 0;
+    const BootMemRegion *regions = kernelBootMemMap(&regionCount);
+    KTEST_ASSERT_EQ(regionCount, bi->memMapCount);
+    KTEST_ASSERT(bootMemMapCheck(regions, regionCount, &why) == STATUS_OK);
     bool foundKernelRegion = false;
     bool foundUsable = false;
     for (uint32_t i = 0; i < bi->memMapCount; i++) {

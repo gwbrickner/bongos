@@ -6,6 +6,7 @@
 #include "klog.h"
 #include "panic.h"
 #include "pmm-internal.h"
+#include "vmm.h" /* vmmKernelTablesActive() -- pmmReclaimLoaderMemory()'s precondition, D-089 */
 
 #include <arch/cpu.h>
 #include <stdint.h>
@@ -15,6 +16,7 @@ static uint64_t pmmHhdmBaseValue;
 static PmmZone pmmZones[PMM_ZONE_COUNT];
 static uint64_t pmmPageArrayPages;
 static uint64_t pmmPageTablePages;
+static uint64_t pmmReclaimedPagesValue;
 static PmmBugKind pmmLastBugKind = PMM_BUG_NONE;
 
 /* --- BSP-only per-CPU cache: order-0 only, one free list per zone (D-081). No cpu index appears
@@ -121,6 +123,10 @@ bool pmmPfnValid(uint64_t pfn) {
 Page *pmmPhysToPage(uint64_t phys) {
     uint64_t pfn = phys >> 12;
     return pmmPfnValid(pfn) ? pageFromPfn(pfn) : NULL;
+}
+
+bool pmmPhysIsEarlyAlloc(uint64_t phys) {
+    return pmmEarlyWasAllocated(phys >> 12);
 }
 
 uint64_t pmmHhdmBase(void) {
@@ -388,6 +394,122 @@ Status pmmAddFreeRange(uint64_t physBase, uint64_t length) {
     return STATUS_OK;
 }
 
+/* PMM_RECLAIM_LOW_LIMIT mirrors D-080's low-memory withholding (PMM_LOW_MEM_LIMIT_PFN, pmm-map.c):
+ * pmmReclaimLoaderMemory() must never hand anything below 1 MiB to the buddy allocator either. */
+#define PMM_RECLAIM_LOW_LIMIT 0x100000ULL
+
+static void pmmZeroRange(uint64_t physBase, uint64_t length) {
+    uint64_t *p = (uint64_t *)(uintptr_t)(pmmHhdmBaseValue + physBase);
+    uint64_t words = length / sizeof(uint64_t);
+    for (uint64_t i = 0; i < words; i++) {
+        p[i] = 0;
+    }
+}
+
+/* True if every frame in [base, base+length) is still PAGE_STATE_RESERVED -- checked *before*
+ * pmmReclaimPiece() zeroes anything, so a mismatch between pmmMap.loaderReclaim[] and the Page
+ * array's actual state (which should never happen, but would mean this range isn't safe to
+ * reclaim at all) is caught before any byte is destroyed, not after. `pmmAddFreeRange()` re-checks
+ * this same condition itself right before it commits, but only after this function has already
+ * zeroed the range -- validating here first is what keeps a caught inconsistency's evidence (and
+ * whatever live data a wrongly-included frame held) intact for the panic report. */
+static bool pmmRangeAllReserved(uint64_t base, uint64_t length) {
+    uint64_t startPfn = base >> 12;
+    uint64_t endPfn = startPfn + (length >> 12);
+    for (uint64_t pfn = startPfn; pfn < endPfn; pfn++) {
+        if (!pmmPfnValid(pfn) || pageFromPfn(pfn)->state != PAGE_STATE_RESERVED) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Frees [base, base+length) to the buddy allocator, splitting around [keepPagePhys,
+ * keepPagePhys+4096) if it falls inside (recurses at most once per side -- the two split pieces
+ * can never contain keepPagePhys again). Zeroes each freed piece through the HHDM first: a loader
+ * stack or its page-table pool can hold RNG/seed residue or other loader-controlled data. Returns
+ * the number of pages actually freed. Panics (via pmmAddFreeRange's contract, and its own
+ * pmmRangeAllReserved() precheck) rather than return an error -- pmmMap.loaderReclaim[] ranges are
+ * the pmm's own record of exactly what pmmInit() scanned, so a failure here means that record is
+ * inconsistent with the Page array, not a bad caller argument. */
+static uint64_t pmmReclaimPiece(uint64_t base, uint64_t length, uint64_t keepPagePhys) {
+    if (length == 0) {
+        return 0;
+    }
+    uint64_t end = base + length;
+    uint64_t keepEnd = keepPagePhys + 4096;
+    if (keepPagePhys >= base && keepPagePhys < end) {
+        uint64_t total = 0;
+        if (keepPagePhys > base) {
+            total += pmmReclaimPiece(base, keepPagePhys - base, keepPagePhys);
+        }
+        if (keepEnd < end) {
+            total += pmmReclaimPiece(keepEnd, end - keepEnd, keepPagePhys);
+        }
+        return total;
+    }
+
+    if (!pmmRangeAllReserved(base, length)) {
+        panic("pmm: reclaim: [0x%llx, 0x%llx) is not entirely PAGE_STATE_RESERVED",
+              (unsigned long long)base, (unsigned long long)end);
+    }
+    pmmZeroRange(base, length);
+    Status st = pmmAddFreeRange(base, length);
+    if (st != STATUS_OK) {
+        panic("pmm: reclaim: pmmAddFreeRange(0x%llx, 0x%llx) failed (status %d)",
+              (unsigned long long)base, (unsigned long long)length, (int)st);
+    }
+    return length >> 12;
+}
+
+void pmmReclaimLoaderMemory(uint64_t keepPagePhys) {
+    static bool reclaimDone = false;
+    if (reclaimDone) {
+        panic("pmm: pmmReclaimLoaderMemory: called twice");
+    }
+    if (!vmmKernelTablesActive()) {
+        panic("pmm: pmmReclaimLoaderMemory: called before the kernel's own page tables are active");
+    }
+    if ((keepPagePhys & 0xFFF) != 0) {
+        panic("pmm: pmmReclaimLoaderMemory: keepPagePhys is not 4 KiB aligned");
+    }
+    reclaimDone = true;
+
+    uint64_t reclaimed = 0;
+    for (uint32_t i = 0; i < pmmMap.loaderReclaimCount; i++) {
+        uint64_t base = pmmMap.loaderReclaim[i].physBase;
+        uint64_t end = base + pmmMap.loaderReclaim[i].length;
+        if (base < PMM_RECLAIM_LOW_LIMIT) {
+            base = PMM_RECLAIM_LOW_LIMIT;
+        }
+        if (end > BOOTINFO_HHDM_SIZE) { /* mirrors pmm-map.c's own HHDM-window clip */
+            end = BOOTINFO_HHDM_SIZE;
+        }
+        if (base >= end) {
+            continue;
+        }
+        reclaimed += pmmReclaimPiece(base, end - base, keepPagePhys);
+    }
+
+    /* Independent sanity bound (not a full re-derivation, which would just repeat the loop
+     * above): reclaiming can never exceed the raw LOADER_RECLAIM total pmmMapScan() recorded at
+     * boot, before any of this function's own clipping/splitting logic ran. Catches, for example,
+     * a bug that double-counts a piece or free a range into the wrong zone's ledger. Checked
+     * *before* publishing `reclaimed` into pmmReclaimedPagesValue, so a panic here never leaves
+     * the stats snapshot other code reads (pmmGetStats()) reflecting a count this very check just
+     * proved untrustworthy. */
+    if (reclaimed > pmmMap.typePages[BOOT_MEM_LOADER_RECLAIM]) {
+        panic("pmm: reclaim: reclaimed %llu pages, more than the %llu ever recorded as "
+              "LOADER_RECLAIM",
+              (unsigned long long)reclaimed,
+              (unsigned long long)pmmMap.typePages[BOOT_MEM_LOADER_RECLAIM]);
+    }
+    pmmReclaimedPagesValue += reclaimed;
+
+    klogWrite(KLOG_INFO, "pmm", "reclaimed %llu KiB of LOADER_RECLAIM (kept BootInfo page 0x%llx)",
+              (unsigned long long)reclaimed * 4, (unsigned long long)keepPagePhys);
+}
+
 void pmmGetStats(PmmStats *out) {
     uint64_t irqFlags = pmmLock();
     *out = (PmmStats){0};
@@ -397,6 +519,7 @@ void pmmGetStats(PmmStats *out) {
     out->usablePages = pmmMap.typePages[BOOT_MEM_USABLE];
     out->lowReservedPages = pmmMap.lowReservedPages;
     out->unmappedPages = pmmMap.unmappedPages;
+    out->reclaimedPages = pmmReclaimedPagesValue;
     out->earlyPages = pmmEarlyUsedPages();
     out->pageArrayPages = pmmPageArrayPages;
     out->pageTablePages = pmmPageTablePages;
@@ -428,6 +551,8 @@ void pmmPrintMeminfo(void) {
               (unsigned long long)s.lowReservedPages * 4);
     klogWrite(KLOG_INFO, "meminfo", "Unmapped:    %llu kB",
               (unsigned long long)s.unmappedPages * 4);
+    klogWrite(KLOG_INFO, "meminfo", "Reclaimed:   %llu kB",
+              (unsigned long long)s.reclaimedPages * 4);
     for (uint32_t t = BOOT_MEM_USABLE; t <= BOOT_MEM_FRAMEBUFFER; t++) {
         if (t == BOOT_MEM_USABLE || s.typePages[t] == 0) {
             continue;
@@ -442,17 +567,22 @@ void pmmPrintMeminfo(void) {
               (unsigned long long)s.zoneFreePages[PMM_ZONE_NORMAL] * 4,
               (unsigned long long)s.zoneManagedPages[PMM_ZONE_NORMAL] * 4);
 
+    /* M2.3, D-089: reclaiming LOADER_RECLAIM moves pages into MemManaged without ever having been
+     * part of MemTotal (a disjoint BootInfo type from USABLE), so the identity gains a term on the
+     * left rather than losing one on the right -- strictly stronger, not weaker (CLAUDE.md: never
+     * weaken a test to get a pass). Before any reclaim has run, reclaimedPages is 0 and this is
+     * exactly the M2.2 formula. */
     uint64_t sum = s.managedPages + s.earlyPages + s.lowReservedPages + s.unmappedPages;
-    bool ok = sum == s.usablePages;
+    bool ok = sum == s.usablePages + s.reclaimedPages;
     klogWrite(ok ? KLOG_INFO : KLOG_ERROR, "meminfo",
-              "check: MemTotal == MemManaged + PageArray + LowReserved + Unmapped: %s",
+              "check: MemTotal + Reclaimed == MemManaged + PageArray + LowReserved + Unmapped: %s",
               ok ? "OK" : "MISMATCH");
     if (!ok) {
-        panic("pmm: meminfo self-check failed (usable=%llu managed=%llu early=%llu low=%llu "
-              "unmapped=%llu)",
-              (unsigned long long)s.usablePages, (unsigned long long)s.managedPages,
-              (unsigned long long)s.earlyPages, (unsigned long long)s.lowReservedPages,
-              (unsigned long long)s.unmappedPages);
+        panic("pmm: meminfo self-check failed (usable=%llu reclaimed=%llu managed=%llu early=%llu "
+              "low=%llu unmapped=%llu)",
+              (unsigned long long)s.usablePages, (unsigned long long)s.reclaimedPages,
+              (unsigned long long)s.managedPages, (unsigned long long)s.earlyPages,
+              (unsigned long long)s.lowReservedPages, (unsigned long long)s.unmappedPages);
     }
 }
 

@@ -1,10 +1,26 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-25 (M2.1 merged (PR #5); M2.2 Physical memory manager done, [PR #6](https://github.com/gwbrickner/bongos/pull/6) open; M2.3 is next)
+**Last updated:** 2026-09-26 (M2.3 Kernel paging done, [PR #7](https://github.com/gwbrickner/bongos/pull/7) open; M2.4 is next)
 
 ## Current milestone
-None in progress. **M2.2 Physical memory manager** is done -- see `docs/logs/M2.2.md` for the full
+None in progress. **M2.3 Kernel paging** is done -- see `docs/logs/M2.3.md` for the full writeup
+and its Summary section for the release notes. ROADMAP.md's M2.3 box is checked. Design consulted
+with the `architect` subagent first (D-086 through D-091). Three `reviewer` rounds: the first
+found no Critical findings but 12 Should-fix items (all fixed); the second, on those fixes, found
+no Critical but judged 2 fixes only half-done and found 5 more real gaps -- including a genuine
+W^X hole (`vmmMapKernel` could create a writable KVA-region alias of the kernel's own text/rodata,
+which the HHDM-only W^X verifier would never see) -- plus a `make format-check` failure, all fixed;
+the third confirmed those fixes and found only 5 small nits (4 fixed, 1 explicitly deferred as
+speculative ahead of any real caller). All 28 ktests (7 new: `paging_text_write_faults`,
+`paging_data_exec_faults`, `paging_fb_wc`, `paging_wx_verify`, `paging_text_hhdm_alias_readonly`,
+`vmm_map_unmap`, `loader_reclaimed`) and all 162 `make host-tests` cases pass. `make test`/
+`make test-full` (including the memory-diversity matrix-full row) pass clean with no boot errors;
+`make format-check` clean. [PR #7](https://github.com/gwbrickner/bongos/pull/7) open against
+`main`, `needs-owner: yes` (D-045/§25 -- memory management, security-sensitive CR3/PAT/CR4
+changes, and a `kernelBootInfo()` contract change).
+
+**M2.2 Physical memory manager** is done -- see `docs/logs/M2.2.md` for the full
 writeup and its Summary section for the release notes. ROADMAP.md's M2.2 box is checked. The
 `reviewer` subagent's first pass found one Critical finding (a real double-free bug: freeing the
 *upper* half of a buddy pair could abandon its own head page in a stale allocated state, letting a
@@ -30,15 +46,12 @@ backtrace is actually symbolized, and a missing contract comment on `trapDispatc
 `main`, was `needs-owner: yes` (D-045/§25 -- interrupts, security-sensitive stack-protector/UBSan
 runtimes, and a boot-ABI change to the kernel ELF's PT_LOAD count, D-073).
 
-**Next milestone: M2.3 Kernel paging** (`needs-owner`, ROADMAP.md). Needs M2.2, now done. Steps:
-build the kernel's own PML4 (HHDM, per-section kernel image permissions, pre-allocated kernel-half
-PML4 entries 256-511); switch to it and remove the loader identity mapping; PAT setup (remap the
-framebuffer WC); SMEP/SMAP/UMIP; `vmmMapKernel`/`vmmUnmapKernel` and the kernel virtual area
-allocator; and step 6 (moved from M2.2, D-083): reclaim `LOADER_RECLAIM` memory via
-`pmmAddFreeRange()` over the pmm's own `PmmMap.loaderReclaim[]`, once the kernel's own page tables
-are live and CR4.PGE has been toggled -- and stop using `kernelBootInfo()`'s live pointer/the
-loader's memory-map array once that reclaim runs. Consult the `architect` subagent first (paging is
-on CLAUDE.md's consult-first list).
+**Next milestone: M2.4 Slab, kmalloc, vmalloc** (`needs-owner`, ROADMAP.md). Needs M2.3, now done.
+Steps: slab caches with constructors and per-CPU magazines; `kmalloc` size classes 16-8192 bytes;
+`vmalloc` for large, page-granular allocations with guard pages (built on M2.3's `vmmMapKernel`/
+`vmmUnmapKernel` and KVA allocator, `kernel/mm/vmm.c`/`kva.c`); debug-build poisoning, redzones,
+and double-free/use-after-free detection; ktests for stress, alignment, redzone overflow, and a
+guard-page fault.
 
 ## Phase
 1: Acapulco Gold

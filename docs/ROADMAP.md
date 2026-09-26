@@ -137,7 +137,7 @@ workflow is green on the PR.
 
 **Done when:** the ktests pass, and `/proc/meminfo`-style totals printed at boot match the BootInfo map.
 
-### [ ] M2.3 Kernel paging `needs-owner`
+### [x] M2.3 Kernel paging `needs-owner`
 **Needs:** M2.2
 1. Build the kernel's own PML4:
    - HHDM

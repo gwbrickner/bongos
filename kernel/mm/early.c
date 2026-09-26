@@ -13,6 +13,10 @@ static PmmMap *earlyMap;
 static uint64_t earlyHhdmBase;
 static uint64_t
     earlyCursor[PMM_MAX_USABLE_RANGES]; /* per-range: pfn boundary of what's still free */
+/* The original (pre-consumption) endPfn of each usable range, captured before pmmEarlySeal()
+ * overwrites `map->usable[i].endPfn` in place with the final (shrunk) cursor value -- kept around
+ * so pmmEarlyWasAllocated() can still identify the consumed portion afterward. */
+static uint64_t earlyOriginalEndPfn[PMM_MAX_USABLE_RANGES];
 static bool earlySealed;
 static uint64_t earlyUsedPages;
 
@@ -23,6 +27,7 @@ void pmmEarlyInit(PmmMap *map, uint64_t hhdmBase) {
     earlyHhdmBase = hhdmBase;
     for (uint32_t i = 0; i < map->usableCount; i++) {
         earlyCursor[i] = map->usable[i].endPfn;
+        earlyOriginalEndPfn[i] = map->usable[i].endPfn;
     }
     earlySealed = false;
     earlyUsedPages = 0;
@@ -75,4 +80,22 @@ void pmmEarlySeal(void) {
 
 uint64_t pmmEarlyUsedPages(void) {
     return earlyUsedPages;
+}
+
+bool pmmEarlyWasAllocated(uint64_t pfn) {
+    /* Consumption is top-down within each range (pmmEarlyAllocPages() decrements earlyCursor[i]
+     * from its original endPfn), so the consumed portion of range i is exactly
+     * [current (shrunk) usable[i].endPfn, earlyOriginalEndPfn[i]) -- everything at or above the
+     * final cursor and below where the range originally ended. Only meaningful after
+     * pmmEarlySeal(): before that, usable[i].endPfn is still the original value, so this would
+     * always report false instead of a real answer -- panic rather than silently misreport. */
+    if (!earlySealed) {
+        panic("pmm: pmmEarlyWasAllocated() called before pmmEarlySeal()");
+    }
+    for (uint32_t i = 0; i < earlyMap->usableCount; i++) {
+        if (pfn >= earlyMap->usable[i].endPfn && pfn < earlyOriginalEndPfn[i]) {
+            return true;
+        }
+    }
+    return false;
 }
