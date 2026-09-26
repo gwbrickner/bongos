@@ -15,7 +15,9 @@
 
 #include "drivers/fbcon/fbcon.h"
 #include "drivers/serial/uart16550.h"
+#include "kmalloc.h"
 #include "pmm.h"
+#include "vmalloc.h"
 #include "vmm.h"
 
 /* Copies of the loader's handoff data, in kernel .data rather than the loader's LOADER_RECLAIM
@@ -181,6 +183,9 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
     vmmInit(&bootInfoCopy, memMapSnapshot, memMapSnapshotCount);
     pmmReclaimLoaderMemory(bootInfoPagePhysValue);
     pmmPrintMeminfo(); /* shows the post-reclaim totals; panics internally if the check fails */
+
+    slabInit(); /* M2.4, D-092..D-096: slab caches + kmalloc's 12 size classes */
+    vmallocInit(); /* M2.4, D-097: vmalloc */
 
     ktestRunFromCmdline(cmdlineCopy); /* never returns if ktest= was present */
 
