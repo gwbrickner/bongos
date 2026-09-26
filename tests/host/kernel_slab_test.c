@@ -31,7 +31,8 @@ static void checkLayoutInvariants(uint32_t objSize, uint32_t align, bool debug) 
     ASSERT_TRUE(layout.order <= SLAB_MAX_ORDER);
     uint32_t slabBytes = 4096u << layout.order;
 
-    uint32_t minObjOffset = (uint32_t)sizeof(Slab) + layout.objsPerSlab * (uint32_t)sizeof(uint16_t);
+    uint32_t minObjOffset =
+        (uint32_t)sizeof(Slab) + layout.objsPerSlab * (uint32_t)sizeof(uint16_t);
     ASSERT_TRUE(layout.objOffset >= minObjOffset);
     /* Object 0's own left redzone lives in [objOffset-rzLeft, objOffset) -- it must not reach
      * back far enough to overlap the bufctl array, or a fresh carve's redzone fill corrupts the
@@ -71,8 +72,8 @@ TEST(slabIndexForOffsetRejectsMisaligned) {
     ASSERT_EQ(slabIndexForOffset(&layout, 0), 0);
     ASSERT_EQ(slabIndexForOffset(&layout, 32), 1);
     ASSERT_EQ(slabIndexForOffset(&layout, 9 * 32), 9);
-    ASSERT_TRUE(slabIndexForOffset(&layout, 10 * 32) < 0);  /* past objsPerSlab */
-    ASSERT_TRUE(slabIndexForOffset(&layout, 5) < 0);        /* not a stride multiple */
+    ASSERT_TRUE(slabIndexForOffset(&layout, 10 * 32) < 0); /* past objsPerSlab */
+    ASSERT_TRUE(slabIndexForOffset(&layout, 5) < 0);       /* not a stride multiple */
     ASSERT_TRUE(slabIndexForOffset(&layout, 32 + 1) < 0);
 }
 

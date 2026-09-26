@@ -11,11 +11,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SLAB_MAGIC          0x51AB51AB51AB51ABULL
-#define SLAB_BUFCTL_END     0xFFFFu /* free, last on the slab's free list */
-#define SLAB_BUFCTL_BUSY    0xFFFEu /* not on the slab's free list (caller-held or magazine-cached;
-                                     * a magazine scan disambiguates the two for double-free
-                                     * detection -- see slab.c's slabFreeCommon()) */
+#define SLAB_MAGIC      0x51AB51AB51AB51ABULL
+#define SLAB_BUFCTL_END 0xFFFFu /* free, last on the slab's free list */
+#define SLAB_BUFCTL_BUSY                                                                           \
+    0xFFFEu /* not on the slab's free list (caller-held or magazine-cached;                        \
+             * a magazine scan disambiguates the two for double-free                               \
+             * detection -- see slab.c's slabFreeCommon()) */
 #define SLAB_MAX_OBJECTS    1024u
 #define SLAB_MAX_ORDER      3u /* a slab is at most 4096 << 3 = 32 KiB */
 #define SLAB_NAME_MAX       24
@@ -41,7 +42,7 @@ typedef enum {
 typedef struct Slab {
     uint64_t magic;
     struct SlabCache *cache;
-    ListNode link; /* on the owning cache's partial/full/empty list */
+    ListNode link;    /* on the owning cache's partial/full/empty list */
     uint64_t objBase; /* VA of slot 0 */
     uint16_t objCount;
     uint16_t freeCount;
@@ -59,7 +60,7 @@ typedef struct {
 /* A cache's fixed layout, computed once by slabComputeLayout() at create time -- every slab a
  * cache ever grows uses the same order/objOffset/stride/rzLeft. */
 typedef struct {
-    uint32_t order;     /* slab size is (4096 << order) bytes */
+    uint32_t order; /* slab size is (4096 << order) bytes */
     uint32_t objsPerSlab;
     uint32_t stride;    /* bytes from one slot to the next */
     uint32_t objOffset; /* bytes from the slab base to slot 0 */

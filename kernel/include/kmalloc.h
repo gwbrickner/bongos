@@ -13,9 +13,10 @@
 #include <stdint.h>
 
 typedef uint32_t KmallocFlags;
-#define KMALLOC_ZERO        (1u << 0) /* zero-fill [0, size) before returning; rejected (a kernel
-                                       * bug) on a cache with a constructor -- zeroing would
-                                       * destroy constructed state the ctor is meant to preserve */
+#define KMALLOC_ZERO                                                                               \
+    (1u << 0) /* zero-fill [0, size) before returning; rejected (a kernel                          \
+               * bug) on a cache with a constructor -- zeroing would                               \
+               * destroy constructed state the ctor is meant to preserve */
 #define KMALLOC_FLAGS_VALID KMALLOC_ZERO
 #define KMALLOC_MIN_ALIGN   16u
 #define KMALLOC_MAX_SIZE    8192u
@@ -57,7 +58,7 @@ void kfree(void *ptr);
  * the cache itself (or its first slab) can't be allocated. `name` is copied, truncated to 23
  * bytes. */
 Status slabCacheCreate(const char *name, size_t objSize, size_t align, SlabObjFn ctor,
-                        SlabObjFn dtor, SlabCache **outCache);
+                       SlabObjFn dtor, SlabCache **outCache);
 
 /* Destroys a cache slabCacheCreate() returned. Every object must already be freed back to it
  * (first drains the local magazine and releases every empty slab, so a cache with no *live*
@@ -97,12 +98,12 @@ typedef enum {
     SLAB_BUG_MISALIGNED,      /* an interior pointer: not a slot's payload start */
     SLAB_BUG_WRONG_CACHE,     /* slabFree() on the wrong cache; kfree() of a non-kmalloc object */
     SLAB_BUG_DOUBLE_FREE,
-    SLAB_BUG_CORRUPT,         /* bad magic, bad bufctl value, or another impossible state */
-    SLAB_BUG_BAD_SIZE,        /* kmalloc(0) or kmalloc(> KMALLOC_MAX_SIZE) */
-    SLAB_BUG_BAD_FLAGS,       /* an unknown flag, or KMALLOC_ZERO on a cache with a constructor */
-    SLAB_BUG_CACHE_BUSY,      /* slabCacheDestroy() with live objects, or on a static cache */
-    SLAB_BUG_REDZONE,         /* KERNEL_DEBUG: a redzone byte was overwritten */
-    SLAB_BUG_POISON           /* KERNEL_DEBUG: a freed object's poison was overwritten */
+    SLAB_BUG_CORRUPT,    /* bad magic, bad bufctl value, or another impossible state */
+    SLAB_BUG_BAD_SIZE,   /* kmalloc(0) or kmalloc(> KMALLOC_MAX_SIZE) */
+    SLAB_BUG_BAD_FLAGS,  /* an unknown flag, or KMALLOC_ZERO on a cache with a constructor */
+    SLAB_BUG_CACHE_BUSY, /* slabCacheDestroy() with live objects, or on a static cache */
+    SLAB_BUG_REDZONE,    /* KERNEL_DEBUG: a redzone byte was overwritten */
+    SLAB_BUG_POISON      /* KERNEL_DEBUG: a freed object's poison was overwritten */
 } SlabBugKind;
 
 /* The kind of the most recent slab-subsystem bug, for ktests that catch it via

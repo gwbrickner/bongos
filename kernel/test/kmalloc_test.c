@@ -89,9 +89,9 @@ KTEST(kmalloc_stress) {
 /* Every kmalloc size around each class boundary comes back KMALLOC_MIN_ALIGN-aligned. A custom
  * slabCacheCreate() cache's own alignment (64/256/4096) is honored exactly, in both builds. */
 KTEST(kmalloc_alignment) {
-    static const uint32_t sizes[] = {1,    15,   16,   17,   31,   32,   63,   64,  95,  96,
-                                     127,  128,  191,  192,  255,  256,  511,  512, 1023, 1024,
-                                     2047, 2048, 4095, 4096, 8191, 8192};
+    static const uint32_t sizes[] = {1,    15,   16,   17,   31,   32,   63,   64,  95,
+                                     96,   127,  128,  191,  192,  255,  256,  511, 512,
+                                     1023, 1024, 2047, 2048, 4095, 4096, 8191, 8192};
     for (uint32_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
         void *p = kmalloc(sizes[i], 0);
         KTEST_ASSERT(p != NULL);
@@ -102,8 +102,8 @@ KTEST(kmalloc_alignment) {
     static const uint32_t aligns[] = {64, 256, 4096};
     for (uint32_t a = 0; a < sizeof(aligns) / sizeof(aligns[0]); a++) {
         SlabCache *cache;
-        KTEST_ASSERT_EQ(
-            slabCacheCreate("kmalloc_test_align", 100, aligns[a], NULL, NULL, &cache), STATUS_OK);
+        KTEST_ASSERT_EQ(slabCacheCreate("kmalloc_test_align", 100, aligns[a], NULL, NULL, &cache),
+                        STATUS_OK);
         void *objs[4];
         for (int i = 0; i < 4; i++) {
             objs[i] = slabAlloc(cache, 0);

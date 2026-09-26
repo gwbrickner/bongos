@@ -27,14 +27,13 @@ KTEST(vmalloc_guard_page_faults) {
     uint64_t va = (uint64_t)(uintptr_t)p;
 
     TrapCatchInfo info;
-    bool caught =
-        archTrapCatch(TRAP_CATCH_VEC(14), vmallocWriteTrigger, (void *)(uintptr_t)(va + 4096),
-                       &info);
+    bool caught = archTrapCatch(TRAP_CATCH_VEC(14), vmallocWriteTrigger,
+                                (void *)(uintptr_t)(va + 4096), &info);
     KTEST_ASSERT(caught);
     KTEST_ASSERT_EQ(info.cr2, va + 4096);
 
-    caught = archTrapCatch(TRAP_CATCH_VEC(14), vmallocReadTrigger, (void *)(uintptr_t)(va - 1),
-                            &info);
+    caught =
+        archTrapCatch(TRAP_CATCH_VEC(14), vmallocReadTrigger, (void *)(uintptr_t)(va - 1), &info);
     KTEST_ASSERT(caught);
     KTEST_ASSERT_EQ(info.cr2, va - 1);
 

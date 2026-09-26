@@ -4,8 +4,8 @@
 
 #include <stddef.h>
 
-const uint32_t slabKmallocClassSizes[SLAB_KMALLOC_CLASS_COUNT] = {16,  32,  64,   96,   128, 192,
-                                                                   256, 512, 1024, 2048, 4096, 8192};
+const uint32_t slabKmallocClassSizes[SLAB_KMALLOC_CLASS_COUNT] = {16,  32,  64,   96,   128,  192,
+                                                                  256, 512, 1024, 2048, 4096, 8192};
 
 uint32_t slabClassIndexForSize(size_t size) {
     if (size == 0 || size > KMALLOC_MAX_SIZE) {

@@ -180,9 +180,9 @@ static void slabReleaseToPmmLocked(SlabCache *cache, Slab *slab) {
 /* Moves `slab` to the list its current freeCount implies, if it isn't there already, keeping
  * cache->emptySlabCount in sync. Called with slabLock held. */
 static void slabRehomeLocked(SlabCache *cache, Slab *slab) {
-    SlabListKind want = slab->freeCount == 0            ? SLAB_LIST_FULL
-                         : slab->freeCount == slab->objCount ? SLAB_LIST_EMPTY
-                                                              : SLAB_LIST_PARTIAL;
+    SlabListKind want = slab->freeCount == 0                ? SLAB_LIST_FULL
+                        : slab->freeCount == slab->objCount ? SLAB_LIST_EMPTY
+                                                            : SLAB_LIST_PARTIAL;
     if (slab->list == want) {
         return;
     }
@@ -190,9 +190,9 @@ static void slabRehomeLocked(SlabCache *cache, Slab *slab) {
         cache->emptySlabCount--;
     }
     listRemove(&slab->link);
-    ListNode *destHead = want == SLAB_LIST_FULL   ? &cache->full
+    ListNode *destHead = want == SLAB_LIST_FULL    ? &cache->full
                          : want == SLAB_LIST_EMPTY ? &cache->empty
-                                                    : &cache->partial;
+                                                   : &cache->partial;
     listPushHead(destHead, &slab->link);
     if (want == SLAB_LIST_EMPTY) {
         cache->emptySlabCount++;
@@ -256,8 +256,8 @@ static void slabRefillLocked(SlabCache *cache, SlabMagazine *mag) {
 /* --- public API --- */
 
 static Status slabCacheCreateInternal(const char *name, size_t objSize, size_t align,
-                                       SlabObjFn ctor, SlabObjFn dtor, uint32_t extraFlags,
-                                       SlabCache **outCache) {
+                                      SlabObjFn ctor, SlabObjFn dtor, uint32_t extraFlags,
+                                      SlabCache **outCache) {
     if (name == NULL || outCache == NULL || objSize == 0 || objSize > KMALLOC_MAX_SIZE) {
         return STATUS_ERR_INVALID;
     }
@@ -314,7 +314,7 @@ static Status slabCacheCreateInternal(const char *name, size_t objSize, size_t a
 }
 
 Status slabCacheCreate(const char *name, size_t objSize, size_t align, SlabObjFn ctor,
-                        SlabObjFn dtor, SlabCache **outCache) {
+                       SlabObjFn dtor, SlabCache **outCache) {
     return slabCacheCreateInternal(name, objSize, align, ctor, dtor, 0, outCache);
 }
 
@@ -517,7 +517,7 @@ void slabCacheGetStats(const SlabCache *cache, SlabCacheStats *out) {
     out->emptySlabs = cache->emptySlabCount;
 
     uint64_t freeObjs = slabSumFreeLocked(&cache->partial) + slabSumFreeLocked(&cache->full) +
-                         slabSumFreeLocked(&cache->empty);
+                        slabSumFreeLocked(&cache->empty);
     out->objsFree = freeObjs;
     out->objsCached = cache->bspMag.count;
     out->objsAllocated = cache->slabCount * cache->layout.objsPerSlab - freeObjs - out->objsCached;
@@ -549,7 +549,7 @@ void slabInit(void) {
         SlabCache *cache;
         Status st =
             slabCacheCreateInternal(name, slabKmallocClassSizes[i], KMALLOC_MIN_ALIGN, NULL, NULL,
-                                     SLAB_CACHE_PERMANENT | SLAB_CACHE_KMALLOC, &cache);
+                                    SLAB_CACHE_PERMANENT | SLAB_CACHE_KMALLOC, &cache);
         if (st != STATUS_OK) {
             panic("slab: failed to create %s (status %d)", name, (int)st);
         }
