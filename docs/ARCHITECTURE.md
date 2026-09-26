@@ -146,9 +146,11 @@ the handler entirely). Every check always panics; there is no log-and-continue m
 
 **`KERNEL_DEBUG` (debug builds, D-082):** a second, coarser debug-build define alongside
 `KERNEL_UBSAN`, gating extra-cost invariant checks that aren't sanitizer instrumentation -- today,
-the pmm's write-after-free poisoning (§6.2) and `list.h`'s NULL-the-links-on-remove hardening.
-Misuse that's cheap enough to detect unconditionally (the pmm's double-free/misuse state machine)
-stays on in release builds too; `KERNEL_DEBUG` is only for checks with a real per-operation cost.
+the pmm's write-after-free poisoning (§6.2), `list.h`'s NULL-the-links-on-remove hardening, and
+the slab allocator's redzones (checked on free) and payload poisoning (checked on next reuse,
+D-096, §6.2). Misuse that's cheap enough to detect unconditionally (the pmm's double-free/misuse
+state machine; the slab allocator's own bufctl-based double-free/bad-pointer checks) stays on in
+release builds too; `KERNEL_DEBUG` is only for checks with a real per-operation cost.
 
 **Make targets:** `all`, `image` (-> `build/bongos.img`), `test` (quick matrix), `test-full`,
 `host-tests`, `debug`, `run`, `run-bios`, `gdb`, `format`, `lint`, `clean`.
@@ -405,9 +407,23 @@ copies these 256 entries by value rather than syncing individual mappings into t
    interior/reserved page panics via `panicBug()` (always on, not just debug builds). `KERNEL_DEBUG`
    builds (§3) additionally poison a freed block's content and verify it on the next allocation,
    catching a write-after-free.
-5. **Slab allocator:** named object caches with per-CPU magazines. `kmalloc` has size classes
-   from 16 to 8192 bytes. Anything larger goes to `vmalloc`, which is page-granular and has
-   guard pages.
+5. **Slab allocator, kmalloc, vmalloc (M2.4, D-092..D-098):** named object caches
+   (`slabCacheCreate`/`slabAlloc`/`slabFree`, optional constructor/destructor) with one magazine
+   per cache (today: BSP-only, same honest single-CPU pattern as the pmm's own page cache; M3.5
+   makes it real per-CPU state). An out-of-band `bufctl` free list sits after each slab's header,
+   never inside the objects themselves, so constructed state and write-after-free poison never
+   fight over the same bytes. `kmalloc`/`kfree` are 12 fixed size classes, 16 to 8192 bytes,
+   16-byte aligned; a custom cache's own `align` is honored exactly. Ownership of a slab's pages
+   is tracked in `Page.flags` (`PAGE_F_SLAB`, orthogonal to `PageState`) with `Page.privateWord`
+   pointing at the owning `Slab`; the pmm refuses to free a page still carrying an owner flag
+   (`PMM_BUG_OWNED_PAGE`). Anything over 8192 bytes goes to `vmalloc`: eager, page-granular,
+   built on `vmmMapKernel`/the KVA allocator (guard pages on both sides come from `vmmKvaAlloc`
+   itself), tracked the same way via `PAGE_F_VMALLOC`. `KERNEL_DEBUG` builds add fixed redzones
+   around every slab object (checked on free) and poison freed payloads (checked on the next
+   reuse, D-082's exact pmm pattern) -- both reported through the existing `panicBug()`/
+   `TRAP_CATCH_KERNEL_BUG` mechanism, no new catch kind. Neither `kmalloc` nor `vmalloc` is ever
+   called by the pmm or vmm themselves (no recursion). See `docs/logs/M2.4.md` for the design
+   writeup.
 6. **Kernel stacks:** 16 KiB plus a guard page, in the kernel virtual area.
 7. **Reclaim:** `LOADER_RECLAIM` is handed to the buddy allocator once the kernel switches to its
    own page tables and no longer needs the loader's (M2.3, D-083/D-089 -- superseding this
@@ -449,7 +465,11 @@ copies these 256 entries by value rather than syncing individual mappings into t
   (`kernel/mm/kva.c`) that reserves an unmapped guard page on each side of every allocation.
   `VMM_EXEC` is rejected until a module loader needs it. A WC request over a physical page the
   pmm already manages (and so already maps WB via the HHDM) is rejected too (SDM Vol 3A §11.12.4:
-  one physical page can't have two memory types at once).
+  one physical page can't have two memory types at once). The extent allocator admits at most
+  `KVA_MAX_EXTENTS-1` (511) concurrent reservations (M2.4, D-098): since removing `k` disjoint
+  ranges from one bounded interval can never leave more than `k+1` free pieces, this makes the
+  fixed-size free-extent table provably always big enough, so a legitimate `vmmKvaFree` can never
+  hit the table-full case D-091(7) originally flagged.
 
 ### 6.4 Address spaces and VM objects
 - **`AddressSpace`:** the PML4, a red-black tree of `VmRegion`s keyed by start address, a
