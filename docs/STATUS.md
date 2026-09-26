@@ -1,10 +1,14 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-26 (M2.3 Kernel paging done, [PR #7](https://github.com/gwbrickner/bongos/pull/7) open; M2.4 is next)
+**Last updated:** 2026-09-26 (M2.4 Slab, kmalloc, vmalloc started)
 
 ## Current milestone
-None in progress. **M2.3 Kernel paging** is done -- see `docs/logs/M2.3.md` for the full writeup
+**M2.4 Slab, kmalloc, vmalloc** is in progress on branch `m2-4-slab-kmalloc-vmalloc` -- see
+`docs/logs/M2.4.md` for the plan and running log. Just started: consulting the `architect`
+subagent for the design next.
+
+**M2.3 Kernel paging** is done -- see `docs/logs/M2.3.md` for the full writeup
 and its Summary section for the release notes. ROADMAP.md's M2.3 box is checked. Design consulted
 with the `architect` subagent first (D-086 through D-091). Three `reviewer` rounds: the first
 found no Critical findings but 12 Should-fix items (all fixed); the second, on those fixes, found
@@ -155,14 +159,12 @@ guard-page fault.
   configuration in the harness actually exercising the NORMAL zone -- see `docs/logs/M2.2.md`.
 
 ## Next step
-M2.2's [PR #6](https://github.com/gwbrickner/bongos/pull/6) is open against `main`
-(`Reviewer: PASS`, `needs-owner: yes`) and waiting on the owner's review. A fresh session (or this
-one, if continuing) starts M2.3 following the normal session protocol -- create a branch, copy
-`docs/logs/TEMPLATE.md` to `docs/logs/M2.3.md`, consult the `architect` subagent for the kernel
-paging design (own PML4 layout, PAT reprogramming, the kernel virtual area allocator's API shape,
-and the LOADER_RECLAIM reclaim step moved here from M2.2 per D-083), then implement incrementally
-per the session protocol. See this file's "Next milestone" section above and ROADMAP.md's own
-M2.3 section for the full step list.
+M2.4 is in progress on branch `m2-4-slab-kmalloc-vmalloc` (see `docs/logs/M2.4.md`). Next: consult
+the `architect` subagent for the slab/kmalloc/vmalloc design (magazine layout, size classes,
+`Page.privateWord` usage, debug poison/redzone/double-free scheme tying into D-082's
+`archTrapCatch`), record decisions as D-092+, then implement incrementally per the session
+protocol and the log's Plan section. PRs #6 (M2.2) and #7 (M2.3) remain open against `main`,
+both `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.4's own progress.
 
 ## Blockers
 _(none)_
