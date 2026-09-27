@@ -1,34 +1,34 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-27 (M2.4 Slab, kmalloc, vmalloc implemented, `reviewer` Should-fix
-round applied, finishing up)
+**Last updated:** 2026-09-27 (M2.4 Slab, kmalloc, vmalloc done; M2.5 is next)
 
 ## Current milestone
-**M2.4 Slab, kmalloc, vmalloc** is in progress on branch `m2-4-slab-kmalloc-vmalloc` -- see
-`docs/logs/M2.4.md` for the full plan/log. Design consulted with the `architect` subagent first
-(D-092 through D-098). Implemented: `kernel/include/kmalloc.h`/`vmalloc.h`, the slab allocator
-(`kernel/mm/slab-core.c`/`slab-debug.c`/`slab.c`, one magazine per cache), `kmalloc`'s 12 size
-classes, and `vmalloc` (`kernel/mm/vmalloc.c`) built on M2.3's KVA allocator/`vmmMapKernel`. A
-real bug was found and fixed via booting under real QEMU (not just host tests): a fresh
-`KERNEL_DEBUG` slab carve's redzone fill could corrupt the free list's own bufctl array for
-several size classes (D-093's `slabMinObjOffset()` now accounts for it; see the log's "(4)" entry
-for the full story). The `reviewer` subagent found no Critical findings on the full diff but 7
-Should-fix items -- all fixed: a latent `panicBug()`-while-`slabLock()`-held hazard around pmm/
-ctor/dtor calls in slab growth/release (now unlocked, matching pmm.c's own D-082 pattern);
-`slabCacheDestroy()` now validates its argument is a genuinely live cache (bounds + in-use +
-a new `SLAB_CACHE_MAGIC`) instead of trusting it; a `vmalloc_map_free_no_leak` test that only
-checked vmalloc's own counters (which don't prove a frame was actually freed) now also checks the
-pmm's own page-level stats; added ktests for the bufctl-only double-free path, D-095's
-`PMM_BUG_OWNED_PAGE`, `SLAB_BUG_VMALLOC_POINTER`/`VMALLOC_BUG_NOT_VMALLOC`, and vmalloc's OOM
-partial-failure unwind; vfree()/vmallocUnwind() now check `vmmUnmapKernel()`'s Status instead of
-ignoring it. `make host-tests`: 172/172. `make test` under real QEMU caught a real test-accounting
-bug in the new `pmm_owned_page_rejected` ktest itself (a slab grown mid-test wasn't warmed up
-first, so it looked like a 1-page leak) -- fixed by warming both kmalloc-16 and vmalloc after a
-clean `slabShrinkAll()` baseline, same pattern `vmalloc_map_free_no_leak` already used; a rerun to
-confirm that fix is in progress. See `docs/logs/M2.4.md` for the exact ktest count once confirmed.
-Next: confirm `make test` is clean, then `make test-full`/`format-check`, update ROADMAP.md, write
-the Summary, open the PR (`needs-owner: yes`).
+None in progress. **M2.4 Slab, kmalloc, vmalloc** is done -- see `docs/logs/M2.4.md` for the full
+writeup and its Summary section for the release notes. ROADMAP.md's M2.4 box is checked. Design
+consulted with the `architect` subagent first (D-092 through D-098, several deliberately
+simplified during implementation for a tractable, host-testable design -- see each entry). A real
+bug was found and fixed via booting under real QEMU (not just host tests): a fresh `KERNEL_DEBUG`
+slab carve's redzone fill could corrupt the free list's own bufctl array for several size classes,
+since `slabComputeLayout()` didn't reserve room for object 0's own left redzone before the bufctl
+array (D-093's `slabMinObjOffset()` now accounts for it; see the log's "(4)" entry for the full
+bisection story). The `reviewer` subagent found no Critical findings on the full diff but 7
+Should-fix items, all fixed: a latent `panicBug()`-while-`slabLock()`-held hazard around pmm/ctor/
+dtor calls in slab growth/release (restructured to never hold the lock across those, matching
+pmm.c's own D-082 pattern); `slabCacheDestroy()`/`slabAlloc()`/`slabCacheGetStats()` now validate
+their cache pointer (bounds + in-use + a new `SLAB_CACHE_MAGIC`) instead of trusting it; a
+`vmalloc_map_free_no_leak` test that only checked vmalloc's own counters (which don't prove a
+frame was actually freed) now also checks the pmm's own page-level stats; added ktests for the
+bufctl-only double-free path, D-095's `PMM_BUG_OWNED_PAGE`, `SLAB_BUG_VMALLOC_POINTER`/
+`VMALLOC_BUG_NOT_VMALLOC`, and vmalloc's OOM partial-failure unwind; `vfree()`/`vmallocUnwind()`
+now check `vmmUnmapKernel()`'s Status instead of ignoring it. Fixing that round's own new
+`pmm_owned_page_rejected` ktest then caught a second real bug, again only via real QEMU: a
+test-accounting gap where a slab grown mid-test (kmalloc-16's or vmalloc-area's own first backing
+slab) looked like a 1-page leak -- fixed by warming both up after a clean `slabShrinkAll()`
+baseline. 40 ktests (12 new this milestone) and 172 `make host-tests` cases pass. `make test`/
+`make test-full` (including the memory-diversity matrix-full row) pass clean with no boot errors;
+`make format-check` clean. PR pending (`needs-owner: yes` -- memory management, and a new always-on
+pmm check + a KVA-allocator contract change to already-merged M2.2/M2.3 code).
 
 **M2.3 Kernel paging** is done -- see `docs/logs/M2.3.md` for the full writeup
 and its Summary section for the release notes. ROADMAP.md's M2.3 box is checked. Design consulted
@@ -72,12 +72,14 @@ backtrace is actually symbolized, and a missing contract comment on `trapDispatc
 `main`, was `needs-owner: yes` (D-045/§25 -- interrupts, security-sensitive stack-protector/UBSan
 runtimes, and a boot-ABI change to the kernel ELF's PT_LOAD count, D-073).
 
-**Next milestone: M2.4 Slab, kmalloc, vmalloc** (`needs-owner`, ROADMAP.md). Needs M2.3, now done.
-Steps: slab caches with constructors and per-CPU magazines; `kmalloc` size classes 16-8192 bytes;
-`vmalloc` for large, page-granular allocations with guard pages (built on M2.3's `vmmMapKernel`/
-`vmmUnmapKernel` and KVA allocator, `kernel/mm/vmm.c`/`kva.c`); debug-build poisoning, redzones,
-and double-free/use-after-free detection; ktests for stress, alignment, redzone overflow, and a
-guard-page fault.
+**Next milestone: M2.5 BIOS loader** (`needs-owner`, ROADMAP.md). Needs M1.4 and M2.1, both long
+done -- picked over the higher-numbered M2.6/M3.1 (M2.6 needs M2.4+M2.5; M3.1 needs M2.4) per the
+session protocol's "lowest-numbered unchecked milestone whose Needs are done" rule. Steps: a
+440-byte NASM stage1 (INT 13h AH=42h reads of stage2 using mkimage-patched LBA/length) and a
+stage2 (A20, E820, VBE mode pick, RSDP scan, 32-bit C with real-mode INT 13h/INT 10h thunks, the
+GPT/FAT32 readers and boot menu reused from `boot/common`); loads the kernel+initrd, builds page
+tables + BootInfo (`bootMethod = BIOS`), enters long mode; `mkimage` installs stage1/stage2; the
+boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot tests.
 
 ## Phase
 1: Acapulco Gold
@@ -179,14 +181,32 @@ guard-page fault.
   wording) were also fixed. `make test`/`make test-full`: 21/21 ktests pass in both the default
   512 MiB config and a new memory-diversity row (D-084, `uefi 1 3072`) that's the only
   configuration in the harness actually exercising the NORMAL zone -- see `docs/logs/M2.2.md`.
+- M2.4 (PR pending, `needs-owner: yes`): bongOS has a real kernel heap. A slab allocator
+  (D-092..D-096) gives named object caches with constructors/destructors, an out-of-band free list
+  (so poisoning and constructed state never collide), and one magazine per cache (today's BSP-only,
+  D-094 -- the same honest single-CPU pattern M2.2's pmm page cache uses). `kmalloc`/`kfree` are 12
+  fixed size classes (16-8192 bytes) on top; `vmalloc`/`vfree` (D-097) handle anything larger,
+  eager and page-granular on M2.3's KVA allocator with a genuine unmapped guard page on each side.
+  `KERNEL_DEBUG` builds add redzones and write-after-free poisoning, reported through the existing
+  `panicBug()`/`TRAP_CATCH_KERNEL_BUG` mechanism (no new catch kind). The pmm gained
+  `PMM_BUG_OWNED_PAGE` (D-095, always-on): freeing a page a slab or vmalloc still owns is now a
+  caught kernel bug. The KVA allocator gained a `liveCount` admission cap (D-098) that provably
+  keeps its free-extent table from ever filling on a legitimate free. Designed with the
+  `architect` subagent; a real memory-corruption bug (a fresh debug-build carve's redzone fill
+  overwriting its own free list) was found and fixed only by booting under real QEMU, not host
+  tests alone. Two `reviewer` rounds found no Critical findings; 7 Should-fix items were fixed
+  (see `docs/logs/M2.4.md`). 40 ktests (12 new) and 172 `make host-tests` cases pass; `make test`/
+  `make test-full` pass clean with no boot errors; `make format-check` clean.
 
 ## Next step
-M2.4 is in progress on branch `m2-4-slab-kmalloc-vmalloc` (see `docs/logs/M2.4.md`). Next: consult
-the `architect` subagent for the slab/kmalloc/vmalloc design (magazine layout, size classes,
-`Page.privateWord` usage, debug poison/redzone/double-free scheme tying into D-082's
-`archTrapCatch`), record decisions as D-092+, then implement incrementally per the session
-protocol and the log's Plan section. PRs #6 (M2.2) and #7 (M2.3) remain open against `main`,
-both `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.4's own progress.
+M2.4 is done; its PR is pending (open it against `main` from branch
+`m2-4-slab-kmalloc-vmalloc` using `.github/pull_request_template.md`, title
+`M2.4: Slab, kmalloc, vmalloc`, `needs-owner: yes`, if not already open by the time this is read).
+A fresh session (or this one, continuing) then starts **M2.5 BIOS loader** following the normal
+session protocol -- create a branch, copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.5.md`, and
+implement per ROADMAP.md's M2.5 step list (see this file's "Next milestone" section above for the
+summary). PRs #6 (M2.2) and #7 (M2.3) remain open against `main`,
+both `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.4/M2.5's own progress.
 
 ## Blockers
 _(none)_

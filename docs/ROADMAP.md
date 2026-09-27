@@ -155,7 +155,7 @@ workflow is green on the PR.
 
 **Done when:** the ktests pass, and the boot log shows W^X verified.
 
-### [ ] M2.4 Slab, kmalloc, vmalloc `needs-owner`
+### [x] M2.4 Slab, kmalloc, vmalloc `needs-owner`
 **Needs:** M2.3
 1. Slab caches with constructors, per-CPU magazines, and `kmalloc` size classes from 16 to 8192.
 2. `vmalloc` for large allocations, page-granular with guard pages.
