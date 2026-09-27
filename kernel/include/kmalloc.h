@@ -55,30 +55,35 @@ void kfree(void *ptr);
  * IRQs disabled, must not sleep, and must not allocate from their own cache (or any cache, to keep
  * this simple -- kernel/mm/README.md's no-recursion rule). Returns STATUS_ERR_INVALID for a NULL
  * name/outCache, an objSize of 0 or over KMALLOC_MAX_SIZE, or a bad align; STATUS_ERR_NO_MEMORY if
- * the cache itself (or its first slab) can't be allocated. `name` is copied, truncated to 23
- * bytes. */
+ * the cache itself can't be allocated (a slab isn't grown until the first slabAlloc()). `name` is
+ * copied, truncated to 23 bytes. No locks required of the caller; IRQ-safe; never sleeps. */
 Status slabCacheCreate(const char *name, size_t objSize, size_t align, SlabObjFn ctor,
                        SlabObjFn dtor, SlabCache **outCache);
 
 /* Destroys a cache slabCacheCreate() returned. Every object must already be freed back to it
  * (first drains the local magazine and releases every empty slab, so a cache with no *live*
- * caller-held objects always succeeds) -- panics via panicBug() otherwise. Never call this on one
- * of the 12 static kmalloc-* caches (panics). */
+ * caller-held objects always succeeds) -- panics via panicBug() otherwise, and also on a NULL/
+ * dangling/already-destroyed `cache` pointer or one of the 12 static kmalloc-* caches. No locks
+ * required of the caller; IRQ-safe; never sleeps (aside from running `dtor`, which must not
+ * sleep either). */
 void slabCacheDestroy(SlabCache *cache);
 
 /* Allocates/frees one object from `cache`. Same NULL-cache/misuse contract as kmalloc/kfree;
- * `slabFree(cache, obj)` where `obj` didn't come from `cache` panics (SLAB_BUG_WRONG_CACHE). */
+ * `slabFree(cache, obj)` where `obj` didn't come from `cache` panics (SLAB_BUG_WRONG_CACHE). Same
+ * locking/IRQ contract as kmalloc()/kfree(). */
 void *slabAlloc(SlabCache *cache, KmallocFlags flags);
 void slabFree(SlabCache *cache, void *obj);
 
 /* Drains `cache`'s local magazine back to its slabs and releases every slab left fully empty.
  * `slabShrinkAll()` does this for every cache (kmalloc's included) -- ktest/diagnostic use,
- * mirroring pmmDrainLocalCache(). Neither is required before ordinary use. */
+ * mirroring pmmDrainLocalCache(). Neither is required before ordinary use. No locks required of
+ * the caller; IRQ-safe; never sleeps. `slabCacheShrink(NULL)` is a no-op. */
 void slabCacheShrink(SlabCache *cache);
 void slabShrinkAll(void);
 
 /* NULL if `size` is 0 or over KMALLOC_MAX_SIZE; otherwise the static kmalloc-* cache that exact
- * size would come from. Stats/test use -- kmalloc() itself doesn't need this. */
+ * size would come from. Stats/test use -- kmalloc() itself doesn't need this. No locks required
+ * of the caller; IRQ-safe; pure. */
 SlabCache *kmallocCacheForSize(size_t size);
 
 typedef struct {
@@ -87,7 +92,9 @@ typedef struct {
     uint64_t slabs, emptySlabs, objsFree, objsCached, objsAllocated;
 } SlabCacheStats;
 /* Fills `*out` with a consistent snapshot of `cache`'s stats. Invariant:
- * slabs*objsPerSlab == objsFree+objsCached+objsAllocated. */
+ * slabs*objsPerSlab == objsFree+objsCached+objsAllocated. Panics on a NULL/dangling/destroyed
+ * `cache` (same contract as slabAlloc()). No locks required of the caller; IRQ-safe; never
+ * sleeps. */
 void slabCacheGetStats(const SlabCache *cache, SlabCacheStats *out);
 
 typedef enum {

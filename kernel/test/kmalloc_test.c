@@ -5,6 +5,7 @@
 #include "kmalloc.h"
 #include "ktest.h"
 #include "pmm.h"
+#include "vmalloc.h"
 
 #include <arch/trap.h>
 #include <stdbool.h>
@@ -162,6 +163,27 @@ KTEST(kmalloc_double_free) {
         KTEST_ASSERT_EQ((uint64_t)(uintptr_t)bugObj, (uint64_t)(uintptr_t)p);
     }
 
+    /* 1b: double free after the object has actually made it back onto its slab's own bufctl free
+     * list (not just sitting cached in the magazine, case 1's path) -- keeps a second object `q`
+     * allocated so the slab itself isn't released back to the pmm by the shrink, which would
+     * otherwise turn this into case 5 (NOT_SLAB) instead of the bufctl check this case targets. */
+    {
+        void *p = kmalloc(64, 0);
+        void *q = kmalloc(64, 0);
+        KTEST_ASSERT(p != NULL);
+        KTEST_ASSERT(q != NULL);
+        kfree(p);
+        slabCacheShrink(kmallocCacheForSize(64)); /* flushes p out of the magazine onto the slab */
+        KmallocPtrTrigger t = {p};
+        TrapCatchInfo info;
+        bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, kmallocTriggerKfree, &t, &info);
+        KTEST_ASSERT(caught);
+        const void *bugObj;
+        KTEST_ASSERT_EQ(slabTakeLastBug(&bugObj), SLAB_BUG_DOUBLE_FREE);
+        KTEST_ASSERT_EQ((uint64_t)(uintptr_t)bugObj, (uint64_t)(uintptr_t)p);
+        kfree(q);
+    }
+
     /* 2: an interior (non-payload-start) pointer. */
     {
         void *p = kmalloc(64, 0);
@@ -218,6 +240,19 @@ KTEST(kmalloc_double_free) {
         pmmFreePages(page, 0);
     }
 
+    /* 6a: kfree() of a live vmalloc pointer -> VMALLOC_POINTER (a KVA address, resolved before
+     * ever touching the pmm/Page array). */
+    {
+        void *vp = vmalloc(4096, 0);
+        KTEST_ASSERT(vp != NULL);
+        KmallocPtrTrigger t = {vp};
+        TrapCatchInfo info;
+        bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, kmallocTriggerKfree, &t, &info);
+        KTEST_ASSERT(caught);
+        KTEST_ASSERT_EQ(slabTakeLastBug(NULL), SLAB_BUG_VMALLOC_POINTER);
+        vfree(vp);
+    }
+
     /* 6: a bad size to kmalloc() itself. */
     {
         uint32_t badSize = 0;
@@ -272,11 +307,13 @@ KTEST(slab_ctor_dtor) {
      * a free never re-runs the destructor/re-constructs. */
     KTEST_ASSERT_EQ((uint64_t)(uintptr_t)obj2, (uint64_t)(uintptr_t)obj);
     KTEST_ASSERT_EQ(*(uint64_t *)obj2, 0xC7012345C7012345ULL);
+    KTEST_ASSERT_EQ(kmallocDtorCount, 0); /* the free/realloc above ran no destructor */
 
     TrapCatchInfo info;
     bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, slabTriggerDestroy, cache, &info);
     KTEST_ASSERT(caught);
     KTEST_ASSERT_EQ(slabTakeLastBug(NULL), SLAB_BUG_CACHE_BUSY);
+    KTEST_ASSERT_EQ(kmallocDtorCount, 0); /* the refused destroy ran no destructor either */
 
     slabFree(cache, obj2);
     uint64_t ctorCountBeforeDestroy = kmallocCtorCount;

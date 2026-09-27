@@ -119,13 +119,18 @@ static bool slabResolvePointer(const void *ptr, SlabResolved *out, SlabBugKind *
     return true;
 }
 
-/* --- growth/release: called with slabLock held throughout (see the lock comment above) --- */
+/* --- growth/release: NEVER called with slabLock held (see the lock comment above) -- both call
+ * into the pmm (which can itself panic via pmmBug(), e.g. on a real allocator bug) and run
+ * caller-supplied ctor/dtor callbacks, neither of which may run under slabLock: a panicBug() while
+ * slabLock is held would leave IRQs disabled forever after a ktest's caught longjmp resumes,
+ * exactly the hazard pmmBug()'s own contract comment warns about (kernel/mm/pmm.c). Callers drop
+ * slabLock before calling these and reacquire it after (slabRefill/slabReclaimEmpty below). */
 
-static Status slabGrowLocked(SlabCache *cache) {
+static Slab *slabGrow(SlabCache *cache) {
     Page *head;
     Status st = pmmAllocPages(cache->layout.order, 0, &head);
     if (st != STATUS_OK) {
-        return st;
+        return NULL;
     }
     uint64_t phys = pmmPageToPhys(head);
     Slab *slab = (Slab *)(uintptr_t)(pmmHhdmBase() + phys);
@@ -143,25 +148,27 @@ static Status slabGrowLocked(SlabCache *cache) {
         pg->privateWord = (uint64_t)(uintptr_t)slab;
     }
 
+#ifdef KERNEL_DEBUG
+    /* Before the ctor, not after: a ctor cache never poisons its payload (slabDebugCarveFill()
+     * skips it when cache->ctor != NULL), so the only thing this fill loop actually touches for
+     * such a cache is the redzones -- running it first means a ctor that overruns its own object
+     * corrupts a redzone the very same way a caller overrun would, and gets caught the same way
+     * (slabAlloc()'s redzone check on first use), instead of the ctor's own out-of-bounds write
+     * silently overwriting whatever this fill would have put there. */
+    for (uint32_t i = 0; i < slab->objCount; i++) {
+        slabDebugCarveFill(cache, slabSlot(slab, i));
+    }
+#endif
     if (cache->ctor != NULL) {
         for (uint32_t i = 0; i < slab->objCount; i++) {
             cache->ctor(slabSlot(slab, i));
         }
     }
-#ifdef KERNEL_DEBUG
-    for (uint32_t i = 0; i < slab->objCount; i++) {
-        slabDebugCarveFill(cache, slabSlot(slab, i));
-    }
-#endif
 
-    listPushHead(&cache->empty, &slab->link);
-    slab->list = SLAB_LIST_EMPTY;
-    cache->slabCount++;
-    cache->emptySlabCount++;
-    return STATUS_OK;
+    return slab;
 }
 
-static void slabReleaseToPmmLocked(SlabCache *cache, Slab *slab) {
+static void slabReleaseToPmm(SlabCache *cache, Slab *slab) {
     if (cache->dtor != NULL) {
         for (uint32_t i = 0; i < slab->objCount; i++) {
             cache->dtor(slabSlot(slab, i));
@@ -200,15 +207,20 @@ static void slabRehomeLocked(SlabCache *cache, Slab *slab) {
     slab->list = want;
 }
 
-/* Reclaims empty slabs beyond `keep`. Called with slabLock held. */
-static void slabReclaimEmptyLocked(SlabCache *cache, uint64_t keep) {
+/* Reclaims empty slabs beyond `keep`. Called with slabLock held; `*irqFlags` is the caller's own
+ * saved flags, updated in place across the lock drop/retake this needs around each
+ * slabReleaseToPmm() call (see the growth/release comment above) -- the caller must keep using
+ * `*irqFlags` (not a stale copy) for its own eventual slabUnlock(). */
+static void slabReclaimEmptyLocked(SlabCache *cache, uint64_t keep, uint64_t *irqFlags) {
     while (cache->emptySlabCount > keep) {
         ListNode *node = cache->empty.next;
         Slab *slab = LIST_CONTAINER(node, Slab, link);
         listRemove(node);
         cache->emptySlabCount--;
         cache->slabCount--;
-        slabReleaseToPmmLocked(cache, slab);
+        slabUnlock(*irqFlags);
+        slabReleaseToPmm(cache, slab);
+        *irqFlags = slabLock();
     }
 }
 
@@ -230,7 +242,10 @@ static void slabPushObjectLocked(SlabCache *cache, void *ptr, uint64_t irqFlags)
     slabRehomeLocked(cache, r.slab);
 }
 
-static void slabRefillLocked(SlabCache *cache, SlabMagazine *mag) {
+/* Called with slabLock held; `*irqFlags` is updated in place across the lock drop/retake a grow
+ * needs (see the growth/release comment above) -- the caller must keep using `*irqFlags` (not a
+ * stale copy) for its own eventual slabUnlock(). */
+static void slabRefillLocked(SlabCache *cache, SlabMagazine *mag, uint64_t *irqFlags) {
     uint32_t need = mag->batch;
     while (need > 0) {
         Slab *slab;
@@ -239,10 +254,17 @@ static void slabRefillLocked(SlabCache *cache, SlabMagazine *mag) {
         } else if (!listEmpty(&cache->empty)) {
             slab = LIST_CONTAINER(cache->empty.next, Slab, link);
         } else {
-            if (slabGrowLocked(cache) != STATUS_OK) {
+            slabUnlock(*irqFlags);
+            Slab *newSlab = slabGrow(cache);
+            *irqFlags = slabLock();
+            if (newSlab == NULL) {
                 break;
             }
-            slab = LIST_CONTAINER(cache->empty.next, Slab, link);
+            listPushHead(&cache->empty, &newSlab->link);
+            newSlab->list = SLAB_LIST_EMPTY;
+            cache->slabCount++;
+            cache->emptySlabCount++;
+            slab = newSlab;
         }
         while (need > 0 && slab->freeCount > 0) {
             uint16_t idx = slabFreeListPop(slab);
@@ -284,6 +306,7 @@ static Status slabCacheCreateInternal(const char *name, size_t objSize, size_t a
 
     SlabCache *cache = &slabCaches[slot];
     *cache = (SlabCache){0};
+    cache->magic = SLAB_CACHE_MAGIC;
     uint32_t i = 0;
     for (; i < SLAB_NAME_MAX - 1 && name[i] != '\0'; i++) {
         cache->name[i] = name[i];
@@ -332,7 +355,7 @@ void slabCacheShrink(SlabCache *cache) {
     }
     uint64_t flags = slabLock();
     slabCacheFlushMagazineLocked(cache, flags);
-    slabReclaimEmptyLocked(cache, 0);
+    slabReclaimEmptyLocked(cache, 0, &flags);
     slabUnlock(flags);
 }
 
@@ -344,26 +367,50 @@ void slabShrinkAll(void) {
         }
         SlabCache *cache = &slabCaches[i];
         slabCacheFlushMagazineLocked(cache, flags);
-        slabReclaimEmptyLocked(cache, 0);
+        slabReclaimEmptyLocked(cache, 0, &flags);
     }
     slabUnlock(flags);
+}
+
+/* True if `cache` is genuinely a live, in-use slot of `slabCaches[]` -- guards against a wild
+ * pointer (out of bounds, or not exactly on an element boundary) before ever dereferencing it, and
+ * against a cache slot that's already been destroyed and could since have been reused for a
+ * different cache (SLAB_CACHE_MAGIC catches that: slabCacheCreateInternal() sets it, this
+ * function's caller clears it before the slot is released back to the registry). Called with
+ * slabLock held. */
+static bool slabCacheIsLiveLocked(const SlabCache *cache) {
+    uintptr_t off = (uintptr_t)cache - (uintptr_t)slabCaches;
+    if (off % sizeof(SlabCache) != 0) {
+        return false;
+    }
+    uint64_t slot = off / sizeof(SlabCache);
+    if (slot >= SLAB_MAX_CACHES || !slabCacheInUse[slot]) {
+        return false;
+    }
+    return cache->magic == SLAB_CACHE_MAGIC;
 }
 
 void slabCacheDestroy(SlabCache *cache) {
     if (cache == NULL) {
         return;
     }
+    uint64_t flags = slabLock();
+    if (!slabCacheIsLiveLocked(cache)) {
+        slabUnlock(flags);
+        slabBug(SLAB_BUG_CORRUPT, NULL);
+    }
     if (cache->flags & SLAB_CACHE_PERMANENT) {
+        slabUnlock(flags);
         slabBug(SLAB_BUG_CACHE_BUSY, NULL);
     }
-    uint64_t flags = slabLock();
     slabCacheFlushMagazineLocked(cache, flags);
-    slabReclaimEmptyLocked(cache, 0);
+    slabReclaimEmptyLocked(cache, 0, &flags);
     bool busy = !listEmpty(&cache->partial) || !listEmpty(&cache->full);
     if (busy) {
         slabUnlock(flags);
         slabBug(SLAB_BUG_CACHE_BUSY, NULL);
     }
+    cache->magic = 0;
     uint32_t slot = (uint32_t)(cache - slabCaches);
     slabCacheInUse[slot] = false;
     slabUnlock(flags);
@@ -381,9 +428,13 @@ void *slabAlloc(SlabCache *cache, KmallocFlags flags) {
     }
 
     uint64_t irqFlags = slabLock();
+    if (!slabCacheIsLiveLocked(cache)) {
+        slabUnlock(irqFlags);
+        slabBug(SLAB_BUG_CORRUPT, NULL);
+    }
     SlabMagazine *mag = &cache->bspMag;
     if (mag->count == 0) {
-        slabRefillLocked(cache, mag);
+        slabRefillLocked(cache, mag, &irqFlags);
     }
     void *obj = NULL;
     if (mag->count > 0) {
@@ -410,6 +461,13 @@ void *slabAlloc(SlabCache *cache, KmallocFlags flags) {
     return obj;
 }
 
+/* The double-free check (below) and the actual push onto the magazine are deliberately two
+ * separate slabLock() critical sections, with the KERNEL_DEBUG redzone check/poison fill
+ * unlocked in between (matching the pmm's own "validate, then mutate" pattern). Single-CPU/IF=0
+ * today, so nothing else can run in the gap. Once real concurrency exists (M3.4/M3.5), two CPUs
+ * racing to free the exact same pointer could both pass the check before either pushes -- either
+ * merge these back into one critical section then, or give the bufctl a third, transient "being
+ * freed" state to close the window. */
 static void slabFreeCommon(SlabCache *cache, const SlabResolved *r, void *ptr) {
     uint16_t *bufctl = slabBufctl(r->slab);
     SlabMagazine *mag = &cache->bspMag;
@@ -441,12 +499,18 @@ static void slabFreeCommon(SlabCache *cache, const SlabResolved *r, void *ptr) {
         uint32_t flushN = mag->batch;
         for (uint32_t i = 0; i < flushN; i++) {
             slabPushObjectLocked(cache, mag->rounds[i], irqFlags);
+            /* Defense in depth against a caught panicBug() partway through this loop (only
+             * reachable via corruption -- see slabPushObjectLocked()'s own comment): every round
+             * already pushed back onto its slab's own free list is cleared here so it can never
+             * also be handed out a second time straight out of this (soon to be discarded)
+             * portion of the magazine array. */
+            mag->rounds[i] = NULL;
         }
         for (uint32_t i = flushN; i < mag->count; i++) {
             mag->rounds[i - flushN] = mag->rounds[i];
         }
         mag->count -= flushN;
-        slabReclaimEmptyLocked(cache, SLAB_EMPTY_KEEP);
+        slabReclaimEmptyLocked(cache, SLAB_EMPTY_KEEP, &irqFlags);
     }
     mag->rounds[mag->count++] = ptr;
     mag->allocated--;
@@ -506,6 +570,10 @@ static uint64_t slabSumFreeLocked(const ListNode *head) {
 
 void slabCacheGetStats(const SlabCache *cache, SlabCacheStats *out) {
     uint64_t flags = slabLock();
+    if (cache == NULL || !slabCacheIsLiveLocked(cache)) {
+        slabUnlock(flags);
+        slabBug(SLAB_BUG_CORRUPT, NULL);
+    }
     *out = (SlabCacheStats){0};
     out->name = cache->name;
     out->objSize = cache->objSize;

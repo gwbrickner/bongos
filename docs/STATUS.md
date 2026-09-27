@@ -1,12 +1,34 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-26 (M2.4 Slab, kmalloc, vmalloc started)
+**Last updated:** 2026-09-27 (M2.4 Slab, kmalloc, vmalloc implemented, `reviewer` Should-fix
+round applied, finishing up)
 
 ## Current milestone
 **M2.4 Slab, kmalloc, vmalloc** is in progress on branch `m2-4-slab-kmalloc-vmalloc` -- see
-`docs/logs/M2.4.md` for the plan and running log. Just started: consulting the `architect`
-subagent for the design next.
+`docs/logs/M2.4.md` for the full plan/log. Design consulted with the `architect` subagent first
+(D-092 through D-098). Implemented: `kernel/include/kmalloc.h`/`vmalloc.h`, the slab allocator
+(`kernel/mm/slab-core.c`/`slab-debug.c`/`slab.c`, one magazine per cache), `kmalloc`'s 12 size
+classes, and `vmalloc` (`kernel/mm/vmalloc.c`) built on M2.3's KVA allocator/`vmmMapKernel`. A
+real bug was found and fixed via booting under real QEMU (not just host tests): a fresh
+`KERNEL_DEBUG` slab carve's redzone fill could corrupt the free list's own bufctl array for
+several size classes (D-093's `slabMinObjOffset()` now accounts for it; see the log's "(4)" entry
+for the full story). The `reviewer` subagent found no Critical findings on the full diff but 7
+Should-fix items -- all fixed: a latent `panicBug()`-while-`slabLock()`-held hazard around pmm/
+ctor/dtor calls in slab growth/release (now unlocked, matching pmm.c's own D-082 pattern);
+`slabCacheDestroy()` now validates its argument is a genuinely live cache (bounds + in-use +
+a new `SLAB_CACHE_MAGIC`) instead of trusting it; a `vmalloc_map_free_no_leak` test that only
+checked vmalloc's own counters (which don't prove a frame was actually freed) now also checks the
+pmm's own page-level stats; added ktests for the bufctl-only double-free path, D-095's
+`PMM_BUG_OWNED_PAGE`, `SLAB_BUG_VMALLOC_POINTER`/`VMALLOC_BUG_NOT_VMALLOC`, and vmalloc's OOM
+partial-failure unwind; vfree()/vmallocUnwind() now check `vmmUnmapKernel()`'s Status instead of
+ignoring it. `make host-tests`: 172/172. `make test` under real QEMU caught a real test-accounting
+bug in the new `pmm_owned_page_rejected` ktest itself (a slab grown mid-test wasn't warmed up
+first, so it looked like a 1-page leak) -- fixed by warming both kmalloc-16 and vmalloc after a
+clean `slabShrinkAll()` baseline, same pattern `vmalloc_map_free_no_leak` already used; a rerun to
+confirm that fix is in progress. See `docs/logs/M2.4.md` for the exact ktest count once confirmed.
+Next: confirm `make test` is clean, then `make test-full`/`format-check`, update ROADMAP.md, write
+the Summary, open the PR (`needs-owner: yes`).
 
 **M2.3 Kernel paging** is done -- see `docs/logs/M2.3.md` for the full writeup
 and its Summary section for the release notes. ROADMAP.md's M2.3 box is checked. Design consulted

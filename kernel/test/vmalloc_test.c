@@ -1,6 +1,8 @@
 /* ktests for vmalloc (D-092/D-097, ROADMAP M2.4's Done-when checks: a guard-page write faults,
  * plus map/free round-trip and misuse coverage). */
+#include "kmalloc.h"
 #include "ktest.h"
+#include "pmm.h"
 #include "vmalloc.h"
 #include "vmm.h"
 
@@ -49,9 +51,24 @@ static void vfreeTrigger(void *arg) {
 
 /* Several sizes crossing a page boundary in different ways: every page gets touched (proving it's
  * really mapped and writable), and after vfree() the whole range is unmapped -- a real #PF, not
- * just a Status code -- with the pmm/vmalloc stats back where they started. VMALLOC_ZERO memory
- * reads back as zero. A double vfree() and an interior vfree() are both rejected. */
+ * just a Status code -- with the pmm's own page-level stats (not just vmalloc's own counters,
+ * which change on every call whether or not a frame was actually freed) back where they started.
+ * VMALLOC_ZERO memory reads back as zero. A double vfree() and an interior vfree() are both
+ * rejected. */
 KTEST(vmalloc_map_free_no_leak) {
+    /* Warm up first: the very first mapping into a fresh stretch of the kernel virtual area can
+     * need new page-table pages that M2.3's vmm never frees back (vmmUnmapKernel()'s documented
+     * contract) -- do one throwaway round trip, larger than anything this test allocates below,
+     * so that cost lands before the real before/after snapshot instead of polluting it. First-fit
+     * KVA allocation means every smaller allocation below reuses this same freed stretch. */
+    void *warm = vmalloc(8 * 1024 * 1024, 0);
+    KTEST_ASSERT(warm != NULL);
+    vfree(warm);
+
+    slabShrinkAll();
+    pmmDrainLocalCache();
+    PmmStats pmmBefore;
+    pmmGetStats(&pmmBefore);
     VmallocStats before;
     vmallocGetStats(&before);
 
@@ -85,6 +102,13 @@ KTEST(vmalloc_map_free_no_leak) {
         KTEST_ASSERT_EQ(bug, VMALLOC_BUG_NOT_MAPPED);
     }
 
+    slabShrinkAll();
+    pmmDrainLocalCache();
+    PmmStats pmmAfter;
+    pmmGetStats(&pmmAfter);
+    KTEST_ASSERT_EQ(pmmAfter.freePages, pmmBefore.freePages);
+    KTEST_ASSERT_EQ(pmmAfter.allocatedPages, pmmBefore.allocatedPages);
+
     VmallocStats after;
     vmallocGetStats(&after);
     KTEST_ASSERT_EQ(after.areas, before.areas);
@@ -109,4 +133,93 @@ KTEST(vmalloc_interior_free_rejected) {
     bytes[4096] = 2;
     bytes[2 * 4096] = 3;
     vfree(p);
+}
+
+/* vfree() of a page that's genuinely mapped in the kernel virtual area, but never went through
+ * vmalloc() (so it never got PAGE_F_VMALLOC stamped) -- built directly on vmmKvaAlloc()/
+ * vmmMapKernel() the way a hypothetical MMIO or thread-stack mapping would be, to prove vfree()
+ * distinguishes "some KVA mapping" from "one of ours". */
+KTEST(vmalloc_not_vmalloc_page_rejected) {
+    Page *page;
+    KTEST_ASSERT_EQ(pmmAllocPages(0, 0, &page), STATUS_OK);
+    uint64_t pa = pmmPageToPhys(page);
+    uint64_t va;
+    KTEST_ASSERT_EQ(vmmKvaAlloc(4096, &va), STATUS_OK);
+    KTEST_ASSERT_EQ(vmmMapKernel(va, pa, 4096, VMM_WRITE), STATUS_OK);
+
+    VfreeTrigger t = {(void *)(uintptr_t)va};
+    TrapCatchInfo info;
+    bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, vfreeTrigger, &t, &info);
+    KTEST_ASSERT(caught);
+    KTEST_ASSERT_EQ(vmallocTakeLastBug(), VMALLOC_BUG_NOT_VMALLOC);
+
+    KTEST_ASSERT_EQ(vmmUnmapKernel(va, 4096), STATUS_OK);
+    vmmKvaFree(va, 4096);
+    pmmFreePages(page, 0);
+}
+
+/* A vmalloc() that runs out of pmm memory partway through mapping its pages must unwind every
+ * page it already mapped, not just return NULL and leak them (kernel/mm/vmalloc.c's
+ * vmallocUnwind()) -- proven here by deliberately exhausting the pmm down to exactly 3 free
+ * pages and asking for 8. */
+KTEST(vmalloc_oom_rollback) {
+    /* Warm the VA region's page tables *and* leave the vmalloc-area slab cache's own backing slab
+     * alive (deliberately no slabShrinkAll() here) -- the OOM attempt below then reuses both
+     * instead of growing either, so the pmm accounting below comes out exact, not just close. */
+    void *warm = vmalloc(64 * 4096, 0);
+    KTEST_ASSERT(warm != NULL);
+    vfree(warm);
+    pmmDrainLocalCache();
+
+    /* Drain every free page in the machine, across every order, chaining each held block through
+     * its own first two qwords (next pointer, order) so no side array is needed. */
+    Page *held = NULL;
+    for (int order = PMM_MAX_ORDER; order >= 0; order--) {
+        Page *page;
+        while (pmmAllocPages((uint32_t)order, 0, &page) == STATUS_OK) {
+            uint64_t *link = (uint64_t *)pmmPageToVirt(page);
+            link[0] = (uint64_t)(uintptr_t)held;
+            link[1] = (uint64_t)order;
+            held = page;
+        }
+    }
+
+    /* Free back exactly 3 order-0 pages -- the last ones taken, so guaranteed order 0 -- leaving
+     * just enough free memory for an 8-page vmalloc() to get partway through, then fail. */
+    for (int i = 0; i < 3; i++) {
+        KTEST_ASSERT(held != NULL);
+        uint64_t *link = (uint64_t *)pmmPageToVirt(held);
+        Page *next = (Page *)(uintptr_t)link[0];
+        KTEST_ASSERT_EQ(link[1], 0);
+        pmmFreePages(held, 0);
+        held = next;
+    }
+
+    PmmStats pmmBefore;
+    pmmGetStats(&pmmBefore);
+    VmallocStats vBefore;
+    vmallocGetStats(&vBefore);
+
+    void *p = vmalloc(8 * 4096, 0);
+    KTEST_ASSERT(p == NULL);
+
+    PmmStats pmmAfter;
+    pmmGetStats(&pmmAfter);
+    VmallocStats vAfter;
+    vmallocGetStats(&vAfter);
+    KTEST_ASSERT_EQ(pmmAfter.freePages, pmmBefore.freePages);
+    KTEST_ASSERT_EQ(pmmAfter.allocatedPages, pmmBefore.allocatedPages);
+    KTEST_ASSERT_EQ(vAfter.areas, vBefore.areas);
+    KTEST_ASSERT_EQ(vAfter.pages, vBefore.pages);
+
+    /* Release everything else held, then confirm a normal vmalloc() works again. */
+    while (held != NULL) {
+        uint64_t *link = (uint64_t *)pmmPageToVirt(held);
+        Page *next = (Page *)(uintptr_t)link[0];
+        pmmFreePages(held, (uint32_t)link[1]);
+        held = next;
+    }
+    void *q = vmalloc(4096, 0);
+    KTEST_ASSERT(q != NULL);
+    vfree(q);
 }

@@ -24,19 +24,22 @@ void vmallocInit(void);
  * VMALLOC_ZERO. Returns NULL for "no memory" (pmm exhaustion, KVA exhaustion, or a page-table
  * allocation failure partway through -- every partial mapping is unwound first) or if `size` is
  * over VMALLOC_MAX_SIZE; size 0 or an unknown flag panics via panicBug(). No locks required of
- * the caller; IRQ-safe; never sleeps. Must not be called from IRQ context or with IRQs already
- * disabled (load-bearing once M3.5 adds a real TLB shootdown to vfree() -- today's single-CPU/
- * IF=0 kernel can't yet violate this itself, but no caller should rely on that). */
+ * the caller; never sleeps. Must not be called from IRQ context or with IRQs already disabled
+ * (load-bearing once M3.5 adds a real TLB shootdown to vfree() -- today's single-CPU/IF=0 kernel
+ * can't yet violate this itself, but no caller should rely on that). */
 void *vmalloc(size_t size, VmallocFlags flags);
 
 /* Frees a pointer vmalloc() returned. NULL is a no-op. Any other misuse (a pointer this subsystem
- * never handed out, an interior pointer, a double free) panics via panicBug(). Same contract as
- * vmalloc() otherwise. */
+ * never handed out, an interior pointer) panics via panicBug() -- as does a double free caught
+ * before the freed VA range is handed to a new vmalloc() call; first-fit reuse means a double
+ * free of an already-reused VA instead corrupts that new, unrelated allocation, the same
+ * inherent risk any VA-keyed free carries. Same contract as vmalloc() otherwise. */
 void vfree(void *ptr);
 
 typedef struct {
     uint64_t areas, pages; /* live vmalloc() allocations, and their total page count */
 } VmallocStats;
+/* No locks required of the caller; IRQ-safe; never sleeps. */
 void vmallocGetStats(VmallocStats *out);
 
 typedef enum {
@@ -51,7 +54,8 @@ typedef enum {
 } VmallocBugKind;
 
 /* The kind of the most recent vmalloc bug, for ktests via archTrapCatch(TRAP_CATCH_KERNEL_BUG).
- * Clears to VMALLOC_BUG_NONE on read, same reasoning as kmalloc.h's slabTakeLastBug(). */
+ * Clears to VMALLOC_BUG_NONE on read, same reasoning as kmalloc.h's slabTakeLastBug(). No locks
+ * required of the caller; IRQ-safe; never sleeps. */
 VmallocBugKind vmallocTakeLastBug(void);
 
 #endif

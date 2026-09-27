@@ -70,7 +70,14 @@ typedef struct {
 #define SLAB_CACHE_PERMANENT (1u << 0) /* static storage; slabCacheDestroy() refuses it */
 #define SLAB_CACHE_KMALLOC   (1u << 1) /* one of the 12 kmalloc-* caches; kfree() requires this */
 
+/* Set by slabCacheCreateInternal(), cleared by slabCacheDestroy() before the slot is released
+ * back to the registry -- lets slabAlloc()/slabCacheDestroy() catch a destroyed-then-reused
+ * cache pointer (a double destroy, or an alloc against a cache the caller already destroyed)
+ * instead of silently operating on whatever the slot now holds. */
+#define SLAB_CACHE_MAGIC 0x5CAC5CAC5CAC5CACULL
+
 struct SlabCache {
+    uint64_t magic;
     char name[SLAB_NAME_MAX];
     uint32_t objSize;
     uint32_t align;

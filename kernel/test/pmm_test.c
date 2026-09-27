@@ -1,8 +1,12 @@
 /* ktests for the physical memory manager (D-079..D-082, ROADMAP M2.2's four Done-when checks: an
- * alloc/free stress test, a no-leak check, zone correctness, and double-free detection). */
+ * alloc/free stress test, a no-leak check, zone correctness, and double-free detection; plus
+ * D-095's M2.4 addition, pmm_owned_page_rejected). */
 #include "kernel-boot.h"
+#include "kmalloc.h"
 #include "ktest.h"
 #include "pmm.h"
+#include "vmalloc.h"
+#include "vmm.h"
 
 #include <arch/trap.h>
 #include <stdbool.h>
@@ -357,6 +361,76 @@ KTEST(pmm_double_free) {
         KTEST_ASSERT(caught);
         KTEST_ASSERT_EQ(info.kind, TRAP_CATCH_KERNEL_BUG);
         KTEST_ASSERT_EQ(pmmLastBug(), PMM_BUG_RESERVED_FRAME);
+    }
+
+    pmmDrainLocalCache();
+    PmmStats after;
+    pmmGetStats(&after);
+    KTEST_ASSERT_EQ(after.freePages, before.freePages);
+    KTEST_ASSERT_EQ(after.allocatedPages, before.allocatedPages);
+}
+
+/* D-095: pmmFreePages() must refuse a page an owner (the slab allocator or vmalloc) never
+ * released -- always on, not just KERNEL_DEBUG, since it's as cheap as the other state-machine
+ * checks in pmmValidateForFree() it sits beside. Two sub-cases: a live kmalloc object's own
+ * (order-0) slab page, and a live vmalloc page. */
+KTEST(pmm_owned_page_rejected) {
+    /* A clean baseline first (reclaims any slab this ktest run's earlier tests left lying around
+     * empty), then warm up both kmalloc-16 and vmalloc -- deliberately with no shrink after either
+     * warm-up -- so each sub-case below reuses an already-grown slab instead of growing a brand
+     * new one itself. Growing a slab mid-test would cost one page neither `before` nor `after`
+     * (both snapshotted around the warmed-up, stable baseline) should have to account for: a slab
+     * with only one object ever allocated from it doesn't get reclaimed just by that object being
+     * freed back (slabReclaimEmptyLocked() only runs on a magazine-full flush or an explicit
+     * shrink), so a slab grown here would otherwise sit there as a real, if small, one-time leak
+     * from this test's own point of view. */
+    slabShrinkAll();
+    void *warmObj = kmalloc(16, 0);
+    KTEST_ASSERT(warmObj != NULL);
+    kfree(warmObj);
+    void *warmVa = vmalloc(4096, 0);
+    KTEST_ASSERT(warmVa != NULL);
+    vfree(warmVa);
+
+    pmmDrainLocalCache();
+    PmmStats before;
+    pmmGetStats(&before);
+
+    /* 1: a kmalloc object's slab page. kmalloc-16's layout is order 0, so the object's own page
+     * is exactly the order-0 block pmmFreePages() would be asked to free. */
+    {
+        void *obj = kmalloc(16, 0);
+        KTEST_ASSERT(obj != NULL);
+        Page *page = pmmPhysToPage((uint64_t)(uintptr_t)obj - pmmHhdmBase());
+        KTEST_ASSERT(page != NULL);
+        PmmFreeTrigger t = {page, 0};
+        TrapCatchInfo info;
+        bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, pmmTriggerFree, &t, &info);
+        KTEST_ASSERT(caught);
+        KTEST_ASSERT_EQ(info.kind, TRAP_CATCH_KERNEL_BUG);
+        KTEST_ASSERT_EQ(pmmLastBug(), PMM_BUG_OWNED_PAGE);
+        /* The rejected pmmFreePages() call never mutated anything -- the object is still live and
+         * usable through the normal API. */
+        *(volatile uint8_t *)obj = 0x5A;
+        KTEST_ASSERT_EQ(*(volatile uint8_t *)obj, 0x5A);
+        kfree(obj);
+    }
+
+    /* 2: a vmalloc page. */
+    {
+        void *obj = vmalloc(4096, 0);
+        KTEST_ASSERT(obj != NULL);
+        uint64_t pa;
+        VmmFlags outFlags;
+        KTEST_ASSERT_EQ(vmmLookupKernel((uint64_t)(uintptr_t)obj, &pa, &outFlags), STATUS_OK);
+        Page *page = pmmPhysToPage(pa);
+        KTEST_ASSERT(page != NULL);
+        PmmFreeTrigger t = {page, 0};
+        TrapCatchInfo info;
+        bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, pmmTriggerFree, &t, &info);
+        KTEST_ASSERT(caught);
+        KTEST_ASSERT_EQ(pmmLastBug(), PMM_BUG_OWNED_PAGE);
+        vfree(obj);
     }
 
     pmmDrainLocalCache();

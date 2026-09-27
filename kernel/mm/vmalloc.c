@@ -71,7 +71,13 @@ static void vmallocUnwind(VmallocArea *area, uint64_t va, uint64_t upTo, uint64_
         uint64_t pa;
         VmmFlags outFlags;
         if (vmmLookupKernel(pageVa, &pa, &outFlags) == STATUS_OK) {
-            vmmUnmapKernel(pageVa, 4096);
+            /* A page this same function just confirmed is mapped, unmapped by a range/alignment
+             * this function itself controls, failing to unmap is not a caller-input problem --
+             * it means the vmm's own page tables are in a state this code doesn't understand, and
+             * continuing to free the frame anyway would let it be reused while still mapped here. */
+            if (vmmUnmapKernel(pageVa, 4096) != STATUS_OK) {
+                vmallocBug(VMALLOC_BUG_CORRUPT);
+            }
             Page *page = pmmPhysToPage(pa);
             page->flags = (uint16_t)(page->flags & ~PAGE_F_OWNER_MASK);
             page->privateWord = 0;
@@ -79,6 +85,7 @@ static void vmallocUnwind(VmallocArea *area, uint64_t va, uint64_t upTo, uint64_
         }
     }
     vmmKvaFree(va, mapSize);
+    area->magic = 0;
     slabFree(vmallocAreaCache, area);
 }
 
@@ -177,12 +184,26 @@ void vfree(void *ptr) {
             vmallocBug(VMALLOC_BUG_CORRUPT);
         }
     }
+    /* A corrupted `area->pages` that's too small would otherwise leave the tail of the real
+     * mapping un-freed and hand back a VA whose "unmapped guard" is actually still live -- the
+     * loop above only proves every page it *does* walk is genuine, not that it walked far enough.
+     * The byte right past `mapSize` must be the unmapped guard page vmmKvaAlloc() reserved. */
+    uint64_t guardPa;
+    VmmFlags guardFlags;
+    if (vmmLookupKernel(va + mapSize, &guardPa, &guardFlags) == STATUS_OK) {
+        vmallocBug(VMALLOC_BUG_CORRUPT);
+    }
 
     for (uint64_t i = 0; i < pages; i++) {
         uint64_t pa;
         VmmFlags outFlags;
         vmmLookupKernel(va + i * 4096, &pa, &outFlags);
-        vmmUnmapKernel(va + i * 4096, 4096);
+        /* Already proven mapped by the validation pass above; a failure here means the vmm's own
+         * tables disagree with what was just confirmed, not caller misuse -- freeing the frame
+         * anyway would let it be reused while still mapped through this VA. */
+        if (vmmUnmapKernel(va + i * 4096, 4096) != STATUS_OK) {
+            vmallocBug(VMALLOC_BUG_CORRUPT);
+        }
         Page *page = pmmPhysToPage(pa);
         page->flags = (uint16_t)(page->flags & ~PAGE_F_OWNER_MASK);
         page->privateWord = 0;

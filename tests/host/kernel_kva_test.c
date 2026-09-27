@@ -164,5 +164,35 @@ TEST(kvaFreeNeverFailsUnderMaxFragmentation) {
     for (uint32_t i = 0; i < pairs; i++) {
         ASSERT_TRUE(kvaFree(&st, targets[i], 0x1000) == STATUS_OK);
     }
-    ASSERT_EQ(st.count, (uint32_t)(pairs + 1)); /* pairs isolated gaps + the untouched tail */
+    ASSERT_EQ(st.count, (uint32_t)(pairs + 1)); /* pairs isolated gaps + the untouched tail --
+                                                  * well under KVA_MAX_EXTENTS, since the
+                                                  * liveCount cap (511 total reservations) only
+                                                  * allows 255 non-coalescing pairs at once; see
+                                                  * kvaFreeStillRejectsExplicitlyFullTable below
+                                                  * for the actual full-table boundary itself. */
+}
+
+TEST(kvaFreeStillRejectsExplicitlyFullTable) {
+    /* D-098's admission cap keeps any well-behaved caller (one that tracks liveCount via
+     * kvaAlloc()/kvaFree()) from ever reaching a full, non-coalescing extents[] table -- see
+     * kva-internal.h's kvaFree() contract comment for why. This test bypasses kvaAlloc() and
+     * liveCount entirely, poking KvaState's fields directly, to prove the underlying defense-in-
+     * depth check (D-088/D-091 point 7's original safeguard) still actually rejects a free that
+     * would need a 513th entry, rather than corrupting the array past its fixed capacity, in case
+     * that discipline is ever violated by some future caller. */
+    KvaState st;
+    uint64_t stride = 0x2000; /* a 1-page extent every 2 pages: isolated, never touching */
+    uint64_t tableSpan = (uint64_t)KVA_MAX_EXTENTS * stride;
+    kvaStateInit(&st, 0, tableSpan + 0x10000);
+    st.count = KVA_MAX_EXTENTS;
+    for (uint32_t i = 0; i < KVA_MAX_EXTENTS; i++) {
+        st.extents[i].start = (uint64_t)i * stride;
+        st.extents[i].end = st.extents[i].start + 0x1000;
+    }
+
+    /* A free range well past every existing extent -- touches neither neighbor, so it would need
+     * a brand new entry the (already full) table has no room for. */
+    uint64_t va = tableSpan + 0x9000 + KVA_GUARD_SIZE;
+    ASSERT_TRUE(kvaFree(&st, va, 0x1000) == STATUS_ERR_INVALID);
+    ASSERT_EQ(st.count, (uint32_t)KVA_MAX_EXTENTS); /* unchanged: nothing was corrupted */
 }
