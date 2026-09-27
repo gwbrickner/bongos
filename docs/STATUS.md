@@ -27,8 +27,9 @@ test-accounting gap where a slab grown mid-test (kmalloc-16's or vmalloc-area's 
 slab) looked like a 1-page leak -- fixed by warming both up after a clean `slabShrinkAll()`
 baseline. 40 ktests (12 new this milestone) and 172 `make host-tests` cases pass. `make test`/
 `make test-full` (including the memory-diversity matrix-full row) pass clean with no boot errors;
-`make format-check` clean. PR pending (`needs-owner: yes` -- memory management, and a new always-on
-pmm check + a KVA-allocator contract change to already-merged M2.2/M2.3 code).
+`make format-check` clean. [PR #8](https://github.com/gwbrickner/bongos/pull/8) open against
+`main`, `needs-owner: yes` (D-045/§25 -- memory management, and a new always-on pmm check + a
+KVA-allocator contract change to already-merged M2.2/M2.3 code).
 
 **M2.3 Kernel paging** is done -- see `docs/logs/M2.3.md` for the full writeup
 and its Summary section for the release notes. ROADMAP.md's M2.3 box is checked. Design consulted
@@ -181,7 +182,7 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
   wording) were also fixed. `make test`/`make test-full`: 21/21 ktests pass in both the default
   512 MiB config and a new memory-diversity row (D-084, `uefi 1 3072`) that's the only
   configuration in the harness actually exercising the NORMAL zone -- see `docs/logs/M2.2.md`.
-- M2.4 (PR pending, `needs-owner: yes`): bongOS has a real kernel heap. A slab allocator
+- M2.4 ([PR #8](https://github.com/gwbrickner/bongos/pull/8) open, `needs-owner: yes`): bongOS has a real kernel heap. A slab allocator
   (D-092..D-096) gives named object caches with constructors/destructors, an out-of-band free list
   (so poisoning and constructed state never collide), and one magazine per cache (today's BSP-only,
   D-094 -- the same honest single-CPU pattern M2.2's pmm page cache uses). `kmalloc`/`kfree` are 12
@@ -199,9 +200,8 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
   `make test-full` pass clean with no boot errors; `make format-check` clean.
 
 ## Next step
-M2.4 is done; its PR is pending (open it against `main` from branch
-`m2-4-slab-kmalloc-vmalloc` using `.github/pull_request_template.md`, title
-`M2.4: Slab, kmalloc, vmalloc`, `needs-owner: yes`, if not already open by the time this is read).
+M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8) open against `main`,
+`needs-owner: yes`, waiting on the owner's review.
 A fresh session (or this one, continuing) then starts **M2.5 BIOS loader** following the normal
 session protocol -- create a branch, copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.5.md`, and
 implement per ROADMAP.md's M2.5 step list (see this file's "Next milestone" section above for the
