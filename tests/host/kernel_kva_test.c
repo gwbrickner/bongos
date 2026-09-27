@@ -165,11 +165,11 @@ TEST(kvaFreeNeverFailsUnderMaxFragmentation) {
         ASSERT_TRUE(kvaFree(&st, targets[i], 0x1000) == STATUS_OK);
     }
     ASSERT_EQ(st.count, (uint32_t)(pairs + 1)); /* pairs isolated gaps + the untouched tail --
-                                                  * well under KVA_MAX_EXTENTS, since the
-                                                  * liveCount cap (511 total reservations) only
-                                                  * allows 255 non-coalescing pairs at once; see
-                                                  * kvaFreeStillRejectsExplicitlyFullTable below
-                                                  * for the actual full-table boundary itself. */
+                                                 * well under KVA_MAX_EXTENTS, since the
+                                                 * liveCount cap (511 total reservations) only
+                                                 * allows 255 non-coalescing pairs at once; see
+                                                 * kvaFreeStillRejectsExplicitlyFullTable below
+                                                 * for the actual full-table boundary itself. */
 }
 
 TEST(kvaFreeStillRejectsExplicitlyFullTable) {

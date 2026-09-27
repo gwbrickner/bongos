@@ -74,7 +74,8 @@ static void vmallocUnwind(VmallocArea *area, uint64_t va, uint64_t upTo, uint64_
             /* A page this same function just confirmed is mapped, unmapped by a range/alignment
              * this function itself controls, failing to unmap is not a caller-input problem --
              * it means the vmm's own page tables are in a state this code doesn't understand, and
-             * continuing to free the frame anyway would let it be reused while still mapped here. */
+             * continuing to free the frame anyway would let it be reused while still mapped here.
+             */
             if (vmmUnmapKernel(pageVa, 4096) != STATUS_OK) {
                 vmallocBug(VMALLOC_BUG_CORRUPT);
             }
