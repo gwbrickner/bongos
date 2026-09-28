@@ -293,24 +293,20 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
 ## Next step
 **M2.5 BIOS loader** is in progress (branch `m2-5-bios-loader`, log `docs/logs/M2.5.md`), steps
 1-11 of 13 done (see "Current milestone" above) -- **the first full BIOS boot to the kernel is
-working**: `boot/bios/stage2/handoff.c` (new) runs the real E820/disk/GPT/FAT32/boot.cfg/VBE/
-kernel-load/RSDP/random-seed/page-table/BootInfo flow and jumps into long mode via
-`boot/bios/stage2/trampoline.asm` (new). `make test` passes clean including the new `bios 1`
-matrix row; a direct KTEST run shows `KTEST DONE passed=40 failed=0`. Full story (the architect
-consultation, 5 real gaps it found and fixed before any code was written, a real NASM
-cross-object-file relocation limitation found at the first build attempt) in
-`docs/logs/M2.5.md`'s step-11 entry. A final `qemu-tester` confirmation round (mirroring every
-earlier step's pattern) is in flight; **if resuming fresh and that result isn't in the log yet**,
-check `docs/logs/M2.5.md`'s step-11 entries -- if the last one doesn't say "Confirmed by
-qemu-tester", either wait for it or re-verify yourself (`make test`, plus a direct
-`tests/harness/run-qemu.sh --fw bios --image build/bongos-ktest.img` a few times for flakiness)
-before moving to step 12. Once confirmed: step 12 -- the BIOS menu input loop
-(`bootkey.c`, already written) + `tests/gui/run.sh --fw bios` + new `tests/gui/ref/bios-*.png`
-references + `matrix-full.conf` BIOS GUI rows, then step 13 -- docs polish + a `reviewer` pass +
-the PR (see `docs/logs/M2.5.md`'s Plan section for the full remaining step list). The highest-risk
-work (A20/PM/the thunk, and now paging/long-mode entry) is done; step 12 is UI/harness plumbing
-reusing already-written pure logic (`bootkey.c`) and should be lower-risk, but still verify with
-`qemu-tester` before moving on, and consult the `architect` subagent if a boot failure survives
+working, `qemu-tester`-confirmed**: `boot/bios/stage2/handoff.c` (new) runs the real E820/disk/
+GPT/FAT32/boot.cfg/VBE/kernel-load/RSDP/random-seed/page-table/BootInfo flow and jumps into long
+mode via `boot/bios/stage2/trampoline.asm` (new). `make test` passes clean including the new
+`bios 1` matrix row; 4 independent KTEST runs (3x 512 MiB, 1x 3072 MiB) all show `KTEST DONE
+passed=40 failed=0`, zero flakiness. Full story (the architect consultation, 5 real gaps it found
+and fixed before any code was written, a real NASM cross-object-file relocation limitation found
+at the first build attempt) in `docs/logs/M2.5.md`'s step-11 entries. Next: step 12 -- the BIOS
+menu input loop (`bootkey.c`, already written) + `tests/gui/run.sh --fw bios` + new
+`tests/gui/ref/bios-*.png` references + `matrix-full.conf` BIOS GUI rows, then step 13 -- docs
+polish + a `reviewer` pass + the PR (see `docs/logs/M2.5.md`'s Plan section for the full
+remaining step list). The highest-risk work (A20/PM/the thunk, and now paging/long-mode entry) is
+done; step 12 is UI/harness plumbing reusing already-written pure logic (`bootkey.c`) and should
+be lower-risk, but still verify with `qemu-tester` before moving on, and consult the `architect`
+subagent if a boot failure survives
 two fix attempts (CLAUDE.md's stuck-budget rule).
 
 M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8), #7 (M2.3), and #6 (M2.2) remain
