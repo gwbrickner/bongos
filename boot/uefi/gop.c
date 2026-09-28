@@ -3,7 +3,7 @@
 
 #include "bootmem.h"
 #include "include/efi/guids.h"
-#include "serial.h"
+#include "loader-serial.h"
 
 #define GOP_MAX_DIM   3840u
 #define GOP_MAX_DIM_H 2160u

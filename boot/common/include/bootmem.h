@@ -27,10 +27,10 @@ static inline void *bootPhysToPtr(uint64_t phys) {
     return (void *)(uintptr_t)phys;
 }
 
-/* Freestanding-safe memcpy/memset: boot/common/ avoids libc names (D-065) since the UEFI target
- * has no libc and clang's implicit `memcpy`/`memset` calls are shimmed separately
- * (boot/uefi/libc-shim.c) for struct assignment/zero-init, not for explicit copies like this.
- * No locks, boot-time or host-test only. */
+/* Freestanding-safe memcpy/memset: boot/common/ avoids libc names (D-065) since neither loader
+ * target has a libc and clang's implicit `memcpy`/`memset` calls are shimmed separately
+ * (boot/common/hw/libc-shim.c) for struct assignment/zero-init, not for explicit copies like
+ * this. No locks, boot-time or host-test only. */
 void bootMemcpy(void *dst, const void *src, size_t n);
 void bootMemset(void *dst, uint8_t value, size_t n);
 

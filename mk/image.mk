@@ -16,6 +16,11 @@ UEFI_SOURCES := $(wildcard boot/uefi/*.c)
 UEFI_OBJECTS := $(patsubst boot/uefi/%.c,$(BOOT_UEFI_DIR)/%.o,$(UEFI_SOURCES))
 BOOT_COMMON_SOURCES := $(wildcard boot/common/*.c)
 BOOT_COMMON_OBJECTS := $(patsubst boot/common/%.c,$(BOOT_UEFI_DIR)/common/%.o,$(BOOT_COMMON_SOURCES))
+# boot/common/hw/: the subset of shared loader code that touches real hardware (serial port I/O,
+# the freestanding memcpy/memset shim) rather than being purely host-testable -- also built for
+# the BIOS stage2 target (mk/bios.mk), which is exactly why it's split out of boot/common/*.c.
+BOOT_COMMON_HW_SOURCES := $(wildcard boot/common/hw/*.c)
+BOOT_COMMON_HW_OBJECTS := $(patsubst boot/common/hw/%.c,$(BOOT_UEFI_DIR)/common-hw/%.o,$(BOOT_COMMON_HW_SOURCES))
 # fbtext.c (boot/common) links against the generated font data (mk/font.mk's $(CONSOLE_FONT_C)),
 # not a boot/common/*.c wildcard match, so it gets its own object rule below.
 CONSOLE_FONT_OBJECT := $(BOOT_UEFI_DIR)/gen/console-font.o
@@ -40,10 +45,13 @@ $(BOOT_UEFI_DIR)/%.o: boot/uefi/%.c $(BRANDING_HDR)
 $(BOOT_UEFI_DIR)/common/%.o: boot/common/%.c $(BRANDING_HDR)
 	@mkdir -p $(dir $@)
 	$(UEFI_CC) $(UEFI_CFLAGS) -c -o $@ $<
+$(BOOT_UEFI_DIR)/common-hw/%.o: boot/common/hw/%.c $(BRANDING_HDR)
+	@mkdir -p $(dir $@)
+	$(UEFI_CC) $(UEFI_CFLAGS) -c -o $@ $<
 $(CONSOLE_FONT_OBJECT): $(CONSOLE_FONT_C)
 	@mkdir -p $(dir $@)
 	$(UEFI_CC) $(UEFI_CFLAGS) -c -o $@ $<
--include $(UEFI_OBJECTS:.o=.d) $(BOOT_COMMON_OBJECTS:.o=.d)
+-include $(UEFI_OBJECTS:.o=.d) $(BOOT_COMMON_OBJECTS:.o=.d) $(BOOT_COMMON_HW_OBJECTS:.o=.d)
 
 # The trampoline is assembled separately (nasm -f win64, i.e. COFF) rather than through the C
 # compiler, same reasoning as kernel/arch/x86_64/entry.asm: the final CR3 swap can't be C (SDM
@@ -53,7 +61,8 @@ $(UEFI_TRAMPOLINE_OBJECT): boot/uefi/trampoline.asm
 	@mkdir -p $(dir $@)
 	$(UEFI_AS) -f win64 -o $@ $<
 
-$(UEFI_EFI): $(UEFI_OBJECTS) $(BOOT_COMMON_OBJECTS) $(CONSOLE_FONT_OBJECT) $(UEFI_TRAMPOLINE_OBJECT)
+$(UEFI_EFI): $(UEFI_OBJECTS) $(BOOT_COMMON_OBJECTS) $(BOOT_COMMON_HW_OBJECTS) $(CONSOLE_FONT_OBJECT) \
+             $(UEFI_TRAMPOLINE_OBJECT)
 	lld-link /subsystem:efi_application /entry:efiMain /nodefaultlib /out:$@ $^
 
 # tools/mkimage: a host tool (own clang, no cross flags), per ARCHITECTURE §0's host-tool

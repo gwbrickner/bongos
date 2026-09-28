@@ -4,7 +4,7 @@
 #include "bootmem.h"
 #include "bootmenu.h"
 #include "branding.h"
-#include "serial.h"
+#include "loader-serial.h"
 
 #define MENU_TIMER_PERIOD_100NS 10000000ULL /* 1 second, EFI's 100ns timer units */
 #define MENU_TITLE_ROW          1

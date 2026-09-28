@@ -173,6 +173,13 @@ BootStatus elfLoad(const ElfImage *img, const uint8_t *file, uint8_t *dest) {
     if (img == NULL || file == NULL || dest == NULL) {
         return BOOT_ERR_ELF_HEADER;
     }
+    /* bootMemset/bootMemcpy take a size_t length; on the i386 stage2 target that's 32 bits, so an
+     * implicit uint64_t->size_t narrowing here would silently truncate rather than fail loudly.
+     * Both values are already tiny in practice (kernel.elf is nowhere near 4 GiB), but this makes
+     * that an explicit, checked precondition instead of a latent truncation bug. */
+    if (img->span > (uint64_t)SIZE_MAX) {
+        return BOOT_ERR_ELF_RANGE;
+    }
     bootMemset(dest, 0, img->span);
     for (uint32_t i = 0; i < img->segCount; i++) {
         const ElfSegment *s = &img->segs[i];
@@ -181,6 +188,9 @@ BootStatus elfLoad(const ElfImage *img, const uint8_t *file, uint8_t *dest) {
          * destination block, even if elfParse's bookkeeping were wrong somehow. */
         if (destOff > img->span || s->filesz > img->span - destOff) {
             return BOOT_ERR_ELF_SEGMENT;
+        }
+        if (s->filesz > (uint64_t)SIZE_MAX) {
+            return BOOT_ERR_ELF_RANGE;
         }
         bootMemcpy(dest + destOff, file + s->offset, s->filesz);
     }

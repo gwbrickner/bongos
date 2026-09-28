@@ -17,8 +17,8 @@
 #include "file.h"
 #include "gop.h"
 #include "include/efi/guids.h"
+#include "loader-serial.h"
 #include "menu.h"
-#include "serial.h"
 
 #include "bootcfg.h"
 #include "bootmem.h"
@@ -29,7 +29,7 @@
 
 #include <stdbool.h>
 
-/* boot/uefi/libc-shim.c defines this (D-065: this freestanding target has no libc header to
+/* boot/common/hw/libc-shim.c defines this (D-065: this freestanding target has no libc header to
  * declare it), matching this exact signature. */
 extern int memcmp(const void *a, const void *b, size_t n);
 
