@@ -38,17 +38,11 @@
  * declare it), matching this exact signature. */
 extern int memcmp(const void *a, const void *b, size_t n);
 
-#define HANDOFF_PT_POOL_PAGES    1024u /* 4 MiB: generous fixed bound, see file header comment */
-#define HANDOFF_BOOT_STACK_PAGES 16u   /* 64 KiB, ARCHITECTURE §5.4 */
-#define HANDOFF_MAX_INPUTS       512u
-#define HANDOFF_MEMMAP_CAP       4096u
-#define HANDOFF_MEMMAP_CAP_PAGES 24u /* ceil(4096 * sizeof(BootMemRegion) / 4096) */
-#define HANDOFF_PAGE_SIZE        4096ULL
-
-_Static_assert(HANDOFF_MEMMAP_CAP_PAGES *HANDOFF_PAGE_SIZE >=
-                   (uint64_t)HANDOFF_MEMMAP_CAP * sizeof(BootMemRegion),
-               "HANDOFF_MEMMAP_CAP_PAGES is too small for HANDOFF_MEMMAP_CAP entries -- update "
-               "it (and this assert) together if either constant or BootMemRegion's size changes");
+/* The page-table pool size, boot stack size, and BootInfo memory-map array capacity now live in
+ * boothandoff.h as BOOT_HANDOFF_PT_POOL_PAGES/BOOT_HANDOFF_BOOT_STACK_PAGES/
+ * BOOT_HANDOFF_MEMMAP_CAP/BOOT_HANDOFF_MEMMAP_CAP_PAGES/BOOT_HANDOFF_PAGE_SIZE (D-108), shared
+ * with BIOS stage2's own handoff.c so the two loaders' copies of these constants can't drift. */
+#define HANDOFF_MAX_INPUTS 512u
 
 static void handoffHalt(const char *msg) {
     loaderSerialWriteString(msg);
@@ -309,7 +303,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     bootMemset(&allocs, 0, sizeof(allocs));
 
     EFI_PHYSICAL_ADDRESS kernelPhys = 0;
-    UINTN kernelPages = (UINTN)(elfImage.span / HANDOFF_PAGE_SIZE);
+    UINTN kernelPages = (UINTN)(elfImage.span / BOOT_HANDOFF_PAGE_SIZE);
     status = bs->AllocatePages(AllocateAnyPages, EfiLoaderData, kernelPages, &kernelPhys);
     if (EFI_ERROR(status)) {
         loaderSerialWriteString("loader: out of memory allocating the kernel image\n");
@@ -326,13 +320,14 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     bootAllocAdd(&allocs, (uint64_t)kernelPhys, kernelPages, BOOT_MEM_KERNEL);
 
     EFI_PHYSICAL_ADDRESS stackPhys = 0;
-    status =
-        bs->AllocatePages(AllocateAnyPages, EfiLoaderData, HANDOFF_BOOT_STACK_PAGES, &stackPhys);
+    status = bs->AllocatePages(AllocateAnyPages, EfiLoaderData, BOOT_HANDOFF_BOOT_STACK_PAGES,
+                               &stackPhys);
     if (EFI_ERROR(status)) {
         loaderSerialWriteString("loader: out of memory allocating the boot stack\n");
         return status;
     }
-    bootAllocAdd(&allocs, (uint64_t)stackPhys, HANDOFF_BOOT_STACK_PAGES, BOOT_MEM_LOADER_RECLAIM);
+    bootAllocAdd(&allocs, (uint64_t)stackPhys, BOOT_HANDOFF_BOOT_STACK_PAGES,
+                 BOOT_MEM_LOADER_RECLAIM);
 
     uint64_t rsdpPhys = handoffFindRsdp(st);
     uint64_t randomSeed[8];
@@ -364,7 +359,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
                 return EFI_OUT_OF_RESOURCES;
             }
             preRunsInput[nRunsInput].base = d->PhysicalStart;
-            preRunsInput[nRunsInput].length = d->NumberOfPages * HANDOFF_PAGE_SIZE;
+            preRunsInput[nRunsInput].length = d->NumberOfPages * BOOT_HANDOFF_PAGE_SIZE;
             preRunsInput[nRunsInput].type = BOOT_MEM_USABLE; /* rank is irrelevant: one type in */
             nRunsInput++;
         }
@@ -382,7 +377,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     }
 
     EFI_PHYSICAL_ADDRESS handoffPhys = 0;
-    UINTN handoffPages = 2 + HANDOFF_MEMMAP_CAP_PAGES;
+    UINTN handoffPages = 2 + BOOT_HANDOFF_MEMMAP_CAP_PAGES;
     status = bs->AllocatePages(AllocateAnyPages, EfiLoaderData, handoffPages, &handoffPhys);
     if (EFI_ERROR(status)) {
         loaderSerialWriteString("loader: out of memory allocating the handoff block\n");
@@ -390,22 +385,24 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     }
     bootAllocAdd(&allocs, (uint64_t)handoffPhys, handoffPages, BOOT_MEM_LOADER_RECLAIM);
     uint64_t bootInfoPhys = (uint64_t)handoffPhys;
-    uint64_t cmdlinePhys = bootInfoPhys + HANDOFF_PAGE_SIZE;
-    uint64_t memMapArrayPhys = cmdlinePhys + HANDOFF_PAGE_SIZE;
+    uint64_t cmdlinePhys = bootInfoPhys + BOOT_HANDOFF_PAGE_SIZE;
+    uint64_t memMapArrayPhys = cmdlinePhys + BOOT_HANDOFF_PAGE_SIZE;
 
     EFI_PHYSICAL_ADDRESS poolPhys = 0;
-    status = bs->AllocatePages(AllocateAnyPages, EfiLoaderData, HANDOFF_PT_POOL_PAGES, &poolPhys);
+    status =
+        bs->AllocatePages(AllocateAnyPages, EfiLoaderData, BOOT_HANDOFF_PT_POOL_PAGES, &poolPhys);
     if (EFI_ERROR(status)) {
         loaderSerialWriteString("loader: out of memory allocating the page-table pool\n");
         return status;
     }
-    bootAllocAdd(&allocs, (uint64_t)poolPhys, HANDOFF_PT_POOL_PAGES, BOOT_MEM_LOADER_RECLAIM);
+    bootAllocAdd(&allocs, (uint64_t)poolPhys, BOOT_HANDOFF_PT_POOL_PAGES, BOOT_MEM_LOADER_RECLAIM);
 
-    uint64_t trampPhys = bootAlignDown((uint64_t)(uintptr_t)&loaderTrampoline, HANDOFF_PAGE_SIZE);
+    uint64_t trampPhys =
+        bootAlignDown((uint64_t)(uintptr_t)&loaderTrampoline, BOOT_HANDOFF_PAGE_SIZE);
     bootAllocAdd(&allocs, trampPhys, 1, BOOT_MEM_LOADER_RECLAIM);
 
     PtBuilder pt;
-    bst = ptInit(&pt, (uint64_t)poolPhys, HANDOFF_PT_POOL_PAGES, has1G);
+    bst = ptInit(&pt, (uint64_t)poolPhys, BOOT_HANDOFF_PT_POOL_PAGES, has1G);
     if (bst != BOOT_OK) {
         loaderSerialWriteString("loader: page-table init failed\n");
         return EFI_OUT_OF_RESOURCES;
@@ -437,7 +434,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
      * instructions depend on actually resolves the way it should. */
     uint64_t entryVa = elfImage.entry;
     uint64_t stackTopVa = BOOTINFO_HHDM_BASE + (uint64_t)stackPhys +
-                          (uint64_t)HANDOFF_BOOT_STACK_PAGES * HANDOFF_PAGE_SIZE;
+                          (uint64_t)BOOT_HANDOFF_BOOT_STACK_PAGES * BOOT_HANDOFF_PAGE_SIZE;
     uint64_t bootInfoVa = BOOTINFO_HHDM_BASE + bootInfoPhys;
     uint64_t cmdlineVa = BOOTINFO_HHDM_BASE + cmdlinePhys;
     uint64_t memMapVa = BOOTINFO_HHDM_BASE + memMapArrayPhys;
@@ -547,7 +544,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         EFI_MEMORY_DESCRIPTOR *d =
             (EFI_MEMORY_DESCRIPTOR *)((uint8_t *)finalMapBuf + i * finalDescSize);
         finalInputs[nFinalInputs].base = d->PhysicalStart;
-        finalInputs[nFinalInputs].length = d->NumberOfPages * HANDOFF_PAGE_SIZE;
+        finalInputs[nFinalInputs].length = d->NumberOfPages * BOOT_HANDOFF_PAGE_SIZE;
         finalInputs[nFinalInputs].type = memMapEfiTypeToBootMem(d->Type, d->Attribute);
         nFinalInputs++;
     }
@@ -555,7 +552,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     BootMemRegion *outRegions = (BootMemRegion *)(uintptr_t)memMapArrayPhys;
     uint32_t nOutRegions = 0;
     mmst = bootHandoffFinalMap(finalInputs, nFinalInputs, &allocs, finalInputs, HANDOFF_MAX_INPUTS,
-                               finalScratch, outRegions, HANDOFF_MEMMAP_CAP, &nOutRegions);
+                               finalScratch, outRegions, BOOT_HANDOFF_MEMMAP_CAP, &nOutRegions);
     if (mmst != BOOT_OK) {
         /* Nothing left to log this to but COM1 -- ConOut and every other Boot Service are gone. */
         handoffHalt("loader: final memory map normalize failed\n");

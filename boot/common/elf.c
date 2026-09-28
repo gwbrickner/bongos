@@ -180,7 +180,7 @@ BootStatus elfLoad(const ElfImage *img, const uint8_t *file, uint8_t *dest) {
     if (img->span > (uint64_t)SIZE_MAX) {
         return BOOT_ERR_ELF_RANGE;
     }
-    bootMemset(dest, 0, img->span);
+    bootMemset(dest, 0, (size_t)img->span);
     for (uint32_t i = 0; i < img->segCount; i++) {
         const ElfSegment *s = &img->segs[i];
         uint64_t destOff = s->vaddr - img->linkBase;
@@ -192,7 +192,7 @@ BootStatus elfLoad(const ElfImage *img, const uint8_t *file, uint8_t *dest) {
         if (s->filesz > (uint64_t)SIZE_MAX) {
             return BOOT_ERR_ELF_RANGE;
         }
-        bootMemcpy(dest + destOff, file + s->offset, s->filesz);
+        bootMemcpy(dest + destOff, file + s->offset, (size_t)s->filesz);
     }
     return BOOT_OK;
 }

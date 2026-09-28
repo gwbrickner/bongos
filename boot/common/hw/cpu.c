@@ -2,11 +2,33 @@
 #include "loader-cpu.h"
 
 bool loaderCpuCheckLongModeFeatures(bool *outHas1G) {
+    *outHas1G = false;
+
+    uint32_t maxExtLeaf, ebx0, ecx0, edx0;
+    __asm__ volatile("cpuid"
+                     : "=a"(maxExtLeaf), "=b"(ebx0), "=c"(ecx0), "=d"(edx0)
+                     : "a"(0x80000000));
+    (void)ebx0;
+    (void)ecx0;
+    (void)edx0;
+    /* CPUID.80000000h:EAX is the highest supported *extended* leaf (mirrors maxBasicLeaf() below
+     * for leaf 0): querying 80000001h without this check first is unsafe on a CPU that doesn't
+     * support extended leaves at all -- D-103/D-111 need to trust this before ever trying to set
+     * EFER.LME, since that WRMSR raises #GP on a CPU without long mode. Only ever an issue on
+     * BIOS, which has no firmware-level equivalent of "you're already an x86_64 UEFI application"
+     * to lean on the way the UEFI loader implicitly does. */
+    if (maxExtLeaf < 0x80000001u) {
+        return false;
+    }
+
     uint32_t eax, ebx, ecx, edx;
     __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0x80000001));
     (void)eax;
     (void)ebx;
     (void)ecx;
+    if ((edx & (1u << 29)) == 0) { /* LM (long mode) */
+        return false;
+    }
     *outHas1G = (edx & (1u << 26)) != 0;
     return (edx & (1u << 20)) != 0;
 }

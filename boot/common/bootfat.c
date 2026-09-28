@@ -431,10 +431,9 @@ BootStatus bootFatRead(const BootFatVol *vol, const BootFatFile *file, uint8_t *
         uint64_t runBytes = (uint64_t)runLen * clusterBytes;
         uint64_t thisChunk = runBytes < remaining ? runBytes : remaining;
         uint64_t firstSec = clusterFirstSector(vol, runStart);
-        uint32_t tailBytes32 = 0;
-        uint64_t fullSectors = bootDivMod64(thisChunk, vol->bytesPerSec,
-                                            &tailBytes32); /* D-065: no 64-bit /% on i386 */
-        uint64_t tailBytes = tailBytes32;
+        uint32_t tailBytes = 0;
+        uint64_t fullSectors =
+            bootDivMod64(thisChunk, vol->bytesPerSec, &tailBytes); /* D-065: no 64-bit /% on i386 */
 
         if (fullSectors > 0) {
             if (vol->dev->read(vol->dev->ctx, firstSec, (uint32_t)fullSectors, dst + dstOff) !=

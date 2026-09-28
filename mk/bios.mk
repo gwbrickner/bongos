@@ -28,15 +28,17 @@ BIOS_CFLAGS := --target=i386-unknown-elf -m32 -march=i686 -std=c17 -ffreestandin
                -fno-pie -mgeneral-regs-only -fno-stack-protector -fcf-protection=none \
                -fno-asynchronous-unwind-tables -fno-unwind-tables -Os \
                -I$(BUILD)/include -Iboot/common/include -Iboot/bios/stage2 -MMD -MP \
-               -Wall -Wextra -Werror
+               -Wall -Wextra -Werror -Wshorten-64-to-32
 
 BIOS_STAGE2_C_SOURCES := $(wildcard boot/bios/stage2/*.c)
 BIOS_STAGE2_HW_SOURCES := boot/common/hw/serial.c boot/common/hw/libc-shim.c boot/common/hw/cpu.c
 BIOS_STAGE2_COMMON_SOURCES := boot/common/bootmem.c boot/common/memmap.c boot/common/bootheap.c \
                                boot/common/boot-status.c boot/common/bootcrc32.c \
                                boot/common/bootgpt.c boot/common/bootfat.c boot/common/bootcfg.c \
-                               boot/common/bootvideo.c
-BIOS_STAGE2_ASM_SOURCES := boot/bios/stage2/entry.asm boot/bios/stage2/rm.asm
+                               boot/common/bootvideo.c boot/common/elf.c boot/common/paging.c \
+                               boot/common/boothandoff.c boot/common/bootacpi.c
+BIOS_STAGE2_ASM_SOURCES := boot/bios/stage2/entry.asm boot/bios/stage2/rm.asm \
+                           boot/bios/stage2/trampoline.asm
 
 BIOS_STAGE2_C_OBJECTS := $(patsubst boot/bios/stage2/%.c,$(BIOS_OBJ_DIR)/%.o,$(BIOS_STAGE2_C_SOURCES))
 BIOS_STAGE2_HW_OBJECTS := $(patsubst boot/common/hw/%.c,$(BIOS_OBJ_DIR)/hw-%.o,$(BIOS_STAGE2_HW_SOURCES))

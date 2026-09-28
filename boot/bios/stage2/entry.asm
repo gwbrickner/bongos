@@ -7,6 +7,8 @@ bits 16
 %define S2HD_MAGIC 0x44483253 ; "S2HD"
 
 extern __stage2FileEnd
+extern __bssStart
+extern __bssEnd
 extern stage2Main
 global entry16
 global gdtr
@@ -172,16 +174,21 @@ fatalMsg:   db "stage2 error ", 0
 errCode16:  db 0
 bootDrive:  db 0
 
-align 8
-gdt:
-    dq 0                      ; null
-    dq 0x00CF9B000000FFFF     ; 0x08: code32, base 0, limit 4 GiB
-    dq 0x00CF93000000FFFF     ; 0x10: data32, base 0, limit 4 GiB
-    dq 0x00009B000000FFFF     ; 0x18: code16, base 0, limit 64 KiB
-    dq 0x000093000000FFFF     ; 0x20: data16, base 0, limit 64 KiB
-    dq 0x00AF9B000000FFFF     ; 0x28: code64
+; The GDT itself lives in .trampoline (D-102/D-111), not here: once paging is on, any segment
+; reload or far jump reads its descriptor out of GDTR.base as a *linear* address, so the table
+; must be inside the one page the final page tables identity-map -- a copy left in .text16 would
+; fault the instant CR0.PG=1. gdtr itself stays in .text16 (below 0x10000): entry16's `lgdt [gdtr]`
+; above and rm.asm's `lgdt [fs:gdtr]` both use 16-bit real-mode addressing to reach it. `dd gdt`
+; (a single symbol's address) is an ordinary relocation, but the *limit* can't be computed the same
+; way `dd __stage2FileEnd - 0x8000` is elsewhere in this file: that's symbol-minus-*constant*
+; (one relocation with a folded addend), while `gdtEnd - gdt` would be symbol-minus-symbol across
+; two different object files (trampoline.asm) -- NASM has no relocation for that and refuses to
+; assemble it ("expression is not simple or relocatable"). The GDT is a fixed, 6-entry, 8-byte-
+; descriptor table (D-102) that never changes at runtime, so its size is just hard-coded instead.
+extern gdt
 gdtr:
-    dw ($ - gdt) - 1          ; limit = (gdt table size in bytes) - 1
+    dw 6 * 8 - 1               ; limit = (6 descriptors * 8 bytes each) - 1; keep in sync with the
+                                 ; entry count in trampoline.asm's `gdt:` table if that ever changes
     dd gdt
 
 section .text progbits alloc exec nowrite align=16
@@ -192,6 +199,16 @@ pm_entry:
     mov es, ax
     mov ss, ax
     mov esp, 0x00090000       ; a temporary PM stack; replaced once stage2 has its own (D-101)
+
+    ; .bss is NOLOAD (never present in the flat on-disk image, D-101/§5.6 step 3) -- every static
+    ; C variable in it (the E820/heap/handoff arrays main.c and handoff.c use) starts as whatever
+    ; garbage happened to be in physical memory otherwise. Zero it before anything touches it.
+    cld
+    mov edi, __bssStart
+    mov ecx, __bssEnd
+    sub ecx, edi
+    xor eax, eax
+    rep stosb
 
     call stage2Main            ; loaderSerialInit() there does the UART setup (D-104)
 .hang:                        ; unreachable: stage2Main is _Noreturn

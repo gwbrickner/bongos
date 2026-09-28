@@ -18,6 +18,25 @@
 
 #define BOOT_HANDOFF_MAX_ALLOCS 16u
 
+/* Shared between both loaders (D-108) so their copies can't drift: the page-table pool size, the
+ * boot stack size (ARCHITECTURE §5.4), and the BootInfo memory-map array's capacity (in entries
+ * and in the pages that back it). */
+#define BOOT_HANDOFF_PT_POOL_PAGES                                                                 \
+    1024u                                 /* 4 MiB: generous fixed bound (not computed from the    \
+                                              exact formula in the design doc -- safe for          \
+                                              anything up to a few hundred memory-map regions,     \
+                                              comfortably true under QEMU) */
+#define BOOT_HANDOFF_BOOT_STACK_PAGES 16u /* 64 KiB */
+#define BOOT_HANDOFF_MEMMAP_CAP       4096u
+#define BOOT_HANDOFF_MEMMAP_CAP_PAGES 24u /* ceil(4096 * sizeof(BootMemRegion) / 4096) */
+#define BOOT_HANDOFF_PAGE_SIZE        4096ULL
+
+_Static_assert(BOOT_HANDOFF_MEMMAP_CAP_PAGES *BOOT_HANDOFF_PAGE_SIZE >=
+                   (uint64_t)BOOT_HANDOFF_MEMMAP_CAP * sizeof(BootMemRegion),
+               "BOOT_HANDOFF_MEMMAP_CAP_PAGES is too small for BOOT_HANDOFF_MEMMAP_CAP entries -- "
+               "update it (and this assert) together if either constant or BootMemRegion's size "
+               "changes");
+
 typedef struct {
     uint64_t base;
     uint64_t pages;
