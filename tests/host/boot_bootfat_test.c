@@ -415,6 +415,13 @@ TEST(bootFatOpenBoundedAgainstLoopingDirectoryChain) {
     FatImage f = buildFatImage();
     uint32_t dirClus = fatAllocCluster(&f);
     fatSetEntry(&f, dirClus, dirClus); /* self-loop instead of EOC */
+    /* Fill the looping cluster with "deleted" (0xE5) entries rather than leaving it zeroed: a
+     * zeroed cluster's very first entry (first byte 0x00) would end the scan immediately as an
+     * ordinary empty directory, never advancing the chain far enough to reach the self-loop at
+     * all. 0xE5 entries are skipped without ending the scan, forcing the walk to exhaust this
+     * cluster's 16 entries and try to advance to "the next one" -- which the FAT says is this
+     * same cluster again, over and over, until the steps-bound check below trips. */
+    memset(clusterPtr(&f, dirClus), 0xE5, SECTOR);
     writeShortDirEntry(&f, ROOT_CLUSTER, 0, "LOOPDIR    ", 0x10 /* ATTR_DIRECTORY */, dirClus, 0);
 
     BootBlockDev dev;

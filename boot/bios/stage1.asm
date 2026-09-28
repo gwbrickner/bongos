@@ -41,7 +41,6 @@ relocated:
     mov bx, 0x55AA
     mov dl, [bootDrive]
     int 0x13
-    mov [lastStatus], ah    ; so err_edd's status byte reflects this call, not stale/zero data
     jc err_edd
     cmp bx, 0xAA55
     jne err_edd
