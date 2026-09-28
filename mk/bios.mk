@@ -32,12 +32,15 @@ BIOS_CFLAGS := --target=i386-unknown-elf -m32 -march=i686 -std=c17 -ffreestandin
 
 BIOS_STAGE2_C_SOURCES := $(wildcard boot/bios/stage2/*.c)
 BIOS_STAGE2_HW_SOURCES := boot/common/hw/serial.c boot/common/hw/libc-shim.c boot/common/hw/cpu.c
-BIOS_STAGE2_ASM_SOURCES := boot/bios/stage2/entry.asm
+BIOS_STAGE2_COMMON_SOURCES := boot/common/bootmem.c
+BIOS_STAGE2_ASM_SOURCES := boot/bios/stage2/entry.asm boot/bios/stage2/rm.asm
 
 BIOS_STAGE2_C_OBJECTS := $(patsubst boot/bios/stage2/%.c,$(BIOS_OBJ_DIR)/%.o,$(BIOS_STAGE2_C_SOURCES))
 BIOS_STAGE2_HW_OBJECTS := $(patsubst boot/common/hw/%.c,$(BIOS_OBJ_DIR)/hw-%.o,$(BIOS_STAGE2_HW_SOURCES))
+BIOS_STAGE2_COMMON_OBJECTS := $(patsubst boot/common/%.c,$(BIOS_OBJ_DIR)/common-%.o,$(BIOS_STAGE2_COMMON_SOURCES))
 BIOS_STAGE2_ASM_OBJECTS := $(patsubst boot/bios/stage2/%.asm,$(BIOS_OBJ_DIR)/%.o,$(BIOS_STAGE2_ASM_SOURCES))
-BIOS_STAGE2_OBJECTS := $(BIOS_STAGE2_ASM_OBJECTS) $(BIOS_STAGE2_C_OBJECTS) $(BIOS_STAGE2_HW_OBJECTS)
+BIOS_STAGE2_OBJECTS := $(BIOS_STAGE2_ASM_OBJECTS) $(BIOS_STAGE2_C_OBJECTS) $(BIOS_STAGE2_HW_OBJECTS) \
+                       $(BIOS_STAGE2_COMMON_OBJECTS)
 BIOS_STAGE2_ELF := $(BOOT_BIOS_DIR)/stage2.elf
 
 $(BIOS_OBJ_DIR)/%.o: boot/bios/stage2/%.c $(BRANDING_HDR)
@@ -46,10 +49,13 @@ $(BIOS_OBJ_DIR)/%.o: boot/bios/stage2/%.c $(BRANDING_HDR)
 $(BIOS_OBJ_DIR)/hw-%.o: boot/common/hw/%.c $(BRANDING_HDR)
 	@mkdir -p $(dir $@)
 	$(BIOS_CC) $(BIOS_CFLAGS) -c -o $@ $<
+$(BIOS_OBJ_DIR)/common-%.o: boot/common/%.c $(BRANDING_HDR)
+	@mkdir -p $(dir $@)
+	$(BIOS_CC) $(BIOS_CFLAGS) -c -o $@ $<
 $(BIOS_OBJ_DIR)/%.o: boot/bios/stage2/%.asm
 	@mkdir -p $(dir $@)
 	nasm -f elf32 -g -F dwarf -o $@ $<
--include $(BIOS_STAGE2_C_OBJECTS:.o=.d) $(BIOS_STAGE2_HW_OBJECTS:.o=.d)
+-include $(BIOS_STAGE2_C_OBJECTS:.o=.d) $(BIOS_STAGE2_HW_OBJECTS:.o=.d) $(BIOS_STAGE2_COMMON_OBJECTS:.o=.d)
 
 $(BIOS_STAGE2_ELF): $(BIOS_STAGE2_OBJECTS) boot/bios/stage2/stage2.ld
 	ld.lld -m elf_i386 -T boot/bios/stage2/stage2.ld -nostdlib -static --gc-sections \

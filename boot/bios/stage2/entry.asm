@@ -9,6 +9,7 @@ bits 16
 extern __stage2FileEnd
 extern stage2Main
 global entry16
+global gdtr
 
 section .text16.header progbits alloc exec nowrite align=1
     jmp short entry16
