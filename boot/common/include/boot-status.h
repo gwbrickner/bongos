@@ -28,6 +28,15 @@ typedef enum {
     /* M1.4 addition: fbtext.c's geometry validation (bpp/pitch/shift-size sanity, D-068/D-069)
      * needs a code distinct from BOOT_ERR_CFG (a boot.cfg problem, not a framebuffer one). */
     BOOT_ERR_FB_UNSUPPORTED = -14,
+    /* M2.5 (BIOS loader, D-105/D-106) additions: a block-device read failed; a GPT header/array
+     * failed validation on both the primary and backup; a FAT32 volume/directory/file structure
+     * failed validation or a chain walk hit something invalid; a lookup (partition, file) found
+     * nothing matching; a destination buffer was too small for what was being read into it. */
+    BOOT_ERR_IO = -15,
+    BOOT_ERR_GPT = -16,
+    BOOT_ERR_FAT = -17,
+    BOOT_ERR_NOT_FOUND = -18,
+    BOOT_ERR_TOO_LARGE = -19,
 } BootStatus;
 
 /* Returns a static, human-readable string for `s` (never NULL, even for an unrecognized value).
