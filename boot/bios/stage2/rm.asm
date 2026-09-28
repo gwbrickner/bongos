@@ -84,33 +84,52 @@ bits 16
                                   ; real mode only ever uses the low 16 bits of esp as SP, and
                                   ; the PM stack (rmSavedEsp) lives well above 0x10000
 
-    mov eax, [rmScratch + RMREGS_EAX]
-    mov ebx, [rmScratch + RMREGS_EBX]
-    mov ecx, [rmScratch + RMREGS_ECX]
-    mov edx, [rmScratch + RMREGS_EDX]
-    mov esi, [rmScratch + RMREGS_ESI]
-    mov edi, [rmScratch + RMREGS_EDI]
-    mov ebp, [rmScratch + RMREGS_EBP]  ; clobbers this function's own frame pointer -- the
-                                          ; epilogue below is written to never depend on it again
-    ; es/ds last: after this, [rmScratch+...] via plain ds-relative addressing is no longer safe
-    ; (ds now holds whatever the caller asked for), which is why fs (still 0) covers the IVT
-    ; lookup and every scratch write from here on.
-    mov ax, [rmScratch + RMREGS_ES]
-    mov es, ax
-    mov ax, [rmScratch + RMREGS_DS]
-    mov ds, ax
-
+    ; Resolve the IVT entry into a fixed scratch dword *before* loading any of the caller's
+    ; registers below. An earlier version computed it directly into bx right before the call
+    ; instead -- but bx is the low 16 bits of ebx, which by then already held the caller's
+    ; requested RmRegs.ebx, so `movzx bx, al` silently clobbered it: a real, empirically-found
+    ; bug (INT 15h AX=E820h passes its continuation value in EBX; the corrupted value observed
+    ; was exactly 0x15*4 = 0x54, i.e. intNo*4, proving the lookup itself was the culprit). INT
+    ; 12h's self-test never caught this since it ignores EBX. `call far [fs:rmCallTarget]` below
+    ; is pure fs:displacement addressing -- no base/index register -- so resolving the target
+    ; this way can never clobber anything the caller asked for.
     mov al, [fs:rmIntNo]
     movzx bx, al
     shl bx, 2
+    mov eax, [fs:bx]            ; IVT entries are offset:segment packed into one little-endian
+    mov [fs:rmCallTarget], eax  ; dword -- exactly the format `call far [mem]` expects
+
+    ; es/ds *first*, using ax as scratch, while eax/ax itself is still just scratch -- not yet
+    ; holding the caller's real RmRegs.eax. A segment register can only be loaded from a 16-bit
+    ; GPR, and ax is the low half of eax: loading es/ds *after* eax (as an earlier version did)
+    ; used ax as that scratch and silently clobbered whatever real value the caller put in eax. A
+    ; real, empirically-found bug: for a call like INT 15h AX=E820h or AX=8800h, the upper 16 bits
+    ; of the caller's eax are already 0, and es=ds=0 for almost every real caller too, so "mov ax,
+    ; es-value; mov ax, ds-value" wiped exactly the bits the BIOS was about to dispatch on --
+    ; every call came back as SeaBIOS's generic "function not supported" response, indistinguishable
+    ; from a genuinely unrecognized AH major function until traced with a debug capture of eax
+    ; right before this call. Every read here uses fs: (not plain ds-relative addressing) so the
+    ; order relative to the ds load below no longer matters.
+    mov ax, [fs:rmScratch + RMREGS_ES]
+    mov es, ax
+    mov ax, [fs:rmScratch + RMREGS_DS]
+    mov ds, ax
+
+    mov eax, [fs:rmScratch + RMREGS_EAX]
+    mov ebx, [fs:rmScratch + RMREGS_EBX]
+    mov ecx, [fs:rmScratch + RMREGS_ECX]
+    mov edx, [fs:rmScratch + RMREGS_EDX]
+    mov esi, [fs:rmScratch + RMREGS_ESI]
+    mov edi, [fs:rmScratch + RMREGS_EDI]
+    mov ebp, [fs:rmScratch + RMREGS_EBP]  ; clobbers this function's own frame pointer -- the
+                                          ; epilogue below is written to never depend on it again
 
     sti
     pushf
-    call far [fs:bx]            ; exact `int` emulation: pushf + a far call through the live IVT
-                                  ; entry, read fresh every time (never cached) -- balances a
-                                  ; handler that does `iret` (pops eip,cs,flags, undoing both
-                                  ; pushes) or `retf 2` (pops eip,cs, then discards our pushed
-                                  ; flags without restoring them)
+    call far [fs:rmCallTarget]  ; exact `int` emulation: pushf + a far call through the IVT entry
+                                  ; resolved above -- balances a handler that does `iret` (pops
+                                  ; eip,cs,flags, undoing both pushes) or `retf 2` (pops eip,cs,
+                                  ; then discards our pushed flags without restoring them)
     cli
 
     ; Capture every result register via mov (never touches FLAGS) before the pushf below, so the
@@ -237,4 +256,5 @@ rmIntNo:    db 0
 rmRPtr:     dd 0
 rmSavedEsp: dd 0
 align 4
+rmCallTarget: dd 0
 rmScratch:  times 36 db 0

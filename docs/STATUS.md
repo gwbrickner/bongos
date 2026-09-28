@@ -2,7 +2,8 @@
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
 **Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-7 of 13 done, step 8
-implemented and building clean, QEMU verification in flight)
+implemented, a second real thunk bug found+fixed and manually verified, final QEMU verification
+in flight)
 
 ## Current milestone
 **M2.5 BIOS loader** is in progress on branch `m2-5-bios-loader` -- see `docs/logs/M2.5.md` for
@@ -38,10 +39,15 @@ regressions on the UEFI path throughout):
 
 8. E820 (INT 15h AX=E820h, via the thunk) -> `memMapNormalize()` -> `bootHeapInit()`
    (`boot/bios/stage2/e820.c`, `main.c`'s `memMapSelfTest()`), logging every normalized region and
-   the resulting heap capacity over serial. `make image` builds clean; `qemu-tester` verification
-   of `make host-tests`/`make test` (UEFI regression) plus BIOS boots at 512 MiB and 3072 MiB,
-   repeated for flakiness, is in flight -- see `docs/logs/M2.5.md`'s step-8 entry for the result
-   once it lands.
+   the resulting heap capacity over serial. Found and fixed a second real thunk bug along the way
+   (`rm.asm`'s ES/DS segment loads ran *after* the caller's EAX load and reused `ax`, silently
+   zeroing EAX right before the BIOS call whenever ES/DS were 0 -- the common case -- which made
+   every INT 15h call with real input, not just E820, look "unsupported"; INT 12h's self-test
+   never caught it since it passes no input registers). Manually verified over real QEMU after the
+   fix: 9 sane E820 regions / 510 MiB heap at 512 MiB RAM, 10 regions / 2046 MiB heap at 3072 MiB
+   RAM (correctly excluding the >=4 GiB range). `make image` builds clean; a final `qemu-tester`
+   round (`make host-tests`, `make test` UEFI regression, repeated BIOS boots at both memory
+   sizes) is in flight -- see `docs/logs/M2.5.md`'s step-8 entries for the result once it lands.
 
 Remaining (steps 9-13, in `docs/logs/M2.5.md`'s Plan section): disk+GPT+FAT+boot.cfg; VBE; load
 the kernel and jump into long mode (first full BIOS boot to the kernel, add `bios 1` to
@@ -248,16 +254,19 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
 **M2.5 BIOS loader** is in progress (branch `m2-5-bios-loader`, log `docs/logs/M2.5.md`), steps
 1-7 of 13 done, step 8 implemented (see "Current milestone" above) -- `boot/bios/stage2/e820.c`'s
 `e820Scan()` drives INT 15h AX=E820h through the thunk, feeding `memMapNormalize()` then
-`bootHeapInit()`, logged over serial from `main.c`'s new `memMapSelfTest()`. `make image` builds
-clean. A `qemu-tester` subagent run is in flight to confirm: `make host-tests` (no regressions),
-`make test` (UEFI path unaffected), and BIOS boots at 512 MiB and 3072 MiB showing sane E820
-regions and a heap-capacity line that scales with `--mem`, repeated a few times for flakiness
-(the thunk had a real, nasty bug earlier this milestone, so repeat-run confidence matters here
-too). **If resuming fresh and that result isn't in the log yet:** check `docs/logs/M2.5.md`'s
-step-8 entry -- if it only says "requested", re-run that verification yourself (the exact
-commands are in the log entry) before trusting step 8 and moving to step 9. Once confirmed: step
-9 -- disk (EDD -> GPT -> FAT32 -> read `boot.cfg`) via the thunk, using the already-written
-`bootgpt.c`/`bootfat.c`. After that: VBE, kernel load+RSDP+seed+handoff+long mode (first full
+`bootHeapInit()`, logged over serial from `main.c`'s new `memMapSelfTest()`. Found and fixed a
+second real thunk bug along the way (`rm.asm`'s ES/DS segment loads clobbering EAX right before
+the call -- see `docs/logs/M2.5.md`'s step-8 entries for the full story), then manually verified
+over real QEMU: 9 sane E820 regions/510 MiB heap at 512 MiB RAM, 10 regions/2046 MiB heap at
+3072 MiB RAM. `make image` builds clean. A `qemu-tester` subagent run is in flight for the final
+confirmation: `make host-tests` (no regressions), `make test` (UEFI path unaffected), and 3
+repeated BIOS boots at each of 512 MiB/3072 MiB checking for byte-identical, non-flaky output
+plus `make format-check`. **If resuming fresh and that result isn't in the log yet:** check
+`docs/logs/M2.5.md`'s step-8 entries -- if the last one only says "requested", re-run that
+verification yourself (the exact commands are in the log entry) before trusting step 8 and moving
+to step 9. Once confirmed: step 9 -- disk (EDD -> GPT -> FAT32 -> read `boot.cfg`) via the thunk,
+using the already-written `bootgpt.c`/`bootfat.c`. After that: VBE, kernel load+RSDP+seed+handoff+
+long mode (first full
 BIOS boot to the kernel, add `bios 1` to `tests/harness/matrix.conf`), the BIOS menu input loop +
 `tests/gui/run.sh --fw bios` + `matrix-full.conf` rows, then docs polish + a `reviewer` pass +
 the PR (see `docs/logs/M2.5.md`'s Plan section for the full remaining step list). The highest-risk
