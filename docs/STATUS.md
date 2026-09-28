@@ -1,8 +1,7 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-8 of 13 done, step 9
-implemented and manually verified, final QEMU verification in flight)
+**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-9 of 13 done)
 
 ## Current milestone
 **M2.5 BIOS loader** is in progress on branch `m2-5-bios-loader` -- see `docs/logs/M2.5.md` for
@@ -55,8 +54,11 @@ regressions on the UEFI path throughout):
    64-bit/32-bit divisions needing `__udivdi3`, undefined here since this loader links no
    compiler-rt -- added a portable `bootDivMod64()` helper instead) and brought a repo-wide
    `make format-check` failure (116 violations, all in this milestone's own earlier-step files)
-   back to clean. Manually verified over real QEMU: 512 MiB and 3072 MiB both show the disk/GPT/
-   FAT/boot.cfg chain working, byte-identical across repeats. `qemu-tester` final round in flight.
+   back to clean. `qemu-tester`-confirmed: `make host-tests` 239/239, `make format-check` exits 0,
+   `make test` (UEFI + GUI) an *exact* screenshot match, and 3 repeated BIOS boots at each of
+   512 MiB/3072 MiB all PASS and byte-identical -- the full disk/GPT/FAT/boot.cfg chain works at
+   both memory sizes (`disk has 4194304 sectors`, ESP at LBA 0x1000-0x80fff, `/bong/boot.cfg is
+   502 bytes`, `3 entries, timeout 3s, default entry 0`, `default kernel = /bong/kernel.elf`).
 
 Remaining (steps 10-13, in `docs/logs/M2.5.md`'s Plan section): VBE; load
 the kernel and jump into long mode (first full BIOS boot to the kernel, add `bios 1` to
@@ -261,21 +263,16 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
 
 ## Next step
 **M2.5 BIOS loader** is in progress (branch `m2-5-bios-loader`, log `docs/logs/M2.5.md`), steps
-1-9 of 13 done pending final confirmation (see "Current milestone" above) --
-`boot/bios/stage2/disk.c`'s `diskProbe()` drives thunked INT 13h (EDD check/params/extended read),
-`main.c`'s `diskSelfTest()` chains `bootGptFindPartition()` -> `bootFatMount()` -> `bootFatOpen()`/
-`bootFatRead()` -> `bootCfgParse()`, logging results over serial. Found and fixed a real
+1-9 of 13 done (see "Current milestone" above) -- `boot/bios/stage2/disk.c`'s `diskProbe()` drives
+thunked INT 13h (EDD check/params/extended read), `main.c`'s `diskSelfTest()` chains
+`bootGptFindPartition()` -> `bootFatMount()` -> `bootFatOpen()`/`bootFatRead()` ->
+`bootCfgParse()`, logging results over serial. Found, fixed, and `qemu-tester`-confirmed a real
 i386-portability bug in already-written `bootfat.c` (two 64-bit/32-bit divisions needing
 `__udivdi3`, undefined here since this loader links no compiler-rt) via a new portable
 `bootDivMod64()` helper (`boot/common/include/bootmem.h`), and brought a repo-wide
 `make format-check` failure (116 violations, all in this milestone's own earlier-step files) back
-to clean. Manually verified over real QEMU (512 MiB and 3072 MiB, repeated, byte-identical) --
-see `docs/logs/M2.5.md`'s step-9 entry. A `qemu-tester` final round (`make host-tests`,
-`make format-check`, `make test` UEFI+GUI regression, repeated BIOS boots) is in flight.
-**If resuming fresh and that result isn't in the log yet:** check `docs/logs/M2.5.md`'s step-9
-entry -- if it only says "requested", re-run that verification yourself (exact commands in the
-log entry) before trusting step 9 and moving to step 10. Once confirmed: step 10 -- VBE mode pick
-+ set, using the shared `bootvideo.c` picker (same rule as UEFI's GOP selection, D-109). After
+to clean -- see `docs/logs/M2.5.md`'s step-9 entries for the full story. Next: step 10 -- VBE mode
+pick + set, using the shared `bootvideo.c` picker (same rule as UEFI's GOP selection, D-109). After
 that: kernel load+RSDP+seed+handoff+long mode (first full BIOS boot to the kernel, add `bios 1` to
 `tests/harness/matrix.conf`), the BIOS menu input loop + `tests/gui/run.sh --fw bios` +
 `matrix-full.conf` rows, then docs polish + a `reviewer` pass + the PR (see `docs/logs/M2.5.md`'s
