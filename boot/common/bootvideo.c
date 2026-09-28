@@ -54,9 +54,8 @@ void bootVideoPickerOffer(BootVideoPicker *p, const BootVideoMode *m) {
     uint64_t area = (uint64_t)m->width * (uint64_t)m->height;
     uint64_t bestArea = (uint64_t)p->bestAuto.width * (uint64_t)p->bestAuto.height;
     if (!p->haveAuto || area > bestArea ||
-        (area == bestArea &&
-         (m->width > p->bestAuto.width ||
-          (m->width == p->bestAuto.width && m->id < p->bestAuto.id)))) {
+        (area == bestArea && (m->width > p->bestAuto.width ||
+                              (m->width == p->bestAuto.width && m->id < p->bestAuto.id)))) {
         p->bestAuto = *m;
         p->haveAuto = true;
     }

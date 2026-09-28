@@ -7,12 +7,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define BIOSBOOT_STAGE1_SIZE       440u
-#define BIOSBOOT_PATCH_OFFSET      0x1A8u /* within stage1/the protective MBR's boot-code area */
-#define BIOSBOOT_S1PB_MAGIC        0x42503153u /* "S1PB" */
-#define BIOSBOOT_S2HD_MAGIC        0x44483253u /* "S2HD" */
-#define BIOSBOOT_S2HD_VERSION      1u
-#define BIOSBOOT_SECTOR_SIZE       512u
+#define BIOSBOOT_STAGE1_SIZE        440u
+#define BIOSBOOT_PATCH_OFFSET       0x1A8u /* within stage1/the protective MBR's boot-code area */
+#define BIOSBOOT_S1PB_MAGIC         0x42503153u /* "S1PB" */
+#define BIOSBOOT_S2HD_MAGIC         0x44483253u /* "S2HD" */
+#define BIOSBOOT_S2HD_VERSION       1u
+#define BIOSBOOT_SECTOR_SIZE        512u
 #define BIOSBOOT_STAGE2_MAX_SECTORS 832u /* 416 KiB: min(1 MiB BIOS boot partition, this cap) */
 
 /* Validates the S1PB patch-block magic at BIOSBOOT_PATCH_OFFSET inside `stage1` (exactly

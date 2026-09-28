@@ -1,7 +1,8 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-8 of 13 done)
+**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-8 of 13 done, step 9
+implemented and manually verified, final QEMU verification in flight)
 
 ## Current milestone
 **M2.5 BIOS loader** is in progress on branch `m2-5-bios-loader` -- see `docs/logs/M2.5.md` for
@@ -46,8 +47,18 @@ regressions on the UEFI path throughout):
    BIOS boots at each of 512 MiB/3072 MiB all PASS and byte-identical (zero flakiness) -- 9 E820
    regions/510 MiB heap at 512 MiB, 10 regions/2046 MiB heap at 3072 MiB (correctly excluding the
    >=4 GiB range).
+9. Disk: `diskProbe()` (`boot/bios/stage2/disk.c`) builds a `BootBlockDev` over thunked INT 13h
+   (AH=41h EDD check, AH=48h drive params, AH=42h extended read through a bounce buffer);
+   `main.c`'s `diskSelfTest()` finds the ESP via the already-written `bootGptFindPartition()`,
+   mounts FAT32, reads+parses `/bong/boot.cfg`, and logs the result -- proving GPT->FAT->boot.cfg
+   end to end. Found and fixed a real i386-portability bug in already-written `bootfat.c` (two
+   64-bit/32-bit divisions needing `__udivdi3`, undefined here since this loader links no
+   compiler-rt -- added a portable `bootDivMod64()` helper instead) and brought a repo-wide
+   `make format-check` failure (116 violations, all in this milestone's own earlier-step files)
+   back to clean. Manually verified over real QEMU: 512 MiB and 3072 MiB both show the disk/GPT/
+   FAT/boot.cfg chain working, byte-identical across repeats. `qemu-tester` final round in flight.
 
-Remaining (steps 9-13, in `docs/logs/M2.5.md`'s Plan section): disk+GPT+FAT+boot.cfg; VBE; load
+Remaining (steps 10-13, in `docs/logs/M2.5.md`'s Plan section): VBE; load
 the kernel and jump into long mode (first full BIOS boot to the kernel, add `bios 1` to
 `tests/harness/matrix.conf`); the BIOS menu's serial input loop; harness rows
 (`matrix-full.conf`) + BIOS screenshot references; docs polish + a `reviewer` pass + the PR. See
@@ -250,20 +261,28 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
 
 ## Next step
 **M2.5 BIOS loader** is in progress (branch `m2-5-bios-loader`, log `docs/logs/M2.5.md`), steps
-1-8 of 13 done (see "Current milestone" above) -- `boot/bios/stage2/e820.c`'s `e820Scan()` drives
-INT 15h AX=E820h through the thunk, feeding `memMapNormalize()` then `bootHeapInit()`, logged over
-serial from `main.c`'s new `memMapSelfTest()`. Found, fixed, and `qemu-tester`-confirmed a second
-real thunk bug along the way (`rm.asm`'s ES/DS segment loads clobbering EAX right before the call
--- see `docs/logs/M2.5.md`'s step-8 entries for the full story). Next: step 9 -- disk (EDD -> GPT
--> FAT32 -> read `boot.cfg`) via the thunk, using the already-written
-`bootgpt.c`/`bootfat.c`. After that: VBE, kernel load+RSDP+seed+handoff+long mode (first full
-BIOS boot to the kernel, add `bios 1` to `tests/harness/matrix.conf`), the BIOS menu input loop +
-`tests/gui/run.sh --fw bios` + `matrix-full.conf` rows, then docs polish + a `reviewer` pass +
-the PR (see `docs/logs/M2.5.md`'s Plan section for the full remaining step list). The highest-risk
-work (A20/PM/the thunk) is done; remaining steps reuse already-written, already-host-tested pure
-logic and should be lower-risk, but still verify each with `qemu-tester` before moving on, and
-consult the `architect` subagent if a boot failure survives two fix attempts (CLAUDE.md's
-stuck-budget rule).
+1-9 of 13 done pending final confirmation (see "Current milestone" above) --
+`boot/bios/stage2/disk.c`'s `diskProbe()` drives thunked INT 13h (EDD check/params/extended read),
+`main.c`'s `diskSelfTest()` chains `bootGptFindPartition()` -> `bootFatMount()` -> `bootFatOpen()`/
+`bootFatRead()` -> `bootCfgParse()`, logging results over serial. Found and fixed a real
+i386-portability bug in already-written `bootfat.c` (two 64-bit/32-bit divisions needing
+`__udivdi3`, undefined here since this loader links no compiler-rt) via a new portable
+`bootDivMod64()` helper (`boot/common/include/bootmem.h`), and brought a repo-wide
+`make format-check` failure (116 violations, all in this milestone's own earlier-step files) back
+to clean. Manually verified over real QEMU (512 MiB and 3072 MiB, repeated, byte-identical) --
+see `docs/logs/M2.5.md`'s step-9 entry. A `qemu-tester` final round (`make host-tests`,
+`make format-check`, `make test` UEFI+GUI regression, repeated BIOS boots) is in flight.
+**If resuming fresh and that result isn't in the log yet:** check `docs/logs/M2.5.md`'s step-9
+entry -- if it only says "requested", re-run that verification yourself (exact commands in the
+log entry) before trusting step 9 and moving to step 10. Once confirmed: step 10 -- VBE mode pick
++ set, using the shared `bootvideo.c` picker (same rule as UEFI's GOP selection, D-109). After
+that: kernel load+RSDP+seed+handoff+long mode (first full BIOS boot to the kernel, add `bios 1` to
+`tests/harness/matrix.conf`), the BIOS menu input loop + `tests/gui/run.sh --fw bios` +
+`matrix-full.conf` rows, then docs polish + a `reviewer` pass + the PR (see `docs/logs/M2.5.md`'s
+Plan section for the full remaining step list). The highest-risk work (A20/PM/the thunk) is done;
+remaining steps reuse already-written, already-host-tested pure logic and should be lower-risk,
+but still verify each with `qemu-tester` before moving on, and consult the `architect` subagent if
+a boot failure survives two fix attempts (CLAUDE.md's stuck-budget rule).
 
 M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8), #7 (M2.3), and #6 (M2.2) remain
 open against `main`, all `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.5's

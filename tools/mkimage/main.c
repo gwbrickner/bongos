@@ -581,8 +581,7 @@ int main(int argc, char **argv) {
             return 1;
         }
         if (mkimagePatchStage1(stage1Buf, biosBootStart, stage2Sectors) != 0) {
-            fprintf(stderr, "mkimage: %s: missing or invalid S1PB patch-block magic\n",
-                    opt.stage1);
+            fprintf(stderr, "mkimage: %s: missing or invalid S1PB patch-block magic\n", opt.stage1);
             return 1;
         }
         /* The protective MBR's partition entry (bytes 446-509) and 0x55AA signature (510-511)

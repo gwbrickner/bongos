@@ -4,9 +4,9 @@
 
 TEST(bootHeapClipsToWindowAndDropsUnusable) {
     BootMemRegion regions[3] = {
-        {0x0, 0x100000, BOOT_MEM_USABLE, 0},              /* entirely below 1 MiB: dropped */
-        {0x80000, 0x200000, BOOT_MEM_RESERVED, 0},        /* wrong type: dropped */
-        {0x100000, 0x2000, BOOT_MEM_USABLE, 0},           /* [1 MiB, 1 MiB + 8 KiB) */
+        {0x0, 0x100000, BOOT_MEM_USABLE, 0},       /* entirely below 1 MiB: dropped */
+        {0x80000, 0x200000, BOOT_MEM_RESERVED, 0}, /* wrong type: dropped */
+        {0x100000, 0x2000, BOOT_MEM_USABLE, 0},    /* [1 MiB, 1 MiB + 8 KiB) */
     };
     BootHeap heap;
     ASSERT_EQ(bootHeapInit(&heap, regions, 3), BOOT_OK);

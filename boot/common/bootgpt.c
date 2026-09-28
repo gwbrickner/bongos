@@ -12,22 +12,22 @@
 const uint8_t BOOT_GPT_TYPE_GUID_ESP[16] = {0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
                                             0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B};
 
-#define GPT_HEADER_SIG_OFFSET     0u
-#define GPT_HEADER_SIG_LEN        8u
-#define GPT_HEADER_REVISION_OFF   8u
-#define GPT_HEADER_SIZE_OFF       12u
-#define GPT_HEADER_CRC32_OFF      16u
-#define GPT_HEADER_MYLBA_OFF      24u
+#define GPT_HEADER_SIG_OFFSET      0u
+#define GPT_HEADER_SIG_LEN         8u
+#define GPT_HEADER_REVISION_OFF    8u
+#define GPT_HEADER_SIZE_OFF        12u
+#define GPT_HEADER_CRC32_OFF       16u
+#define GPT_HEADER_MYLBA_OFF       24u
 #define GPT_HEADER_FIRSTUSABLE_OFF 40u
-#define GPT_HEADER_LASTUSABLE_OFF 48u
-#define GPT_HEADER_DISKGUID_OFF   56u
-#define GPT_HEADER_ENTRYLBA_OFF   72u
-#define GPT_HEADER_ENTRYCOUNT_OFF 80u
-#define GPT_HEADER_ENTRYSIZE_OFF  84u
-#define GPT_HEADER_ARRAYCRC32_OFF 88u
-#define GPT_HEADER_MIN_SIZE       92u
-#define GPT_MAX_PARTITION_ENTRIES 1024u
-#define GPT_MIN_ENTRY_SIZE        128u
+#define GPT_HEADER_LASTUSABLE_OFF  48u
+#define GPT_HEADER_DISKGUID_OFF    56u
+#define GPT_HEADER_ENTRYLBA_OFF    72u
+#define GPT_HEADER_ENTRYCOUNT_OFF  80u
+#define GPT_HEADER_ENTRYSIZE_OFF   84u
+#define GPT_HEADER_ARRAYCRC32_OFF  88u
+#define GPT_HEADER_MIN_SIZE        92u
+#define GPT_MAX_PARTITION_ENTRIES  1024u
+#define GPT_MIN_ENTRY_SIZE         128u
 
 #define GPT_ENTRY_TYPEGUID_OFF   0u
 #define GPT_ENTRY_UNIQUEGUID_OFF 16u
@@ -92,19 +92,19 @@ static bool validateHeader(const BootBlockDev *dev, uint64_t lba, uint8_t *scrat
         return false;
     }
     bootMemcpy(&fields->firstUsableLba, scratch + GPT_HEADER_FIRSTUSABLE_OFF,
-              sizeof(fields->firstUsableLba));
+               sizeof(fields->firstUsableLba));
     bootMemcpy(&fields->lastUsableLba, scratch + GPT_HEADER_LASTUSABLE_OFF,
-              sizeof(fields->lastUsableLba));
+               sizeof(fields->lastUsableLba));
     if (fields->firstUsableLba > fields->lastUsableLba) {
         return false;
     }
     bootMemcpy(fields->diskGuid, scratch + GPT_HEADER_DISKGUID_OFF, sizeof(fields->diskGuid));
     bootMemcpy(&fields->entryLba, scratch + GPT_HEADER_ENTRYLBA_OFF, sizeof(fields->entryLba));
     bootMemcpy(&fields->entryCount, scratch + GPT_HEADER_ENTRYCOUNT_OFF,
-              sizeof(fields->entryCount));
+               sizeof(fields->entryCount));
     bootMemcpy(&fields->entrySize, scratch + GPT_HEADER_ENTRYSIZE_OFF, sizeof(fields->entrySize));
     bootMemcpy(&fields->arrayCrc32, scratch + GPT_HEADER_ARRAYCRC32_OFF,
-              sizeof(fields->arrayCrc32));
+               sizeof(fields->arrayCrc32));
     if (fields->entryCount > GPT_MAX_PARTITION_ENTRIES) {
         return false;
     }
@@ -142,7 +142,7 @@ static BootStatus scanArray(const BootBlockDev *dev, const GptHeaderFields *fiel
 
         uint32_t entriesInChunk = chunk / fields->entrySize;
         for (uint32_t i = 0; i < entriesInChunk && entryIndex < fields->entryCount;
-            i++, entryIndex++) {
+             i++, entryIndex++) {
             const uint8_t *e = scratch + (uint64_t)i * fields->entrySize;
             if (found) {
                 continue; /* still need to finish the CRC over the whole array */
@@ -193,8 +193,8 @@ BootStatus bootGptFindPartition(const BootBlockDev *dev, const uint8_t typeGuid[
     }
     if (st != BOOT_OK && st != BOOT_ERR_NOT_FOUND && dev->sectorCount != 0) {
         st = validateHeader(dev, dev->sectorCount - 1, scratch, &fields)
-                ? scanArray(dev, &fields, typeGuid, scratch, out)
-                : BOOT_ERR_GPT;
+                 ? scanArray(dev, &fields, typeGuid, scratch, out)
+                 : BOOT_ERR_GPT;
     }
     if (st == BOOT_OK) {
         bootMemcpy(diskGuid, fields.diskGuid, 16);

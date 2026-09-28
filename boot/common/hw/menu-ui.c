@@ -72,7 +72,8 @@ static void writeUintInto(char *buf, uint32_t *pos, uint32_t bufCap, uint32_t v)
     }
 }
 
-void menuUiDrawCountdown(const MenuUi *ui, BootFbText *fx, uint32_t row, const BootMenuState *state) {
+void menuUiDrawCountdown(const MenuUi *ui, BootFbText *fx, uint32_t row,
+                         const BootMenuState *state) {
     if (fx == NULL) {
         return;
     }
@@ -102,7 +103,8 @@ void menuUiDrawCountdown(const MenuUi *ui, BootFbText *fx, uint32_t row, const B
     fbTextPutString(fx, row, 2, line, 8, 0);
 }
 
-void menuUiDrawMenu(const MenuUi *ui, BootFbText *fx, const BootMenuState *state, uint32_t entryCount) {
+void menuUiDrawMenu(const MenuUi *ui, BootFbText *fx, const BootMenuState *state,
+                    uint32_t entryCount) {
     fbTextClear(fx, 0);
     fbTextPutString(fx, MENU_TITLE_ROW, 2, BRANDING_NAME " boot menu", 15, 0);
     for (uint32_t i = 0; i < entryCount; i++) {

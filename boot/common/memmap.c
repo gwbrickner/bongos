@@ -38,8 +38,7 @@ uint32_t memMapEfiTypeToBootMem(uint32_t efiType, uint64_t attribute) {
 uint32_t memMapE820TypeToBootMem(uint32_t e820Type, uint32_t extAttr) {
     switch (e820Type) {
         case 1: /* usable RAM */
-            return (extAttr & MEM_MAP_E820_ATTR_NON_VOLATILE) ? BOOT_MEM_RESERVED
-                                                              : BOOT_MEM_USABLE;
+            return (extAttr & MEM_MAP_E820_ATTR_NON_VOLATILE) ? BOOT_MEM_RESERVED : BOOT_MEM_USABLE;
         case 2: /* reserved */
             return BOOT_MEM_RESERVED;
         case 3: /* ACPI reclaimable */
@@ -48,7 +47,8 @@ uint32_t memMapE820TypeToBootMem(uint32_t e820Type, uint32_t extAttr) {
             return BOOT_MEM_ACPI_NVS;
         case 5: /* bad memory */
             return BOOT_MEM_BAD;
-        default: /* 6 (disabled), 7 (persistent), any OEM/unrecognized type: conservatively RESERVED */
+        default: /* 6 (disabled), 7 (persistent), any OEM/unrecognized type: conservatively RESERVED
+                  */
             return BOOT_MEM_RESERVED;
     }
 }

@@ -13,8 +13,8 @@
 #include "boot-status.h"
 #include "bootinfo.h"
 
-#define BOOT_HEAP_MIN         0x100000ULL     /* 1 MiB */
-#define BOOT_HEAP_MAX         0x100000000ULL  /* 4 GiB */
+#define BOOT_HEAP_MIN         0x100000ULL    /* 1 MiB */
+#define BOOT_HEAP_MAX         0x100000000ULL /* 4 GiB */
 #define BOOT_HEAP_PAGE_SIZE   4096ULL
 #define BOOT_HEAP_MAX_REGIONS 64u
 

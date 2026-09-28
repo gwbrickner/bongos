@@ -86,7 +86,8 @@ BootStatus bootHandoffMapAll(PtBuilder *pt, const BootPtPlan *plan, BootFramebuf
         if (length > BOOTINFO_HHDM_SIZE - base) {
             length = BOOTINFO_HHDM_SIZE - base;
         }
-        BootStatus bst = ptMapRange(pt, BOOTINFO_HHDM_BASE + base, base, length, PT_FLAGS_HHDM, true);
+        BootStatus bst =
+            ptMapRange(pt, BOOTINFO_HHDM_BASE + base, base, length, PT_FLAGS_HHDM, true);
         if (bst != BOOT_OK) {
             return bst;
         }
@@ -107,17 +108,18 @@ bool bootHandoffSelfCheck(const PtBuilder *pt, uint64_t entryVa, uint64_t stackT
                           uint64_t bootInfoVa, uint64_t cmdlineVa, uint64_t memMapVa,
                           uint64_t trampPhys, const BootFramebuffer *fb) {
     uint64_t checkPa, checkFlags;
-    bool ok = ptLookup(pt, entryVa, &checkPa, &checkFlags) == BOOT_OK &&
-             (checkFlags & PT_W) == 0 && (checkFlags & PT_NX) == 0 &&
-             ptLookup(pt, stackTopVa - 8, &checkPa, &checkFlags) == BOOT_OK &&
-             (checkFlags & PT_W) != 0 && (checkFlags & PT_NX) != 0 &&
-             ptLookup(pt, bootInfoVa, &checkPa, &checkFlags) == BOOT_OK &&
-             /* Spot-check the rest of the handoff block too, not just page 0 (BootInfo): the
-              * cmdline page and (the start of) the memory-map array are just as load-bearing for
-              * the kernel's first instructions. */
-             ptLookup(pt, cmdlineVa, &checkPa, &checkFlags) == BOOT_OK &&
-             ptLookup(pt, memMapVa, &checkPa, &checkFlags) == BOOT_OK &&
-             ptLookup(pt, trampPhys, &checkPa, &checkFlags) == BOOT_OK && (checkFlags & PT_NX) == 0;
+    bool ok = ptLookup(pt, entryVa, &checkPa, &checkFlags) == BOOT_OK && (checkFlags & PT_W) == 0 &&
+              (checkFlags & PT_NX) == 0 &&
+              ptLookup(pt, stackTopVa - 8, &checkPa, &checkFlags) == BOOT_OK &&
+              (checkFlags & PT_W) != 0 && (checkFlags & PT_NX) != 0 &&
+              ptLookup(pt, bootInfoVa, &checkPa, &checkFlags) == BOOT_OK &&
+              /* Spot-check the rest of the handoff block too, not just page 0 (BootInfo): the
+               * cmdline page and (the start of) the memory-map array are just as load-bearing for
+               * the kernel's first instructions. */
+              ptLookup(pt, cmdlineVa, &checkPa, &checkFlags) == BOOT_OK &&
+              ptLookup(pt, memMapVa, &checkPa, &checkFlags) == BOOT_OK &&
+              ptLookup(pt, trampPhys, &checkPa, &checkFlags) == BOOT_OK &&
+              (checkFlags & PT_NX) == 0;
     if (ok && fb->phys != 0) {
         /* Check both ends of the mapped range, not just the first page: a partial-mapping bug
          * could leave the tail pages missing PT_W/PT_PCD/PT_NX (or absent) while the head looks
@@ -128,9 +130,9 @@ bool bootHandoffSelfCheck(const PtBuilder *pt, uint64_t entryVa, uint64_t stackT
         uint64_t fbFirstVa = BOOTINFO_HHDM_BASE + fbBase;
         uint64_t fbLastVa = BOOTINFO_HHDM_BASE + fbEnd - HANDOFF_PAGE_SIZE;
         ok = ptLookup(pt, fbFirstVa, &checkPa, &checkFlags) == BOOT_OK && checkPa == fbBase &&
-            (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0 && (checkFlags & PT_W) != 0 &&
-            ptLookup(pt, fbLastVa, &checkPa, &checkFlags) == BOOT_OK &&
-            (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0 && (checkFlags & PT_W) != 0;
+             (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0 && (checkFlags & PT_W) != 0 &&
+             ptLookup(pt, fbLastVa, &checkPa, &checkFlags) == BOOT_OK &&
+             (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0 && (checkFlags & PT_W) != 0;
     }
     return ok;
 }

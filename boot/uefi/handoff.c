@@ -540,7 +540,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
      * and halt loudly (the only diagnostic left is raw serial) rather than let that happen. */
     if ((uint64_t)nFinalDesc + allocs.count > HANDOFF_MAX_INPUTS) {
         handoffHalt("loader: final memory map + overlay count exceeds HANDOFF_MAX_INPUTS; "
-                   "halting\n");
+                    "halting\n");
     }
     uint32_t nFinalInputs = 0;
     for (UINTN i = 0; i < nFinalDesc; i++) {

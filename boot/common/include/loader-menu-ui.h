@@ -36,14 +36,16 @@ uint32_t menuUiCountdownRow(uint32_t entryCount);
 /* Draws the full menu (title, every entry row, the footer, the countdown) from scratch. A no-op
  * for any drawing this does if `fx` is NULL (ARCHITECTURE §5.2: no framebuffer, serial-only,
  * D-071) -- every fbText* call already tolerates a NULL fx. No locks, boot-time only. */
-void menuUiDrawMenu(const MenuUi *ui, BootFbText *fx, const BootMenuState *state, uint32_t entryCount);
+void menuUiDrawMenu(const MenuUi *ui, BootFbText *fx, const BootMenuState *state,
+                    uint32_t entryCount);
 
 /* Redraws just one entry row ("N. <name>", highlighted iff `selected`). No-op if `fx` is NULL. */
 void menuUiDrawRow(const MenuUi *ui, BootFbText *fx, uint32_t row, uint32_t index, bool selected);
 
 /* Redraws just the countdown row ("Booting <name> in Ns", or blank if inactive/FOREVER). No-op if
  * `fx` is NULL. */
-void menuUiDrawCountdown(const MenuUi *ui, BootFbText *fx, uint32_t row, const BootMenuState *state);
+void menuUiDrawCountdown(const MenuUi *ui, BootFbText *fx, uint32_t row,
+                         const BootMenuState *state);
 
 /* Clears the screen and shows "Booting..." -- the last thing drawn before the menu hands off to
  * loading the chosen entry. No-op if `fx` is NULL. */

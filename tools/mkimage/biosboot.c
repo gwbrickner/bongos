@@ -24,7 +24,8 @@ int mkimagePatchStage1(uint8_t stage1[BIOSBOOT_STAGE1_SIZE], uint64_t stage2Lba,
 }
 
 uint32_t mkimageValidateStage2(const uint8_t *stage2, size_t stage2Len) {
-    if (stage2Len < 16 || stage2Len > (uint64_t)BIOSBOOT_STAGE2_MAX_SECTORS * BIOSBOOT_SECTOR_SIZE) {
+    if (stage2Len < 16 ||
+        stage2Len > (uint64_t)BIOSBOOT_STAGE2_MAX_SECTORS * BIOSBOOT_SECTOR_SIZE) {
         return 0;
     }
     uint32_t magic, fileSize, version;
@@ -37,8 +38,7 @@ uint32_t mkimageValidateStage2(const uint8_t *stage2, size_t stage2Len) {
     if ((uint64_t)fileSize != stage2Len) {
         return 0;
     }
-    uint32_t sectors =
-        (uint32_t)((stage2Len + BIOSBOOT_SECTOR_SIZE - 1) / BIOSBOOT_SECTOR_SIZE);
+    uint32_t sectors = (uint32_t)((stage2Len + BIOSBOOT_SECTOR_SIZE - 1) / BIOSBOOT_SECTOR_SIZE);
     if (sectors == 0 || sectors > BIOSBOOT_STAGE2_MAX_SECTORS) {
         return 0;
     }

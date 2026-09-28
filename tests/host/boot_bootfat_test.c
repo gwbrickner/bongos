@@ -109,7 +109,7 @@ static void writeLfnDirEntry(FatImage *f, uint32_t dirCluster, uint32_t slotInde
         e2[0] = (uint8_t)(0x40u | 2u); /* last entry, sequence 2 */
         for (uint32_t i = 0; i < 5; i++) {
             uint16_t c = (13 + i < len) ? (uint16_t)(uint8_t)longName[13 + i]
-                                       : (13 + i == len ? 0 : 0xFFFFu);
+                                        : (13 + i == len ? 0 : 0xFFFFu);
             writeLE16(e2 + 1 + 2 * i, c);
         }
         e2[11] = 0x0F;
@@ -117,13 +117,13 @@ static void writeLfnDirEntry(FatImage *f, uint32_t dirCluster, uint32_t slotInde
         e2[13] = chk;
         for (uint32_t i = 0; i < 6; i++) {
             uint16_t c = (18 + i < len) ? (uint16_t)(uint8_t)longName[18 + i]
-                                       : (18 + i == len ? 0 : 0xFFFFu);
+                                        : (18 + i == len ? 0 : 0xFFFFu);
             writeLE16(e2 + 14 + 2 * i, c);
         }
         writeLE16(e2 + 26, 0);
         for (uint32_t i = 0; i < 2; i++) {
             uint16_t c = (24 + i < len) ? (uint16_t)(uint8_t)longName[24 + i]
-                                       : (24 + i == len ? 0 : 0xFFFFu);
+                                        : (24 + i == len ? 0 : 0xFFFFu);
             writeLE16(e2 + 28 + 2 * i, c);
         }
         slotIndex++;
@@ -172,9 +172,9 @@ static FatImage buildFatImage(void) {
     bpb[13] = 1; /* SecPerClus */
     writeLE16(bpb + 14, (uint16_t)RSVD_SECS);
     bpb[16] = NUM_FATS;
-    writeLE16(bpb + 17, 0); /* RootEntCnt */
-    writeLE16(bpb + 19, 0); /* TotSec16 */
-    writeLE16(bpb + 22, 0); /* FATSz16 */
+    writeLE16(bpb + 17, 0);                        /* RootEntCnt */
+    writeLE16(bpb + 19, 0);                        /* TotSec16 */
+    writeLE16(bpb + 22, 0);                        /* FATSz16 */
     writeLE32(bpb + 32, (uint32_t)f.totalSectors); /* TotSec32 */
     writeLE32(bpb + 36, f.fatSz32);
     writeLE16(bpb + 40, 0); /* ExtFlags: mirrored, FAT 0 active */
@@ -236,7 +236,7 @@ TEST(bootFatOpenLongNameCaseInsensitive) {
     uint32_t fileClus = fatAllocCluster(&f);
     memcpy(clusterPtr(&f, fileClus), data, sizeof(data) - 1);
     writeLfnDirEntry(&f, ROOT_CLUSTER, 0, "kernel-debug.elf", "KERNEL~1ELF", 0, fileClus,
-                    sizeof(data) - 1);
+                     sizeof(data) - 1);
 
     BootBlockDev dev;
     BootFatVol vol;

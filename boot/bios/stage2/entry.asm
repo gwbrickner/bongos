@@ -10,6 +10,7 @@ extern __stage2FileEnd
 extern stage2Main
 global entry16
 global gdtr
+global bootDrive
 
 section .text16.header progbits alloc exec nowrite align=1
     jmp short entry16
@@ -21,6 +22,9 @@ section .text16.header progbits alloc exec nowrite align=1
 section .text16 progbits alloc exec nowrite align=1
 
 entry16:
+    mov [bootDrive], dl       ; captured first, before anything below can touch dl (D-100 step 9:
+                                ; stage1 hands off with DL = boot drive; disk.c's thunked INT 13h
+                                ; calls need it and have no other way to learn it)
     cli
     xor ax, ax
     mov ds, ax
@@ -166,6 +170,7 @@ fatal16:
 
 fatalMsg:   db "stage2 error ", 0
 errCode16:  db 0
+bootDrive:  db 0
 
 align 8
 gdt:

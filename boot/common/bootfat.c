@@ -7,31 +7,31 @@
 
 #include <stdbool.h>
 
-#define BPB_JMPBOOT_OFF     0u
-#define BPB_BYTSPERSEC_OFF  11u
-#define BPB_SECPERCLUS_OFF  13u
-#define BPB_RSVDSECCNT_OFF  14u
-#define BPB_NUMFATS_OFF     16u
-#define BPB_ROOTENTCNT_OFF  17u
-#define BPB_TOTSEC16_OFF    19u
-#define BPB_FATSZ16_OFF     22u
-#define BPB_TOTSEC32_OFF    32u
-#define BPB_FATSZ32_OFF     36u
-#define BPB_EXTFLAGS_OFF    40u
-#define BPB_FSVER_OFF       42u
-#define BPB_ROOTCLUS_OFF    44u
-#define BPB_BOOTSIG_OFF     510u
+#define BPB_JMPBOOT_OFF    0u
+#define BPB_BYTSPERSEC_OFF 11u
+#define BPB_SECPERCLUS_OFF 13u
+#define BPB_RSVDSECCNT_OFF 14u
+#define BPB_NUMFATS_OFF    16u
+#define BPB_ROOTENTCNT_OFF 17u
+#define BPB_TOTSEC16_OFF   19u
+#define BPB_FATSZ16_OFF    22u
+#define BPB_TOTSEC32_OFF   32u
+#define BPB_FATSZ32_OFF    36u
+#define BPB_EXTFLAGS_OFF   40u
+#define BPB_FSVER_OFF      42u
+#define BPB_ROOTCLUS_OFF   44u
+#define BPB_BOOTSIG_OFF    510u
 
-#define FAT_EOC_MIN      0x0FFFFFF8u
-#define FAT_BAD_CLUSTER  0x0FFFFFF7u
-#define FAT_ENTRY_MASK   0x0FFFFFFFu
+#define FAT_EOC_MIN     0x0FFFFFF8u
+#define FAT_BAD_CLUSTER 0x0FFFFFF7u
+#define FAT_ENTRY_MASK  0x0FFFFFFFu
 
-#define DIR_ENTRY_SIZE     32u
-#define DIR_NAME_OFF       0u
-#define DIR_ATTR_OFF       11u
-#define DIR_FSTCLUSHI_OFF  20u
-#define DIR_FSTCLUSLO_OFF  26u
-#define DIR_FILESIZE_OFF   28u
+#define DIR_ENTRY_SIZE    32u
+#define DIR_NAME_OFF      0u
+#define DIR_ATTR_OFF      11u
+#define DIR_FSTCLUSHI_OFF 20u
+#define DIR_FSTCLUSLO_OFF 26u
+#define DIR_FILESIZE_OFF  28u
 
 #define ATTR_READ_ONLY 0x01u
 #define ATTR_HIDDEN    0x02u
@@ -45,7 +45,7 @@
 #define LFN_CHARS_PER_ENTRY 13u
 #define LFN_MAX_SEQ         20u /* 20*13 = 260 >= the 255-byte component-length cap */
 #define LFN_ORD_OFF         0u
-#define LFN_NAME1_OFF       1u  /* 5 UTF-16 code units */
+#define LFN_NAME1_OFF       1u /* 5 UTF-16 code units */
 #define LFN_CHKSUM_OFF      13u
 #define LFN_NAME2_OFF       14u /* 6 UTF-16 code units */
 #define LFN_NAME3_OFF       28u /* 2 UTF-16 code units */
@@ -104,7 +104,8 @@ BootStatus bootFatMount(BootFatVol *vol, const BootBlockDev *dev, uint64_t partL
     }
 
     uint64_t dataSectors = (uint64_t)totSec32 - (rsvdSecCnt + (uint64_t)numFats * fatSz32);
-    uint32_t countOfClusters = (uint32_t)(dataSectors / secPerClus);
+    uint32_t countOfClusters =
+        (uint32_t)bootDivMod64(dataSectors, secPerClus, NULL); /* D-065: no 64-bit / on i386 */
     if (countOfClusters < 65525u || countOfClusters >= 0x0FFFFFF5u) {
         return BOOT_ERR_FAT;
     }
@@ -135,8 +136,8 @@ BootStatus bootFatMount(BootFatVol *vol, const BootBlockDev *dev, uint64_t partL
 static BootStatus readFatEntry(const BootFatVol *vol, uint32_t cluster, uint8_t *scratch,
                                uint32_t *outNext) {
     uint64_t byteOff = (uint64_t)cluster * 4;
-    uint64_t sec = byteOff / vol->bytesPerSec;
-    uint32_t off = (uint32_t)(byteOff % vol->bytesPerSec);
+    uint32_t off = 0;
+    uint64_t sec = bootDivMod64(byteOff, vol->bytesPerSec, &off); /* D-065: no 64-bit /% on i386 */
     if (sec >= vol->fatSz32) {
         return BOOT_ERR_FAT;
     }
@@ -209,10 +210,10 @@ static uint8_t shortNameChecksum(const uint8_t nameField[11]) {
 
 typedef struct {
     char buf[BOOT_FAT_LFN_BUF_LEN];
-    uint32_t len;      /* valid only when hasTerm is true */
+    uint32_t len; /* valid only when hasTerm is true */
     bool hasTerm;
     bool nonAscii;
-    bool active;       /* an in-progress or completed group awaits its short entry */
+    bool active;        /* an in-progress or completed group awaits its short entry */
     uint32_t expectSeq; /* next (lower) sequence number expected */
     uint8_t checksum;
 } LfnAccum;
@@ -430,8 +431,10 @@ BootStatus bootFatRead(const BootFatVol *vol, const BootFatFile *file, uint8_t *
         uint64_t runBytes = (uint64_t)runLen * clusterBytes;
         uint64_t thisChunk = runBytes < remaining ? runBytes : remaining;
         uint64_t firstSec = clusterFirstSector(vol, runStart);
-        uint64_t fullSectors = thisChunk / vol->bytesPerSec;
-        uint64_t tailBytes = thisChunk - fullSectors * vol->bytesPerSec;
+        uint32_t tailBytes32 = 0;
+        uint64_t fullSectors = bootDivMod64(thisChunk, vol->bytesPerSec,
+                                            &tailBytes32); /* D-065: no 64-bit /% on i386 */
+        uint64_t tailBytes = tailBytes32;
 
         if (fullSectors > 0) {
             if (vol->dev->read(vol->dev->ctx, firstSec, (uint32_t)fullSectors, dst + dstOff) !=

@@ -140,7 +140,7 @@ TEST(bootGptNotFoundDoesNotFallBackToBackup) {
     BootBlockDev dev = {fakeRead, &d, SECTOR, d.totalSectors};
 
     static const uint8_t neverUsedTypeGuid[16] = {0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE,
-                                                   0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE};
+                                                  0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE};
     uint8_t scratch[SECTOR];
     BootGptPart out;
     uint8_t gotDiskGuid[16];

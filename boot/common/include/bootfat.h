@@ -12,11 +12,11 @@
 
 typedef struct {
     const BootBlockDev *dev;
-    uint64_t fatLba;      /* absolute LBA of the active FAT's first sector */
-    uint64_t dataLba;     /* absolute LBA of cluster 2's first sector */
+    uint64_t fatLba;  /* absolute LBA of the active FAT's first sector */
+    uint64_t dataLba; /* absolute LBA of cluster 2's first sector */
     uint32_t bytesPerSec;
     uint32_t secPerClus;
-    uint32_t fatSz32;      /* sectors per FAT (needed to bound a FAT-sector read) */
+    uint32_t fatSz32; /* sectors per FAT (needed to bound a FAT-sector read) */
     uint32_t rootClus;
     uint32_t countOfClusters; /* bounds every chain walk */
 } BootFatVol;
@@ -48,8 +48,7 @@ BootStatus bootFatMount(BootFatVol *vol, const BootBlockDev *dev, uint64_t partL
  * any component doesn't resolve, BOOT_ERR_FAT on a structural problem (bad chain, a
  * non-directory in a non-final position), or BOOT_ERR_IO on a read failure. No locks, boot-time
  * or host-test only. */
-BootStatus bootFatOpen(const BootFatVol *vol, const char *path, uint8_t *scratch,
-                       BootFatFile *out);
+BootStatus bootFatOpen(const BootFatVol *vol, const char *path, uint8_t *scratch, BootFatFile *out);
 
 /* Reads exactly `file->size` bytes into `dst` (fails with BOOT_ERR_TOO_LARGE if `dstCap` is
  * smaller). Merges contiguous cluster runs into single block-device reads; only the final,

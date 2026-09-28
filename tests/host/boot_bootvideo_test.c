@@ -3,8 +3,8 @@
 #include "framework/test.h"
 #include "bootvideo.h"
 
-static BootVideoMode mkMode(uint32_t id, uint32_t w, uint32_t h, uint32_t r, uint32_t g,
-                            uint32_t b, uint32_t resv) {
+static BootVideoMode mkMode(uint32_t id, uint32_t w, uint32_t h, uint32_t r, uint32_t g, uint32_t b,
+                            uint32_t resv) {
     BootVideoMode m = {0};
     m.id = id;
     m.width = w;
