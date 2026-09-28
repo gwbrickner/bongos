@@ -83,3 +83,7 @@ name the file, the function, and the failing test.
 - `reviewer` (Opus, read-only): reviews the milestone diff before the PR.
 - `qemu-tester` (Haiku): builds, runs tests, and summarizes the logs. Use it instead of reading long logs yourself.
 - `Explore` (Haiku): fast read-only codebase search.
+
+## Bug hunting
+Follow docs/BUG_HUNTING.md for all debugging and bug fixing.
+After a milestone, the user runs /milestone-sweep <name>.
