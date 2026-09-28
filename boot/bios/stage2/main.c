@@ -16,6 +16,7 @@
 #include "loader-serial.h"
 #include "memmap.h"
 #include "rm.h"
+#include "vbe.h"
 
 #include <stdbool.h>
 
@@ -241,6 +242,29 @@ static void diskSelfTest(BootHeap *heap) {
     loaderSerialWriteString("\n");
 }
 
+/* Step 10 (D-109): the BIOS-side mode pick, mirroring boot/uefi/gop.c's own self-contained log
+ * line for the mode it picked. `resWidth`/`resHeight` are 0 (auto) here -- wiring the parsed
+ * boot.cfg entry's `resolution` value through is step 11's job, once the full handoff exists to
+ * hand the framebuffer to. Not calling vbeSetMode() with a real requested resolution yet doesn't
+ * skip any of the actual VBE plumbing (enumeration, pick, set) this step needs to prove works. */
+static void vbeSelfTest(void) {
+    BootFramebuffer fb;
+    vbeSetMode(0, 0, &fb);
+    if (fb.phys == 0) {
+        loaderSerialWriteString("loader: no usable VBE mode found\n");
+        return;
+    }
+    loaderSerialWriteString("loader: VBE mode ");
+    loaderSerialWriteUint(fb.width);
+    loaderSerialWriteString("x");
+    loaderSerialWriteUint(fb.height);
+    loaderSerialWriteString(" pitch ");
+    loaderSerialWriteUint(fb.pitch);
+    loaderSerialWriteString(" phys 0x");
+    writeHex64(fb.phys);
+    loaderSerialWriteString("\n");
+}
+
 void stage2Main(void) {
     loaderSerialInit();
     loaderSerialWriteString("loader: stage2 c environment\n");
@@ -257,6 +281,7 @@ void stage2Main(void) {
     BootHeap heap;
     memMapSelfTest(&heap);
     diskSelfTest(&heap);
+    vbeSelfTest();
 
     haltForever();
 }

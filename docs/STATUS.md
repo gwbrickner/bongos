@@ -1,7 +1,8 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-9 of 13 done)
+**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-9 of 13 done, step 10
+implemented and manually verified, final QEMU verification in flight)
 
 ## Current milestone
 **M2.5 BIOS loader** is in progress on branch `m2-5-bios-loader` -- see `docs/logs/M2.5.md` for
@@ -59,8 +60,17 @@ regressions on the UEFI path throughout):
    512 MiB/3072 MiB all PASS and byte-identical -- the full disk/GPT/FAT/boot.cfg chain works at
    both memory sizes (`disk has 4194304 sectors`, ESP at LBA 0x1000-0x80fff, `/bong/boot.cfg is
    502 bytes`, `3 entries, timeout 3s, default entry 0`, `default kernel = /bong/kernel.elf`).
+10. VBE: `vbeSetMode()` (`boot/bios/stage2/vbe.c`) enumerates modes via the thunk (INT 10h
+    AX=4F00h/4F01h) and sets one (AX=4F02h) through the same shared `bootvideo.c` accept/pick
+    rule UEFI's GOP path uses. Found and fixed a real bug: `BootVideoMode.reservedMask` was never
+    populated from VBE's Rsvd fields, so every mode's combined mask topped out at bit 23 instead
+    of 24-31 and `bootVideoAccept()` rejected all of them (0/93 modes accepted); fixed by reading
+    the reserved-mask fields like every other channel (20/93 now accepted, auto-picks 2560x1600,
+    matching what UEFI's own GOP picks under the same QEMU config). Manually verified over real
+    QEMU: 512 MiB and 3072 MiB both PASS, byte-identical across repeats. `qemu-tester` final round
+    in flight.
 
-Remaining (steps 10-13, in `docs/logs/M2.5.md`'s Plan section): VBE; load
+Remaining (steps 11-13, in `docs/logs/M2.5.md`'s Plan section): load
 the kernel and jump into long mode (first full BIOS boot to the kernel, add `bios 1` to
 `tests/harness/matrix.conf`); the BIOS menu's serial input loop; harness rows
 (`matrix-full.conf`) + BIOS screenshot references; docs polish + a `reviewer` pass + the PR. See
@@ -263,17 +273,17 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
 
 ## Next step
 **M2.5 BIOS loader** is in progress (branch `m2-5-bios-loader`, log `docs/logs/M2.5.md`), steps
-1-9 of 13 done (see "Current milestone" above) -- `boot/bios/stage2/disk.c`'s `diskProbe()` drives
-thunked INT 13h (EDD check/params/extended read), `main.c`'s `diskSelfTest()` chains
-`bootGptFindPartition()` -> `bootFatMount()` -> `bootFatOpen()`/`bootFatRead()` ->
-`bootCfgParse()`, logging results over serial. Found, fixed, and `qemu-tester`-confirmed a real
-i386-portability bug in already-written `bootfat.c` (two 64-bit/32-bit divisions needing
-`__udivdi3`, undefined here since this loader links no compiler-rt) via a new portable
-`bootDivMod64()` helper (`boot/common/include/bootmem.h`), and brought a repo-wide
-`make format-check` failure (116 violations, all in this milestone's own earlier-step files) back
-to clean -- see `docs/logs/M2.5.md`'s step-9 entries for the full story. Next: step 10 -- VBE mode
-pick + set, using the shared `bootvideo.c` picker (same rule as UEFI's GOP selection, D-109). After
-that: kernel load+RSDP+seed+handoff+long mode (first full BIOS boot to the kernel, add `bios 1` to
+1-10 of 13 done (see "Current milestone" above) -- `boot/bios/stage2/vbe.c`'s `vbeSetMode()`
+enumerates and sets a VBE mode through the thunk, sharing `bootvideo.c`'s accept/pick rule with
+UEFI's GOP path. Found and fixed a real bug along the way (`BootVideoMode.reservedMask` never
+populated from VBE's Rsvd fields, so every mode's mask topped out at bit 23 instead of 24-31 and
+`bootVideoAccept()` rejected all of them) -- see `docs/logs/M2.5.md`'s step-10 entry for the full
+story. A `qemu-tester` final round (`make host-tests`, `make format-check`, `make test` UEFI
+regression, repeated BIOS boots at both memory sizes) is in flight.
+**If resuming fresh and that result isn't in the log yet:** check `docs/logs/M2.5.md`'s step-10
+entry -- if it only says "requested", re-run that verification yourself (exact commands in the
+log entry) before trusting step 10 and moving to step 11. Once confirmed: step 11 -- kernel
+load+RSDP+seed+handoff+long mode (first full BIOS boot to the kernel, add `bios 1` to
 `tests/harness/matrix.conf`), the BIOS menu input loop + `tests/gui/run.sh --fw bios` +
 `matrix-full.conf` rows, then docs polish + a `reviewer` pass + the PR (see `docs/logs/M2.5.md`'s
 Plan section for the full remaining step list). The highest-risk work (A20/PM/the thunk) is done;

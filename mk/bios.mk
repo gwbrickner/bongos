@@ -34,7 +34,8 @@ BIOS_STAGE2_C_SOURCES := $(wildcard boot/bios/stage2/*.c)
 BIOS_STAGE2_HW_SOURCES := boot/common/hw/serial.c boot/common/hw/libc-shim.c boot/common/hw/cpu.c
 BIOS_STAGE2_COMMON_SOURCES := boot/common/bootmem.c boot/common/memmap.c boot/common/bootheap.c \
                                boot/common/boot-status.c boot/common/bootcrc32.c \
-                               boot/common/bootgpt.c boot/common/bootfat.c boot/common/bootcfg.c
+                               boot/common/bootgpt.c boot/common/bootfat.c boot/common/bootcfg.c \
+                               boot/common/bootvideo.c
 BIOS_STAGE2_ASM_SOURCES := boot/bios/stage2/entry.asm boot/bios/stage2/rm.asm
 
 BIOS_STAGE2_C_OBJECTS := $(patsubst boot/bios/stage2/%.c,$(BIOS_OBJ_DIR)/%.o,$(BIOS_STAGE2_C_SOURCES))
