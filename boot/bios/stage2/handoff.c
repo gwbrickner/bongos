@@ -15,9 +15,11 @@
 #include "disk.h"
 #include "e820.h"
 #include "elf64.h"
+#include "fbtext.h"
 #include "loader-cpu.h"
 #include "loader-serial.h"
 #include "memmap.h"
+#include "menu.h"
 #include "paging.h"
 #include "rm.h"
 #include "vbe.h"
@@ -173,9 +175,9 @@ _Noreturn void handoffRun(void) {
         handoffHalt("loader: halting\n");
     }
 
-    /* VBE with the global resolution first (D-103), then resolve the selected entry (no menu yet
-     * -- cfg.defaultIndex directly; the serial input loop is step 12's job), then re-pick VBE
-     * only if the entry's resolution differs from the global one. */
+    /* VBE with the global resolution first (D-103), show the menu (if any) on that framebuffer,
+     * resolve the selected entry, then re-pick VBE only if the entry's resolution differs from
+     * the global one. */
     uint32_t globalResWidth =
         (cfg.global.setMask & BOOT_CFG_HAS_RESOLUTION) ? cfg.global.resWidth : 0;
     uint32_t globalResHeight =
@@ -183,8 +185,32 @@ _Noreturn void handoffRun(void) {
     BootFramebuffer fb;
     vbeSetMode(globalResWidth, globalResHeight, &fb);
 
+    uint32_t selectedIndex = cfg.defaultIndex;
+    if (cfg.timeoutSec > 0) {
+        /* ARCHITECTURE §5.2: the menu runs on screen *and* serial whenever there's a timeout to
+         * show one for -- never skipped outright just because no framebuffer came up, matching
+         * boot/uefi/handoff.c's own precedent (D-071: loaderMenuRun/the shared menu-ui drawing
+         * all tolerate a NULL fx). */
+        BootFbText fx;
+        BootFbText *fxPtr = NULL;
+        if (fb.phys != 0) {
+            BootStatus fxSt = fbTextInit(&fx, (uint8_t *)(uintptr_t)fb.phys, fb.width, fb.height,
+                                         fb.pitch, fb.redShift, fb.redSize, fb.greenShift,
+                                         fb.greenSize, fb.blueShift, fb.blueSize);
+            if (fxSt == BOOT_OK) {
+                fxPtr = &fx;
+            } else {
+                loaderSerialWriteString(
+                    "loader: framebuffer geometry unusable for the menu; continuing serial-only\n");
+            }
+        } else {
+            loaderSerialWriteString("loader: no framebuffer available; menu is serial-only\n");
+        }
+        selectedIndex = loaderMenuRun(cfgText, cfgTextLen, &cfg, fxPtr);
+    }
+
     BootCfgEntry entry;
-    bst = bootCfgResolveEntry(cfgText, cfgTextLen, &cfg, cfg.defaultIndex, &entry);
+    bst = bootCfgResolveEntry(cfgText, cfgTextLen, &cfg, selectedIndex, &entry);
     if (bst != BOOT_OK) {
         handoffHalt("loader: boot.cfg: failed to resolve the selected entry; halting\n");
     }

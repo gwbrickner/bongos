@@ -1,8 +1,8 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-11 of 13 done: first full
-BIOS boot to the kernel achieved, `make test` green including the new `bios 1` row)
+**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-12 of 13 done: the BIOS boot
+menu works, `make test` green including both BIOS GUI screenshot tests, only docs/PR polish left)
 
 ## Current milestone
 **M2.5 BIOS loader** is in progress on branch `m2-5-bios-loader` -- see `docs/logs/M2.5.md` for
@@ -90,10 +90,19 @@ regressions on the UEFI path throughout):
     showed `KTEST DONE passed=40 failed=0` including `bootinfo_valid` and `loader_reclaimed`,
     repeated 3x at 512 MiB and 1x at 3072 MiB, all byte-identical. Added `bios 1` to
     `tests/harness/matrix.conf` and `bios 1`/`bios 1 3072` to `matrix-full.conf`.
+12. The BIOS menu's input loop (`boot/bios/stage2/menu.c`, new, D-110): `rmIdle()` +
+    `bootkey.c`'s serial ANSI-escape parser + INT 16h local keyboard input + a BDA-tick-counter
+    countdown, driving the same shared `bootmenu.c` state machine and menu-drawing code UEFI's
+    menu uses. `tests/gui/run.sh --fw bios` (its `mkimage` call never had `--stage1`/`--stage2`
+    before this) passes all 4 scripted scenarios; captured `tests/gui/ref/bios-{menu,kernel}.png`
+    and confirmed them **pixel-identical** to the existing UEFI references via `imgdiff compare`
+    (exit 0) -- D-110's shared-drawing promise, now verified rather than asserted. `mk/test.mk`'s
+    `test` target now runs the BIOS GUI tests and a BIOS countdown-smoke too; `make test` passed
+    twice end to end (`MATRIX`/`GUI` x2/both countdown-smokes all PASS).
 
-Remaining (steps 12-13, in `docs/logs/M2.5.md`'s Plan section): the BIOS menu's serial input loop;
-harness rows (`matrix-full.conf`) + BIOS screenshot references; docs polish + a `reviewer` pass +
-the PR. See `docs/logs/M2.5.md`'s "Next step" for the precise resumption point.
+Remaining (step 13, in `docs/logs/M2.5.md`'s Plan section): docs polish, a `reviewer` pass, fix
+findings, check ROADMAP.md's M2.5 box, write the Summary, open the PR. See `docs/logs/M2.5.md`'s
+"Next step" for the precise resumption point.
 
 **M2.4 Slab, kmalloc, vmalloc** is done -- see `docs/logs/M2.4.md` for the full
 writeup and its Summary section for the release notes. ROADMAP.md's M2.4 box is checked. Design
@@ -292,22 +301,20 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
 
 ## Next step
 **M2.5 BIOS loader** is in progress (branch `m2-5-bios-loader`, log `docs/logs/M2.5.md`), steps
-1-11 of 13 done (see "Current milestone" above) -- **the first full BIOS boot to the kernel is
-working, `qemu-tester`-confirmed**: `boot/bios/stage2/handoff.c` (new) runs the real E820/disk/
-GPT/FAT32/boot.cfg/VBE/kernel-load/RSDP/random-seed/page-table/BootInfo flow and jumps into long
-mode via `boot/bios/stage2/trampoline.asm` (new). `make test` passes clean including the new
-`bios 1` matrix row; 4 independent KTEST runs (3x 512 MiB, 1x 3072 MiB) all show `KTEST DONE
-passed=40 failed=0`, zero flakiness. Full story (the architect consultation, 5 real gaps it found
-and fixed before any code was written, a real NASM cross-object-file relocation limitation found
-at the first build attempt) in `docs/logs/M2.5.md`'s step-11 entries. Next: step 12 -- the BIOS
-menu input loop (`bootkey.c`, already written) + `tests/gui/run.sh --fw bios` + new
-`tests/gui/ref/bios-*.png` references + `matrix-full.conf` BIOS GUI rows, then step 13 -- docs
-polish + a `reviewer` pass + the PR (see `docs/logs/M2.5.md`'s Plan section for the full
-remaining step list). The highest-risk work (A20/PM/the thunk, and now paging/long-mode entry) is
-done; step 12 is UI/harness plumbing reusing already-written pure logic (`bootkey.c`) and should
-be lower-risk, but still verify with `qemu-tester` before moving on, and consult the `architect`
-subagent if a boot failure survives
-two fix attempts (CLAUDE.md's stuck-budget rule).
+1-12 of 13 done (see "Current milestone" above) -- **the BIOS boot menu works**:
+`boot/bios/stage2/menu.c` (new) drives the same shared state machine/drawing code UEFI's menu
+uses, and `tests/gui/ref/bios-{menu,kernel}.png` (newly captured) are confirmed pixel-identical
+to the UEFI references. `make test` passed twice end to end with both firmwares' matrix/GUI/
+countdown-smoke all green. A `qemu-tester` final round for step 12 (mirroring every earlier
+step's pattern) is in flight; **if resuming fresh and that result isn't in the log yet**, check
+`docs/logs/M2.5.md`'s step-12 entry -- if it doesn't say "Confirmed by qemu-tester", either wait
+for it or re-verify yourself (`make test`, `make format-check`) before moving to step 13. Once
+confirmed: step 13 -- docs polish, a `reviewer` subagent pass (fix every Critical finding, fix or
+explain every Should-fix), check ROADMAP.md's M2.5 box, write the log's Summary (release notes),
+update STATUS.md for the next milestone, and open the PR (`needs-owner: yes`, per D-099/D-109/
+D-111's owner-review flags, using `.github/pull_request_template.md`) -- see `docs/logs/M2.5.md`'s
+Plan section for the full step list. Every implementation step is now done; step 13 is the
+milestone's finishing checklist, not new risk.
 
 M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8), #7 (M2.3), and #6 (M2.2) remain
 open against `main`, all `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.5's

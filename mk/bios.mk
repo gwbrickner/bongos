@@ -31,21 +31,27 @@ BIOS_CFLAGS := --target=i386-unknown-elf -m32 -march=i686 -std=c17 -ffreestandin
                -Wall -Wextra -Werror -Wshorten-64-to-32
 
 BIOS_STAGE2_C_SOURCES := $(wildcard boot/bios/stage2/*.c)
-BIOS_STAGE2_HW_SOURCES := boot/common/hw/serial.c boot/common/hw/libc-shim.c boot/common/hw/cpu.c
+BIOS_STAGE2_HW_SOURCES := boot/common/hw/serial.c boot/common/hw/libc-shim.c boot/common/hw/cpu.c \
+                          boot/common/hw/menu-ui.c
 BIOS_STAGE2_COMMON_SOURCES := boot/common/bootmem.c boot/common/memmap.c boot/common/bootheap.c \
                                boot/common/boot-status.c boot/common/bootcrc32.c \
                                boot/common/bootgpt.c boot/common/bootfat.c boot/common/bootcfg.c \
                                boot/common/bootvideo.c boot/common/elf.c boot/common/paging.c \
-                               boot/common/boothandoff.c boot/common/bootacpi.c
+                               boot/common/boothandoff.c boot/common/bootacpi.c \
+                               boot/common/fbtext.c boot/common/bootmenu.c boot/common/bootkey.c
 BIOS_STAGE2_ASM_SOURCES := boot/bios/stage2/entry.asm boot/bios/stage2/rm.asm \
                            boot/bios/stage2/trampoline.asm
+# fbtext.c links against the generated font data (mk/font.mk's $(CONSOLE_FONT_C)), not a
+# boot/common/*.c wildcard match, so it gets its own object rule below -- the same generated file
+# the UEFI loader compiles for its own target, just built here with BIOS_CFLAGS instead.
+BIOS_CONSOLE_FONT_OBJECT := $(BOOT_BIOS_DIR)/gen/console-font.o
 
 BIOS_STAGE2_C_OBJECTS := $(patsubst boot/bios/stage2/%.c,$(BIOS_OBJ_DIR)/%.o,$(BIOS_STAGE2_C_SOURCES))
 BIOS_STAGE2_HW_OBJECTS := $(patsubst boot/common/hw/%.c,$(BIOS_OBJ_DIR)/hw-%.o,$(BIOS_STAGE2_HW_SOURCES))
 BIOS_STAGE2_COMMON_OBJECTS := $(patsubst boot/common/%.c,$(BIOS_OBJ_DIR)/common-%.o,$(BIOS_STAGE2_COMMON_SOURCES))
 BIOS_STAGE2_ASM_OBJECTS := $(patsubst boot/bios/stage2/%.asm,$(BIOS_OBJ_DIR)/%.o,$(BIOS_STAGE2_ASM_SOURCES))
 BIOS_STAGE2_OBJECTS := $(BIOS_STAGE2_ASM_OBJECTS) $(BIOS_STAGE2_C_OBJECTS) $(BIOS_STAGE2_HW_OBJECTS) \
-                       $(BIOS_STAGE2_COMMON_OBJECTS)
+                       $(BIOS_STAGE2_COMMON_OBJECTS) $(BIOS_CONSOLE_FONT_OBJECT)
 BIOS_STAGE2_ELF := $(BOOT_BIOS_DIR)/stage2.elf
 
 $(BIOS_OBJ_DIR)/%.o: boot/bios/stage2/%.c $(BRANDING_HDR)
@@ -55,6 +61,9 @@ $(BIOS_OBJ_DIR)/hw-%.o: boot/common/hw/%.c $(BRANDING_HDR)
 	@mkdir -p $(dir $@)
 	$(BIOS_CC) $(BIOS_CFLAGS) -c -o $@ $<
 $(BIOS_OBJ_DIR)/common-%.o: boot/common/%.c $(BRANDING_HDR)
+	@mkdir -p $(dir $@)
+	$(BIOS_CC) $(BIOS_CFLAGS) -c -o $@ $<
+$(BIOS_CONSOLE_FONT_OBJECT): $(CONSOLE_FONT_C)
 	@mkdir -p $(dir $@)
 	$(BIOS_CC) $(BIOS_CFLAGS) -c -o $@ $<
 $(BIOS_OBJ_DIR)/%.o: boot/bios/stage2/%.asm
