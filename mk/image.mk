@@ -66,15 +66,17 @@ $(UEFI_EFI): $(UEFI_OBJECTS) $(BOOT_COMMON_OBJECTS) $(BOOT_COMMON_HW_OBJECTS) $(
 	lld-link /subsystem:efi_application /entry:efiMain /nodefaultlib /out:$@ $^
 
 # tools/mkimage: a host tool (own clang, no cross flags), per ARCHITECTURE §0's host-tool
-# exception. Also wants branding.h, for the root partition's on-disk name label, and
+# exception. Also wants branding.h, for the root partition's on-disk name label,
 # boot/common's bootcfg.c/boot-status.c/bootmem.c to validate --boot-cfg at build time (D-067) --
-# the same parser the loader itself runs, built here for the host instead of x86_64-windows.
+# the same parser the loader itself runs, built here for the host instead of x86_64-windows --
+# and biosboot.c's stage1-patch/stage2-header-validate logic (D-099, M2.5).
 MKIMAGE_SOURCES := tools/mkimage/main.c tools/mkimage/gpt.c tools/mkimage/crc32.c \
+                   tools/mkimage/biosboot.c \
                    boot/common/bootcfg.c boot/common/boot-status.c boot/common/bootmem.c
 MKIMAGE_BIN := $(MKIMAGE_DIR)/mkimage
 
-$(MKIMAGE_BIN): $(MKIMAGE_SOURCES) tools/mkimage/gpt.h tools/mkimage/crc32.h $(BRANDING_HDR) \
-                $(wildcard boot/common/include/*.h)
+$(MKIMAGE_BIN): $(MKIMAGE_SOURCES) tools/mkimage/gpt.h tools/mkimage/crc32.h \
+                tools/mkimage/biosboot.h $(BRANDING_HDR) $(wildcard boot/common/include/*.h)
 	@mkdir -p $(dir $@)
 	clang -std=c17 -I$(BUILD)/include -Iboot/common/include -Wall -Wextra -Werror -O1 -o $@ \
 		$(MKIMAGE_SOURCES)
