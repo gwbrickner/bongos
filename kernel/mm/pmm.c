@@ -79,6 +79,7 @@ static _Noreturn void pmmBug(PmmBugKind kind, uint64_t pfn) {
         [PMM_BUG_RESERVED_FRAME] = "reserved frame",
         [PMM_BUG_CORRUPT_STATE] = "corrupt state",
         [PMM_BUG_POISON] = "poison mismatch (write after free)",
+        [PMM_BUG_OWNED_PAGE] = "owned page (slab/vmalloc never released it)",
     };
     panicBug("pmm: %s pfn=0x%llx", names[kind], (unsigned long long)pfn);
 }
@@ -159,6 +160,15 @@ static void pmmValidateForFree(Page *page, uint32_t order, uint64_t *outPfn) {
         case PAGE_STATE_ALLOCATED:
             if (page->order != order) {
                 pmmBug(PMM_BUG_ORDER_MISMATCH, pfn);
+            }
+            /* M2.4, D-095: an owner (the slab allocator or vmalloc) must clear its Page.flags
+             * ownership bit on every page of the block before ever calling pmmFreePages() -- a
+             * page still carrying one here means that owner never released it (or the caller is
+             * freeing someone else's live memory directly), either way a kernel bug. */
+            for (uint64_t p = pfn; p < pfn + ((uint64_t)1 << order); p++) {
+                if (pageFromPfn(p)->flags & PAGE_F_OWNER_MASK) {
+                    pmmBug(PMM_BUG_OWNED_PAGE, p);
+                }
             }
             *outPfn = pfn;
             return;

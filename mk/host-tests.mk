@@ -27,19 +27,24 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # kernel/mm/pmm-map.c and kernel/mm/buddy.c: the pmm's two pure cores (D-079..D-082, ROADMAP
 # M2.2) -- no klog/panic/arch calls, so they host-test the same way as the rest of this list.
 # kernel/mm/kva.c: the KVA allocator's pure extent core (D-088, ROADMAP M2.3) -- same reasoning.
+# kernel/mm/slab-core.c/slab-debug.c: the slab allocator's pure layout/bufctl/redzone/poison core
+# (D-093/D-096, ROADMAP M2.4) -- same reasoning; slab-debug.c's `debug` parameter (not an #ifdef)
+# is exactly what makes it host-testable in both modes without -DKERNEL_DEBUG.
 # -DHOSTED switches kernel/include/page.h's Page-array base to `hostPageArrayBase`
 # (kernel_buddy_test.c), since host tests have no real HHDM/page-array VA region to point into.
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c boot/uefi/guids.c \
                         $(wildcard boot/common/*.c) $(CONSOLE_FONT_C) \
                         $(filter-out tools/imgdiff/main.c,$(wildcard tools/imgdiff/*.c)) \
                         kernel/drivers/fbcon/fbcon.c kernel/core/ksym.c tools/ksyms/ksyms-encode.c \
-                        kernel/mm/pmm-map.c kernel/mm/buddy.c kernel/mm/kva.c
+                        kernel/mm/pmm-map.c kernel/mm/buddy.c kernel/mm/kva.c \
+                        kernel/mm/slab-core.c kernel/mm/slab-debug.c
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h $(wildcard boot/uefi/include/efi/*.h) \
                         $(wildcard boot/common/include/*.h) $(wildcard tools/imgdiff/*.h) \
                         kernel/drivers/fbcon/fbcon.h $(wildcard kernel/include/uapi/*.h) \
                         kernel/include/ksym.h tools/ksyms/elf-read.h tools/ksyms/ksyms-encode.h \
                         kernel/include/list.h kernel/include/page.h kernel/include/pmm.h \
-                        kernel/mm/pmm-internal.h kernel/mm/kva-internal.h
+                        kernel/mm/pmm-internal.h kernel/mm/kva-internal.h \
+                        kernel/include/kmalloc.h kernel/mm/slab-internal.h
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
                             -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms \
                             -Ikernel/mm

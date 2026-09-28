@@ -56,7 +56,8 @@ typedef enum {
     PMM_BUG_NOT_HEAD,       /* freeing an interior page of a still-live block */
     PMM_BUG_RESERVED_FRAME, /* freeing a frame the pmm never owned */
     PMM_BUG_CORRUPT_STATE,  /* a Page.state value that shouldn't be reachable */
-    PMM_BUG_POISON          /* KERNEL_DEBUG: an allocated page's poison pattern was overwritten */
+    PMM_BUG_POISON,         /* KERNEL_DEBUG: an allocated page's poison pattern was overwritten */
+    PMM_BUG_OWNED_PAGE      /* M2.4/D-095: freeing a page an owner (slab/vmalloc) never released */
 } PmmBugKind;
 
 /* Scans `bi`'s memory map, builds the Page array over it, brings up the DMA32/NORMAL zones and the

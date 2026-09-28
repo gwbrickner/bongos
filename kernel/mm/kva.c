@@ -9,6 +9,7 @@ void kvaStateInit(KvaState *st, uint64_t base, uint64_t end) {
     st->end = end;
     st->extents[0] = (KvaExtent){.start = base, .end = end};
     st->count = 1;
+    st->liveCount = 0;
 }
 
 Status kvaAlloc(KvaState *st, uint64_t size, uint64_t *outVa) {
@@ -18,6 +19,9 @@ Status kvaAlloc(KvaState *st, uint64_t size, uint64_t *outVa) {
     uint64_t need = size + 2 * KVA_GUARD_SIZE;
     if (need < size) { /* overflow: no real KVA request can reach this on a 64-bit address space */
         return STATUS_ERR_INVALID;
+    }
+    if (st->liveCount >= KVA_MAX_EXTENTS - 1) { /* D-098's admission cap */
+        return STATUS_ERR_NO_MEMORY;
     }
 
     for (uint32_t i = 0; i < st->count; i++) {
@@ -35,6 +39,7 @@ Status kvaAlloc(KvaState *st, uint64_t size, uint64_t *outVa) {
             st->extents[i].start = newStart;
         }
         *outVa = start + KVA_GUARD_SIZE;
+        st->liveCount++;
         return STATUS_OK;
     }
     return STATUS_ERR_NO_MEMORY;
@@ -90,5 +95,6 @@ Status kvaFree(KvaState *st, uint64_t va, uint64_t size) {
         st->extents[idx] = (KvaExtent){.start = start, .end = end};
         st->count++;
     }
+    st->liveCount--;
     return STATUS_OK;
 }
