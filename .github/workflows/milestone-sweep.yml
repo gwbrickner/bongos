@@ -1,0 +1,71 @@
+# Runs automatically when you push a milestone tag, e.g.:
+#   git tag milestone/paging && git push origin milestone/paging
+# Assumes make targets: debug, release, ktest (PROFILE=debug|release -> build/bongos-ktest.iso), analyze
+# Adjust target names and ISO path to match your Makefile.
+
+name: Milestone Sweep
+
+on:
+  push:
+    tags: ['milestone/*']
+  workflow_dispatch:
+
+jobs:
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y nasm xorriso cppcheck clang clang-tools gcc
+      - name: Build debug + release
+        run: make debug && make release
+      - name: GCC analyzer
+        run: make analyze 2>&1 | tee gcc-analyzer.txt
+      - name: cppcheck
+        run: cppcheck --enable=all --inconclusive --inline-suppr src/ 2> cppcheck.txt || true
+      - name: Clang static analyzer
+        run: scan-build -o scan-results make debug || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: static-analysis
+          path: |
+            gcc-analyzer.txt
+            cppcheck.txt
+            scan-results/
+
+  boot-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mem: [64M, 512M, 4G, 8G]
+        smp: [1, 4]
+        profile: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 nasm xorriso
+      - name: Build ktest ISO
+        run: make ktest PROFILE=${{ matrix.profile }}
+      - name: Run ktest in QEMU
+        run: |
+          set +e
+          timeout 120 qemu-system-x86_64 \
+            -machine q35 -m ${{ matrix.mem }} -smp ${{ matrix.smp }} \
+            -cdrom build/bongos-ktest.iso \
+            -serial file:serial.log -display none \
+            -no-reboot \
+            -device isa-debug-exit,iobase=0xf4,iosize=0x04
+          code=$?
+          echo "QEMU exit code: $code"
+          if [ $code -eq 124 ]; then echo "::error::Timed out (hang?)"; exit 1; fi
+          if grep -qE "PANIC|UBSAN|stack smashed|KTEST FAIL" serial.log; then
+            echo "::error::Failure markers found in serial log"; exit 1
+          fi
+          if [ $code -ne 33 ]; then echo "::error::Unexpected exit code $code"; exit 1; fi
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-${{ matrix.mem }}-smp${{ matrix.smp }}-${{ matrix.profile }}
+          path: serial.log
