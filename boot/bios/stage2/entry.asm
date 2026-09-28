@@ -1,19 +1,23 @@
-; BIOS stage2 entry (D-101/D-102/D-103, docs/specs/bios-boot.md). Assembled `nasm -f bin`, loaded
-; at linear 0x8000. 16-bit real-mode bring-up (A20, the GDT, the switch to 32-bit protected mode)
-; lives here; everything else moves into C once stage2 gains an i386 build (D-104) -- this is
-; still a standalone step, not the final design (no thunk, no C, no disk/VBE/RSDP yet). For now,
-; once in protected mode, it prints a fixed banner over COM1 with raw port I/O (proving the A20/
-; PM switch itself works) and halts.
+; BIOS stage2 entry (D-101/D-102/D-103, docs/specs/bios-boot.md). Linked (not a flat `nasm -f bin`
+; blob any more, now that stage2 has a 32-bit C part, D-104): `nasm -f elf32`, then
+; `ld.lld -T stage2.ld`, then `objcopy -O binary`. 16-bit real-mode bring-up (A20, the GDT, the
+; switch to 32-bit protected mode) lives here; `stage2Main` (C) takes over from `pm_entry`.
 bits 16
-org 0x8000
 
 %define S2HD_MAGIC 0x44483253 ; "S2HD"
 
+extern __stage2FileEnd
+extern stage2Main
+global entry16
+
+section .text16.header progbits alloc exec nowrite align=1
     jmp short entry16
     db 0x90, 0x90
     dd S2HD_MAGIC
-    dd stage2End - $$   ; fileSize: the assembler computes this file's own exact byte length
-    dd 1                 ; headerVersion
+    dd __stage2FileEnd - 0x8000 ; fileSize: link-time constant (both symbols are absolute)
+    dd 1                          ; headerVersion
+
+section .text16 progbits alloc exec nowrite align=1
 
 entry16:
     cli
@@ -174,6 +178,7 @@ gdtr:
     dw ($ - gdt) - 1          ; limit = (gdt table size in bytes) - 1
     dd gdt
 
+section .text progbits alloc exec nowrite align=16
 bits 32
 pm_entry:
     mov ax, 0x10
@@ -182,55 +187,8 @@ pm_entry:
     mov ss, ax
     mov esp, 0x00090000       ; a temporary PM stack; replaced once stage2 has its own (D-101)
 
-    mov dx, 0x3F9
-    xor al, al
-    out dx, al                ; IER: disable UART interrupts
-    mov dx, 0x3FB
-    mov al, 0x80
-    out dx, al                ; LCR: DLAB on
-    mov dx, 0x3F8
-    mov al, 1
-    out dx, al                ; divisor low byte: 1 -> 115200 baud
-    mov dx, 0x3F9
-    xor al, al
-    out dx, al                ; divisor high byte
-    mov dx, 0x3FB
-    mov al, 0x03
-    out dx, al                ; LCR: 8N1, DLAB off
-    mov dx, 0x3FA
-    mov al, 0xC1
-    out dx, al                ; FCR: FIFO enable, 14-byte trigger
-    mov dx, 0x3FC
-    mov al, 0x03
-    out dx, al                ; MCR: DTR+RTS asserted
-
-    mov esi, pmMsg
-.loop:
-    mov al, [esi]
-    test al, al
-    jz pm_hang
-    call pm_serial_write_byte
-    inc esi
-    jmp .loop
-
-pm_hang:
+    call stage2Main            ; loaderSerialInit() there does the UART setup (D-104)
+.hang:                        ; unreachable: stage2Main is _Noreturn
     cli
     hlt
-    jmp pm_hang
-
-; al = byte to send; clobbers eax, edx.
-pm_serial_write_byte:
-    push eax
-.wait:
-    mov dx, 0x3FD
-    in al, dx
-    test al, 0x20             ; LSR bit 5: THR empty
-    jz .wait
-    pop eax
-    mov dx, 0x3F8
-    out dx, al
-    ret
-
-pmMsg: db "loader: stage2 protected mode", 13, 10, 0
-
-stage2End:
+    jmp .hang
