@@ -1,13 +1,13 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-6 of 13 done)
+**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-7 of 13 done)
 
 ## Current milestone
 **M2.5 BIOS loader** is in progress on branch `m2-5-bios-loader` -- see `docs/logs/M2.5.md` for
 the full plan and running log. Design consulted with the `architect` subagent first (D-099
 through D-112, plus `docs/specs/bios-boot.md`'s byte-level layouts), giving a 13-step
-implementation order. Steps 1-6 are done and each individually verified against real QEMU (no
+implementation order. Steps 1-7 are done and each individually verified against real QEMU (no
 regressions on the UEFI path throughout):
 1-4. Refactored shared loader code out of the UEFI-only path so BIOS stage2 can reuse it instead
    of a second hand-copied implementation: `boot/common/hw/` (serial, libc-shim, cpu), the shared
@@ -19,19 +19,28 @@ regressions on the UEFI path throughout):
    parsing), `memMapE820TypeToBootMem`, and `tools/mkimage/biosboot.c` (the stage1
    patch-block writer/stage2-header validator) with `--stage1`/`--stage2` mkimage flags. 233 host
    tests total (up from 172 at the start of this milestone).
-6. A real `boot/bios/stage1.asm` (440-byte NASM MBR, D-100) and a minimal `boot/bios/stage2/
-   skeleton.asm` -- **this boots successfully under real QEMU with SeaBIOS**, verified repeatedly
-   including the multi-chunk disk-read path (a synthetic 130-sector fake stage2 read back via a
-   QMP physical-memory dump, byte-exact). `mk/image.mk`'s `image` target now always installs a
-   real BIOS bootloader instead of leaving that partition an empty hole.
+6. A real `boot/bios/stage1.asm` (440-byte NASM MBR, D-100) and `boot/bios/stage2/entry.asm` --
+   **boots successfully under real QEMU with SeaBIOS**, verified repeatedly including the
+   multi-chunk disk-read path (a synthetic 130-sector fake stage2 read back via a QMP
+   physical-memory dump, byte-exact). `mk/image.mk`'s `image` target now always installs a real
+   BIOS bootloader instead of leaving that partition an empty hole.
+7. A20 enable, the GDT, the protected-mode switch, a full 32-bit C environment for stage2
+   (i386-cross-compiled `boot/common/hw/*.c`, linked via a new `stage2.ld`, D-104), and the
+   real-mode thunk (`rmInt`/`rmIdle`, D-102) -- **stage2 can now make real BIOS calls from C**,
+   proven with INT 12h. A real bug was found and fixed only by booting under real QEMU plus GDB
+   (not by reasoning about the asm alone): the thunk's register-marshaling loads the caller's
+   requested `RmRegs.ebp` into the live EBP register, clobbering `rmInt`'s own frame pointer; the
+   epilogue's `mov esp, ebp` then used that clobbered value and jumped into the BIOS ROM's reset
+   vector on return. Fixed by removing the now-redundant, now-wrong instruction (see the log's
+   step-7-final entry for the full bisection story). This is the milestone's highest-risk work,
+   now behind it.
 
-Remaining (steps 7-13, in `docs/logs/M2.5.md`'s Plan section): A20 + the protected-mode switch +
-the real-mode thunk (D-102) + a `stage2Main` CPU-check skeleton (the highest-risk remaining work
--- real-mode/protected-mode transitions are notoriously hard to debug); wiring in E820/heap,
-disk+GPT+FAT+boot.cfg, VBE; loading the kernel and jumping into long mode (first full BIOS boot
-to the kernel); the BIOS menu's serial input loop; harness rows (`matrix.conf`) + BIOS screenshot
-references; docs polish + a `reviewer` pass + the PR. See `docs/logs/M2.5.md`'s "Next step" for
-the precise resumption point.
+Remaining (steps 8-13, in `docs/logs/M2.5.md`'s Plan section): wire E820 (via the now-working
+thunk) into the already-written `bootheap`; disk+GPT+FAT+boot.cfg; VBE; load the kernel and jump
+into long mode (first full BIOS boot to the kernel, add `bios 1` to `tests/harness/matrix.conf`);
+the BIOS menu's serial input loop; harness rows (`matrix-full.conf`) + BIOS screenshot references;
+docs polish + a `reviewer` pass + the PR. See `docs/logs/M2.5.md`'s "Next step" for the precise
+resumption point.
 
 **M2.4 Slab, kmalloc, vmalloc** is done -- see `docs/logs/M2.4.md` for the full
 writeup and its Summary section for the release notes. ROADMAP.md's M2.4 box is checked. Design
@@ -230,22 +239,22 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
 
 ## Next step
 **M2.5 BIOS loader** is in progress (branch `m2-5-bios-loader`, log `docs/logs/M2.5.md`), steps
-1-6 of 13 done (see "Current milestone" above) -- real stage1 + a stage2 skeleton already boot
-under QEMU/SeaBIOS. Next: step 7 -- A20 enable, the real-mode-to-protected-mode switch, a small
-PM-only fault IDT, the real-mode thunk (`rmInt`/`rmIdle`, D-102, `boot/bios/stage2/rm.h` + a NASM
-implementation), and a `stage2Main` skeleton that inits serial and runs the CPUID long-mode-
-feature check -- replacing `boot/bios/stage2/skeleton.asm`'s current "print and halt" body. This
-is where `boot/common`'s i386 build (D-104) actually starts (extend `mk/bios.mk` with the
-`clang --target=i386-unknown-elf -m32 ...` cross-compile rules and an `ld.lld -m elf_i386`
-link step per `docs/specs/bios-boot.md` §3, replacing the flat `nasm -f bin` stage2 build). This
-is the highest-risk remaining work in the milestone (real-mode/protected-mode transitions are
-notoriously hard to debug blind) -- iterate in small, independently `qemu-tester`-verified steps,
-and consult the `architect` subagent if a boot failure survives two fix attempts (CLAUDE.md's
-stuck-budget rule). After step 7: E820+heap, disk+GPT+FAT+boot.cfg, VBE, kernel load+RSDP+seed+
-handoff+long mode (first full BIOS boot to the kernel, add `bios 1` to
-`tests/harness/matrix.conf`), the BIOS menu input loop + `tests/gui/run.sh --fw bios` +
-`matrix-full.conf` rows, then docs polish + a `reviewer` pass + the PR (see
-`docs/logs/M2.5.md`'s Plan section for the full remaining step list).
+1-7 of 13 done (see "Current milestone" above) -- stage2 has a real 32-bit C environment and a
+working real-mode thunk, verified making an actual BIOS call (INT 12h) from C, over real QEMU.
+Next: step 8 -- wire E820 (INT 15h AX=E820h, via the now-working `rmInt`) into the already
+host-tested `memMapE820TypeToBootMem()`/`bootHeapInit()` (`boot/common/memmap.c`/`bootheap.c`),
+replacing stage2's temporary PM stack (`entry.asm`'s `mov esp, 0x00090000`) with a real
+allocation from that heap. Test: log the discovered E820 regions and the resulting heap capacity
+over serial on both the default (512 MiB) and a higher-memory QEMU config (matrix-full-style,
+e.g. 3072 MiB), matching the memory-diversity testing pattern earlier milestones used (D-084).
+After step 8: disk+GPT+FAT+boot.cfg, VBE, kernel load+RSDP+seed+handoff+long mode (first full
+BIOS boot to the kernel, add `bios 1` to `tests/harness/matrix.conf`), the BIOS menu input loop +
+`tests/gui/run.sh --fw bios` + `matrix-full.conf` rows, then docs polish + a `reviewer` pass +
+the PR (see `docs/logs/M2.5.md`'s Plan section for the full remaining step list). The highest-risk
+work (A20/PM/the thunk) is done; remaining steps reuse already-written, already-host-tested pure
+logic and should be lower-risk, but still verify each with `qemu-tester` before moving on, and
+consult the `architect` subagent if a boot failure survives two fix attempts (CLAUDE.md's
+stuck-budget rule).
 
 M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8), #7 (M2.3), and #6 (M2.2) remain
 open against `main`, all `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.5's
