@@ -90,8 +90,10 @@ $(BOOT_CFG_GENERATED): boot/boot.cfg.in branding/name tools/gen-boot-cfg.sh
 	bash tools/gen-boot-cfg.sh > $@
 
 .PHONY: image
-image: branding $(UEFI_EFI) $(MKIMAGE_BIN) $(KERNEL_ELF) $(BOOT_CFG_GENERATED)
+image: branding $(UEFI_EFI) $(MKIMAGE_BIN) $(KERNEL_ELF) $(BOOT_CFG_GENERATED) $(BIOS_STAGE1_BIN) \
+       $(BIOS_STAGE2_BIN)
 	$(MKIMAGE_BIN) --output $(IMAGE) --efi $(UEFI_EFI) --kernel $(KERNEL_ELF) \
-		--boot-cfg $(BOOT_CFG_GENERATED)
+		--boot-cfg $(BOOT_CFG_GENERATED) --stage1 $(BIOS_STAGE1_BIN) --stage2 $(BIOS_STAGE2_BIN)
 	$(MKIMAGE_BIN) --output $(KTEST_IMAGE) --efi $(UEFI_EFI) --kernel $(KERNEL_ELF) \
-		--boot-cfg tests/harness/ktest-boot.cfg
+		--boot-cfg tests/harness/ktest-boot.cfg --stage1 $(BIOS_STAGE1_BIN) \
+		--stage2 $(BIOS_STAGE2_BIN)
