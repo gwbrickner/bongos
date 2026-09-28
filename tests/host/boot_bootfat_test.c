@@ -155,6 +155,30 @@ static void writeLfnDirEntry(FatImage *f, uint32_t dirCluster, uint32_t slotInde
     writeShortDirEntry(f, dirCluster, slotIndex, shortName, attr, firstCluster, size);
 }
 
+/* Writes one raw LFN entry (`units` supplies all 13 UTF-16LE code units verbatim -- callers build
+ * malformed/incomplete groups the writeLfnDirEntry() helper above can't express, e.g. a group
+ * that never reaches sequence 1). `ord` is the raw LDIR_Ord byte (sequence number, optionally
+ * OR'd with the 0x40 "last logical entry" flag). */
+static void writeRawLfnEntry(FatImage *f, uint32_t dirCluster, uint32_t slotIndex, uint8_t ord,
+                             const uint16_t units[13], uint8_t checksum) {
+    uint8_t *e = clusterPtr(f, dirCluster) + (uint64_t)slotIndex * 32;
+    memset(e, 0xFF, 32);
+    e[0] = ord;
+    for (uint32_t i = 0; i < 5; i++) {
+        writeLE16(e + 1 + 2 * i, units[i]);
+    }
+    e[11] = 0x0F;
+    e[12] = 0;
+    e[13] = checksum;
+    for (uint32_t i = 0; i < 6; i++) {
+        writeLE16(e + 14 + 2 * i, units[5 + i]);
+    }
+    writeLE16(e + 26, 0);
+    for (uint32_t i = 0; i < 2; i++) {
+        writeLE16(e + 28 + 2 * i, units[11 + i]);
+    }
+}
+
 static FatImage buildFatImage(void) {
     FatImage f = {0};
     /* fatSz32 = ceil((COUNT_CLUSTERS + 2) * 4 / SECTOR). */
@@ -355,5 +379,147 @@ TEST(bootFatReadRejectsBufferTooSmall) {
     ASSERT_EQ(bootFatOpen(&vol, "/small.bin", scratch, &file), BOOT_OK);
     uint8_t out[4];
     ASSERT_EQ(bootFatRead(&vol, &file, out, sizeof(out), scratch), BOOT_ERR_TOO_LARGE);
+    free(f.image);
+}
+
+/* Reviewer finding #13(a): a BPB claiming `RsvdSecCnt + NumFATs*FATSz32 >= TotSec32` would
+ * otherwise underflow `dataSectors` to a huge 64-bit value whose (uint32_t) cast could land
+ * inside the valid FAT32 cluster-count range, letting a hostile/corrupt volume mount. */
+TEST(bootFatMountRejectsUnderflowingReservedPlusFats) {
+    FatImage f = buildFatImage();
+    uint64_t reservedAndFats = RSVD_SECS + (uint64_t)NUM_FATS * f.fatSz32;
+    writeLE32(f.image + 32, (uint32_t)(reservedAndFats - 1)); /* BPB_TOTSEC32_OFF */
+    BootBlockDev dev = {fakeRead, &f, SECTOR, f.totalSectors};
+    BootFatVol vol;
+    uint8_t scratch[SECTOR];
+    ASSERT_EQ(bootFatMount(&vol, &dev, 0, f.totalSectors, scratch), BOOT_ERR_FAT);
+    free(f.image);
+}
+
+/* Reviewer finding #13(a): a BPB whose FATSz32 is too small to hold an entry for every cluster it
+ * claims to have (plus the 2 reserved entries) would let a cluster-chain walk read a FAT entry
+ * from whatever sectors happen to follow the undersized FAT. */
+TEST(bootFatMountRejectsFatTooSmallForClusterCount) {
+    FatImage f = buildFatImage();
+    writeLE32(f.image + 36, 1); /* BPB_FATSZ32_OFF: 1 sector = 128 entries, nowhere near enough */
+    BootBlockDev dev = {fakeRead, &f, SECTOR, f.totalSectors};
+    BootFatVol vol;
+    uint8_t scratch[SECTOR];
+    ASSERT_EQ(bootFatMount(&vol, &dev, 0, f.totalSectors, scratch), BOOT_ERR_FAT);
+    free(f.image);
+}
+
+/* Reviewer finding #14: a directory whose own cluster chain loops back on itself must not hang
+ * the loader -- dirFindEntry()'s walk is bounded by the volume's own cluster count. */
+TEST(bootFatOpenBoundedAgainstLoopingDirectoryChain) {
+    FatImage f = buildFatImage();
+    uint32_t dirClus = fatAllocCluster(&f);
+    fatSetEntry(&f, dirClus, dirClus); /* self-loop instead of EOC */
+    writeShortDirEntry(&f, ROOT_CLUSTER, 0, "LOOPDIR    ", 0x10 /* ATTR_DIRECTORY */, dirClus, 0);
+
+    BootBlockDev dev;
+    BootFatVol vol;
+    mountOrFail(&f, &dev, &vol);
+    uint8_t scratch[SECTOR];
+    BootFatFile file;
+    /* Must terminate with an error, not hang: the test harness itself has no timeout for this. */
+    ASSERT_EQ(bootFatOpen(&vol, "/loopdir/x.txt", scratch, &file), BOOT_ERR_FAT);
+    free(f.image);
+}
+
+/* Reviewer finding #13(b): an LFN name whose length is an exact multiple of 13 has no NUL unit
+ * anywhere in its group (13 chars exactly fills one entry, so index==len never occurs within it).
+ * Without treating "group completes at sequence 1 with no NUL seen" as an implicit terminator,
+ * this name would be silently unmatchable. */
+TEST(bootFatOpenLongNameExactly13CharsNoTerminator) {
+    FatImage f = buildFatImage();
+    static const char data[] = "thirteen-char name contents";
+    uint32_t fileClus = fatAllocCluster(&f);
+    memcpy(clusterPtr(&f, fileClus), data, sizeof(data) - 1);
+    writeLfnDirEntry(&f, ROOT_CLUSTER, 0, "ABCDEFGHIJKLM", "THIRTN  TXT", 0, fileClus,
+                     sizeof(data) - 1);
+
+    BootBlockDev dev;
+    BootFatVol vol;
+    mountOrFail(&f, &dev, &vol);
+    uint8_t scratch[SECTOR];
+    BootFatFile file;
+    ASSERT_EQ(bootFatOpen(&vol, "/ABCDEFGHIJKLM", scratch, &file), BOOT_OK);
+    ASSERT_EQ(file.size, (uint32_t)(sizeof(data) - 1));
+    free(f.image);
+}
+
+/* Same as above but spanning both LFN entries of a 2-entry group (26 = 2*13 chars): the second
+ * (lowest-sequence) entry also has no NUL unit anywhere in it. */
+TEST(bootFatOpenLongNameExactly26CharsNoTerminator) {
+    FatImage f = buildFatImage();
+    static const char data[] = "twenty-six-char name contents!!";
+    uint32_t fileClus = fatAllocCluster(&f);
+    memcpy(clusterPtr(&f, fileClus), data, sizeof(data) - 1);
+    writeLfnDirEntry(&f, ROOT_CLUSTER, 0, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "TWNTY6  TXT", 0, fileClus,
+                     sizeof(data) - 1);
+
+    BootBlockDev dev;
+    BootFatVol vol;
+    mountOrFail(&f, &dev, &vol);
+    uint8_t scratch[SECTOR];
+    BootFatFile file;
+    ASSERT_EQ(bootFatOpen(&vol, "/ABCDEFGHIJKLMNOPQRSTUVWXYZ", scratch, &file), BOOT_OK);
+    ASSERT_EQ(file.size, (uint32_t)(sizeof(data) - 1));
+    free(f.image);
+}
+
+/* Reviewer finding #13(c): an LFN group that never reaches sequence 1 (here, a single malformed
+ * "last entry" claiming sequence 2, with no sequence-1 continuation) must never be trusted for
+ * matching -- LfnAccum's `buf` is never cleared between groups (only active/hasTerm/len/nonAscii
+ * are, in lfnReset()), so an incomplete group can leak a *previous* group's leftover bytes at the
+ * positions it never wrote itself. This builds that leak deterministically: file A's exact-13-char
+ * LFN (see the test above) leaves "AAAAAAAAAAAAA" sitting in buf[0..12]; the malformed group B
+ * then writes "XY\0" at buf[13..15] (base = (seq-1)*13 = 13 for its claimed sequence 2) and sets
+ * hasTerm/len from its own NUL -- so *if* the sequence-reaches-1 guard were missing, querying the
+ * concatenation "AAAAAAAAAAAAAXY" would wrongly resolve to file B. */
+TEST(bootFatOpenIncompleteLfnGroupNeverMatchesLeakedBuffer) {
+    FatImage f = buildFatImage();
+
+    static const char dataA[] = "file A contents";
+    uint32_t fileClusA = fatAllocCluster(&f);
+    memcpy(clusterPtr(&f, fileClusA), dataA, sizeof(dataA) - 1);
+    writeLfnDirEntry(&f, ROOT_CLUSTER, 0, "AAAAAAAAAAAAA", "AFILE   TXT", 0, fileClusA,
+                     sizeof(dataA) - 1); /* slots 0 (LFN), 1 (short) */
+
+    static const char dataB[] = "file B contents";
+    uint32_t fileClusB = fatAllocCluster(&f);
+    memcpy(clusterPtr(&f, fileClusB), dataB, sizeof(dataB) - 1);
+    uint8_t shortB[11];
+    memcpy(shortB, "TRAP    TXT", 11);
+    uint16_t units[13];
+    for (uint32_t i = 0; i < 13; i++) {
+        units[i] = 0xFFFFu;
+    }
+    units[0] = 'X';
+    units[1] = 'Y';
+    units[2] = 0; /* terminator within this entry alone -- hasTerm becomes true, len = 13+2 = 15 */
+    writeRawLfnEntry(&f, ROOT_CLUSTER, 2, (uint8_t)(0x40u | 2u), units,
+                     shortNameChecksumRef(shortB));
+    writeShortDirEntry(&f, ROOT_CLUSTER, 3, "TRAP    TXT", 0, fileClusB, sizeof(dataB) - 1);
+
+    BootBlockDev dev;
+    BootFatVol vol;
+    mountOrFail(&f, &dev, &vol);
+    uint8_t scratch[SECTOR];
+    BootFatFile file;
+
+    /* File A's own exact-13-char LFN still resolves normally. */
+    ASSERT_EQ(bootFatOpen(&vol, "/AAAAAAAAAAAAA", scratch, &file), BOOT_OK);
+    ASSERT_EQ(file.size, (uint32_t)(sizeof(dataA) - 1));
+
+    /* File B is only reachable by its real short name: the incomplete LFN group before it must be
+     * ignored, not crash the scan, and never spuriously match. */
+    ASSERT_EQ(bootFatOpen(&vol, "/TRAP.TXT", scratch, &file), BOOT_OK);
+    ASSERT_EQ(file.size, (uint32_t)(sizeof(dataB) - 1));
+
+    /* The leaked-buffer concatenation must NOT resolve to file B. */
+    ASSERT_EQ(bootFatOpen(&vol, "/AAAAAAAAAAAAAXY", scratch, &file), BOOT_ERR_NOT_FOUND);
+
     free(f.image);
 }

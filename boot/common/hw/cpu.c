@@ -34,7 +34,11 @@ bool loaderCpuCheckLongModeFeatures(bool *outHas1G) {
 }
 
 bool loaderCpuLa57Enabled(void) {
-    uint64_t cr4;
+    /* uintptr_t, not uint64_t: `mov %cr4, %0` moves a register-width value (32 bits on the i386
+     * BIOS build, where this function is dead code and never actually called -- LA57 is a
+     * UEFI/x86_64-only query -- but a 64-bit C operand there would ask the compiler for a "=r"
+     * constraint it can't satisfy with one register). */
+    uintptr_t cr4;
     __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
     return (cr4 & (1ull << 12)) != 0;
 }

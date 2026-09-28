@@ -116,3 +116,10 @@ gdt:
     dq 0x000093000000FFFF     ; 0x20: data16, base 0, limit 64 KiB
     dq 0x00AF9B000000FFFF     ; 0x28: code64
 gdtEnd:
+
+; entry.asm's `gdtr` can't compute `gdtEnd - gdt` itself (a cross-object-file symbol difference
+; NASM has no relocation for -- see the comment there) and hard-codes `6 * 8 - 1` instead. Guard
+; against that drifting from the table above: this line assembles to nothing when the two agree
+; (`times 0 db 0`) and fails to assemble ("underflowing" a negative repeat count) the moment an
+; entry is added or removed here without updating entry.asm's hard-coded count to match.
+times (6 * 8) - (gdtEnd - gdt) db 0

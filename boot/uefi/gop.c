@@ -168,6 +168,14 @@ EFI_STATUS loaderGopSetMode(EFI_SYSTEM_TABLE *st, LoaderGop *lg, uint32_t resWid
      * `gop->Mode` itself, so read the live struct rather than re-querying. */
     BootVideoMode picked;
     gopToVideoMode(gop, mode, gop->Mode->Info, &picked);
+    if (!bootVideoAccept(&picked)) {
+        /* Shouldn't happen (this same mode passed bootVideoAccept() during picking), but a
+         * firmware that reports different Mode->Info after SetMode() than it did while
+         * enumerating is not something to trust blindly: bootVideoToFramebuffer() below computes
+         * shift/size via __builtin_ctz/popcount on the masks, which is undefined for a zero mask.
+         */
+        return EFI_SUCCESS;
+    }
     uint64_t size = (uint64_t)picked.pitch * (uint64_t)picked.height;
     if (gop->Mode->FrameBufferSize != 0 && size > gop->Mode->FrameBufferSize) {
         return EFI_SUCCESS; /* leave fb zeroed: doesn't fit its own reported size */

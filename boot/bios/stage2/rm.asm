@@ -80,9 +80,13 @@ bits 16
     mov fs, ax                 ; fs stays 0 for the rest of this window: the caller's ds/es
     mov gs, ax                 ; (loaded below) must never shadow our own access to rmScratch/IVT
     mov ss, ax
-    mov sp, 0x7C00              ; the real-mode stack (docs/specs/bios-boot.md's memory map);
-                                  ; real mode only ever uses the low 16 bits of esp as SP, and
-                                  ; the PM stack (rmSavedEsp) lives well above 0x10000
+    mov esp, 0x7C00              ; the real-mode stack (docs/specs/bios-boot.md's memory map).
+                                  ; The full 32-bit esp, not just sp: real mode only *uses* the
+                                  ; low 16 bits as SP, but esp's high half was still whatever the
+                                  ; PM caller's stack pointer left there (around 0x0008xxxx) --
+                                  ; loading only sp would leave that garbage in place, and some
+                                  ; BIOS/option-ROM code (32-bit-aware VBE BIOSes, -m16-style C)
+                                  ; addresses relative to esp, not sp.
 
     ; Resolve the IVT entry into a fixed scratch dword *before* loading any of the caller's
     ; registers below. An earlier version computed it directly into bx right before the call
@@ -125,30 +129,39 @@ bits 16
                                           ; epilogue below is written to never depend on it again
 
     sti
-    pushf
+    pushf                        ; captures IF=1 (interrupts were enabled going into this call),
+                                  ; matching what a real `int` instruction's own pushed FLAGS
+                                  ; would show
+    cli                          ; ...then clear our *live* IF before entering the handler: a real
+                                  ; `int` always clears IF (and TF) as part of its own entry, and
+                                  ; without this the handler would incorrectly start with IF=1
     call far [fs:rmCallTarget]  ; exact `int` emulation: pushf + a far call through the IVT entry
                                   ; resolved above -- balances a handler that does `iret` (pops
                                   ; eip,cs,flags, undoing both pushes) or `retf 2` (pops eip,cs,
                                   ; then discards our pushed flags without restoring them)
-    cli
+    cli                          ; in case the handler's own `iret` re-enabled interrupts
 
     ; Capture every result register via mov (never touches FLAGS) before the pushf below, so the
     ; BIOS call's own resulting FLAGS survive intact until the very last thing we do with them.
-    mov [fs:rmScratch + RMREGS_EAX], eax
-    mov [fs:rmScratch + RMREGS_EBX], ebx
-    mov [fs:rmScratch + RMREGS_ECX], ecx
-    mov [fs:rmScratch + RMREGS_EDX], edx
-    mov [fs:rmScratch + RMREGS_ESI], esi
-    mov [fs:rmScratch + RMREGS_EDI], edi
-    mov [fs:rmScratch + RMREGS_EBP], ebp
-    mov [fs:rmScratch + RMREGS_DS], ds
-    mov [fs:rmScratch + RMREGS_ES], es
+    ; Through cs: now, not fs:: the far call/return is guaranteed to restore CS (it's part of the
+    ; call frame), but FS is not part of the documented INT ABI -- a handler that happens to touch
+    ; FS (nothing forbids it) would otherwise send every one of these writes to a wrong address
+    ; and load a garbage GDTR below. cs:0 is exactly as reachable as fs:0 was (both were just 0).
+    mov [cs:rmScratch + RMREGS_EAX], eax
+    mov [cs:rmScratch + RMREGS_EBX], ebx
+    mov [cs:rmScratch + RMREGS_ECX], ecx
+    mov [cs:rmScratch + RMREGS_EDX], edx
+    mov [cs:rmScratch + RMREGS_ESI], esi
+    mov [cs:rmScratch + RMREGS_EDI], edi
+    mov [cs:rmScratch + RMREGS_EBP], ebp
+    mov [cs:rmScratch + RMREGS_DS], ds
+    mov [cs:rmScratch + RMREGS_ES], es
     pushf
     pop cx
-    mov [fs:rmScratch + RMREGS_EFLAGS], cx
-    mov word [fs:rmScratch + RMREGS_EFLAGS + 2], 0
+    mov [cs:rmScratch + RMREGS_EFLAGS], cx
+    mov word [cs:rmScratch + RMREGS_EFLAGS + 2], 0
 
-    lgdt [fs:gdtr]              ; BIOS code (e.g. a `call32`-style helper) may have replaced GDTR
+    lgdt [cs:gdtr]              ; BIOS code (e.g. a `call32`-style helper) may have replaced GDTR
     mov eax, cr0
     or eax, 1
     mov cr0, eax
@@ -227,7 +240,7 @@ bits 16
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov sp, 0x7C00
+    mov esp, 0x7C00              ; full esp, not just sp -- see rmInt's .rm for why
     sti
     hlt
     cli

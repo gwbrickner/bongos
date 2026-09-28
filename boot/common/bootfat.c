@@ -103,10 +103,21 @@ BootStatus bootFatMount(BootFatVol *vol, const BootBlockDev *dev, uint64_t partL
         return BOOT_ERR_FAT;
     }
 
-    uint64_t dataSectors = (uint64_t)totSec32 - (rsvdSecCnt + (uint64_t)numFats * fatSz32);
+    uint64_t reservedAndFats = (uint64_t)rsvdSecCnt + (uint64_t)numFats * fatSz32;
+    if (reservedAndFats >= (uint64_t)totSec32) {
+        return BOOT_ERR_FAT; /* would underflow dataSectors below */
+    }
+    uint64_t dataSectors = (uint64_t)totSec32 - reservedAndFats;
     uint32_t countOfClusters =
         (uint32_t)bootDivMod64(dataSectors, secPerClus, NULL); /* D-065: no 64-bit / on i386 */
     if (countOfClusters < 65525u || countOfClusters >= 0x0FFFFFF5u) {
+        return BOOT_ERR_FAT;
+    }
+    /* Each FAT entry is 4 bytes; the FAT must be large enough to hold an entry for every cluster
+     * (plus the 2 reserved entries at the start), or a cluster chain walk could read past the
+     * FAT into whatever sectors follow it. */
+    uint64_t fatEntryCap = bootDivMod64((uint64_t)fatSz32 * bytsPerSec, 4, NULL);
+    if (fatEntryCap < (uint64_t)countOfClusters + 2) {
         return BOOT_ERR_FAT;
     }
     if (rootClus < 2 || rootClus > countOfClusters + 1) {
@@ -214,7 +225,8 @@ typedef struct {
     bool hasTerm;
     bool nonAscii;
     bool active;        /* an in-progress or completed group awaits its short entry */
-    uint32_t expectSeq; /* next (lower) sequence number expected */
+    uint32_t expectSeq; /* sequence number of the last entry fed; a complete group ends at 1 */
+    uint32_t maxSeq;    /* sequence number of the group's first (highest-numbered) entry */
     uint8_t checksum;
 } LfnAccum;
 
@@ -243,6 +255,9 @@ static void lfnFeed(LfnAccum *a, const uint8_t *entry) {
         return;
     }
     a->expectSeq = seq;
+    if (isLast) {
+        a->maxSeq = seq;
+    }
 
     uint16_t units[LFN_CHARS_PER_ENTRY];
     bootMemcpy(&units[0], entry + LFN_NAME1_OFF, 5 * sizeof(uint16_t));
@@ -250,11 +265,13 @@ static void lfnFeed(LfnAccum *a, const uint8_t *entry) {
     bootMemcpy(&units[11], entry + LFN_NAME3_OFF, 2 * sizeof(uint16_t));
 
     uint32_t base = (seq - 1) * LFN_CHARS_PER_ENTRY;
+    bool sawTerm = false;
     for (uint32_t i = 0; i < LFN_CHARS_PER_ENTRY; i++) {
         uint16_t u = units[i];
         if (u == 0) {
             a->hasTerm = true;
             a->len = base + i;
+            sawTerm = true;
             break;
         }
         if (u > 0x7Fu) {
@@ -263,6 +280,14 @@ static void lfnFeed(LfnAccum *a, const uint8_t *entry) {
         if (base + i < BOOT_FAT_LFN_BUF_LEN) {
             a->buf[base + i] = (char)(u & 0x7Fu);
         }
+    }
+    /* A name whose length is an exact multiple of 13 has no NUL unit anywhere in the group (the
+     * real VFAT spec still pads such a group with a trailing all-0xFFFF entry that itself has no
+     * NUL either -- the terminator is implicit once the lowest-numbered entry lands with no NUL
+     * seen). Without this, hasTerm never gets set and the group would be silently unmatchable. */
+    if (!sawTerm && seq == 1 && !a->hasTerm) {
+        a->hasTerm = true;
+        a->len = a->maxSeq * LFN_CHARS_PER_ENTRY;
     }
 }
 
@@ -305,7 +330,7 @@ static BootStatus dirFindEntry(const BootFatVol *vol, uint32_t dirCluster, const
                     continue;
                 }
                 bool matched = false;
-                if (lfn.active && lfn.hasTerm && !lfn.nonAscii &&
+                if (lfn.active && lfn.hasTerm && lfn.expectSeq == 1 && !lfn.nonAscii &&
                     shortNameChecksum(entry + DIR_NAME_OFF) == lfn.checksum) {
                     matched = asciiEqualsIgnoreCase(lfn.buf, lfn.len, component, componentLen);
                 }

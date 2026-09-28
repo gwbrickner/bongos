@@ -72,6 +72,24 @@ uint32_t loaderMenuRun(const char *text, uint64_t textLen, const BootCfg *cfg, B
     BootMenuState state;
     bootMenuInit(&state, cfg);
 
+    /* Drain any input queued before this point -- both COM1 (the GUI test harness can queue a
+     * byte the instant it sees any earlier loader output) and the BIOS's own INT 16h keyboard
+     * buffer (a stray keystroke held over from POST) -- *before* drawing/printing the "menu
+     * ready" sync marker below, matching UEFI menu.c's ConIn->Reset() ordering (D-110). Draining
+     * after the marker would risk either silently swallowing a fast `send` that races the drain,
+     * or letting a stale byte register as BOOT_KEY_OTHER and stop the countdown / trigger an
+     * unintended immediate boot. */
+    {
+        uint8_t drainByte;
+        while (loaderSerialReadByte(&drainByte)) {
+            /* discard */
+        }
+        uint8_t drainScan, drainAscii;
+        while (biosKeyReady(&drainScan, &drainAscii)) {
+            biosKeyRead(&drainScan, &drainAscii);
+        }
+    }
+
     menuUiDrawMenu(&ui, fx, &state, cfg->entryCount);
     menuUiSerialPrintMenu(&ui, cfg->entryCount, cfg->defaultIndex);
     /* The harness's sync marker (D-070) for both screendump timing and "it's now safe to send a

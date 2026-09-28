@@ -41,6 +41,7 @@ relocated:
     mov bx, 0x55AA
     mov dl, [bootDrive]
     int 0x13
+    mov [lastStatus], ah    ; so err_edd's status byte reflects this call, not stale/zero data
     jc err_edd
     cmp bx, 0xAA55
     jne err_edd
@@ -105,6 +106,9 @@ read_attempt:
 read_ok:
     movzx eax, word [chunkCount]
     add dword [curLbaLo], eax
+    adc dword [curLbaHi], 0     ; propagate the carry: no current image is large enough to need
+                                 ; this, but a disk that pushes patchLba+remaining across a 4G-
+                                 ; sector boundary would otherwise silently wrap curLbaLo instead
     mov ax, [chunkCount]
     shl ax, 5                   ; sectors * 512 / 16 = paragraphs per sector = 32
     add word [curSeg], ax

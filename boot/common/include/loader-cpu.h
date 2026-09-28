@@ -9,8 +9,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* CPUID 0x80000001 EDX bit 20 (NX): required, ARCHITECTURE §1.3. Returns whether NX is present;
- * `*outHas1G` is set from bit 26 (PDPE1GB, gates 1 GiB HHDM pages -- optional). */
+/* Checks CPUID.80000000h:EAX for extended-leaf support first (querying 80000001h without that on
+ * a CPU that doesn't support it is unsafe -- only ever reachable on BIOS, D-104), then CPUID
+ * 0x80000001 EDX bit 29 (LM, long mode: required to even attempt EFER.LME) and bit 20 (NX:
+ * required, ARCHITECTURE §1.3). Returns whether both LM and NX are present; `*outHas1G` is set
+ * from bit 26 (PDPE1GB, gates 1 GiB HHDM pages -- optional) regardless of the return value. */
 bool loaderCpuCheckLongModeFeatures(bool *outHas1G);
 
 /* CR4.LA57 (bit 12): true if the firmware left 5-level paging enabled. This loader only builds

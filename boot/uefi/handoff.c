@@ -317,7 +317,10 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         loaderSerialWriteString("\n");
         return EFI_LOAD_ERROR;
     }
-    bootAllocAdd(&allocs, (uint64_t)kernelPhys, kernelPages, BOOT_MEM_KERNEL);
+    if (bootAllocAdd(&allocs, (uint64_t)kernelPhys, kernelPages, BOOT_MEM_KERNEL) != BOOT_OK) {
+        loaderSerialWriteString("loader: too many allocation overlays\n");
+        return EFI_OUT_OF_RESOURCES;
+    }
 
     EFI_PHYSICAL_ADDRESS stackPhys = 0;
     status = bs->AllocatePages(AllocateAnyPages, EfiLoaderData, BOOT_HANDOFF_BOOT_STACK_PAGES,
@@ -326,8 +329,11 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         loaderSerialWriteString("loader: out of memory allocating the boot stack\n");
         return status;
     }
-    bootAllocAdd(&allocs, (uint64_t)stackPhys, BOOT_HANDOFF_BOOT_STACK_PAGES,
-                 BOOT_MEM_LOADER_RECLAIM);
+    if (bootAllocAdd(&allocs, (uint64_t)stackPhys, BOOT_HANDOFF_BOOT_STACK_PAGES,
+                     BOOT_MEM_LOADER_RECLAIM) != BOOT_OK) {
+        loaderSerialWriteString("loader: too many allocation overlays\n");
+        return EFI_OUT_OF_RESOURCES;
+    }
 
     uint64_t rsdpPhys = handoffFindRsdp(st);
     uint64_t randomSeed[8];
@@ -383,7 +389,11 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         loaderSerialWriteString("loader: out of memory allocating the handoff block\n");
         return status;
     }
-    bootAllocAdd(&allocs, (uint64_t)handoffPhys, handoffPages, BOOT_MEM_LOADER_RECLAIM);
+    if (bootAllocAdd(&allocs, (uint64_t)handoffPhys, handoffPages, BOOT_MEM_LOADER_RECLAIM) !=
+        BOOT_OK) {
+        loaderSerialWriteString("loader: too many allocation overlays\n");
+        return EFI_OUT_OF_RESOURCES;
+    }
     uint64_t bootInfoPhys = (uint64_t)handoffPhys;
     uint64_t cmdlinePhys = bootInfoPhys + BOOT_HANDOFF_PAGE_SIZE;
     uint64_t memMapArrayPhys = cmdlinePhys + BOOT_HANDOFF_PAGE_SIZE;
@@ -395,11 +405,18 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         loaderSerialWriteString("loader: out of memory allocating the page-table pool\n");
         return status;
     }
-    bootAllocAdd(&allocs, (uint64_t)poolPhys, BOOT_HANDOFF_PT_POOL_PAGES, BOOT_MEM_LOADER_RECLAIM);
+    if (bootAllocAdd(&allocs, (uint64_t)poolPhys, BOOT_HANDOFF_PT_POOL_PAGES,
+                     BOOT_MEM_LOADER_RECLAIM) != BOOT_OK) {
+        loaderSerialWriteString("loader: too many allocation overlays\n");
+        return EFI_OUT_OF_RESOURCES;
+    }
 
     uint64_t trampPhys =
         bootAlignDown((uint64_t)(uintptr_t)&loaderTrampoline, BOOT_HANDOFF_PAGE_SIZE);
-    bootAllocAdd(&allocs, trampPhys, 1, BOOT_MEM_LOADER_RECLAIM);
+    if (bootAllocAdd(&allocs, trampPhys, 1, BOOT_MEM_LOADER_RECLAIM) != BOOT_OK) {
+        loaderSerialWriteString("loader: too many allocation overlays\n");
+        return EFI_OUT_OF_RESOURCES;
+    }
 
     PtBuilder pt;
     bst = ptInit(&pt, (uint64_t)poolPhys, BOOT_HANDOFF_PT_POOL_PAGES, has1G);
@@ -551,6 +568,12 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
 
     BootMemRegion *outRegions = (BootMemRegion *)(uintptr_t)memMapArrayPhys;
     uint32_t nOutRegions = 0;
+    /* `finalInputs` is passed as both `fwInputs` and `work` deliberately, not a copy-paste slip:
+     * bootHandoffFinalMap() only ever reads fwInputs[0..nFwInputs) before appending allocs past
+     * that point in work, and nFwInputs == nFinalInputs here, so the "copy fwInputs into work"
+     * step is a no-op (same memory, same range) and the append starts exactly where the reads
+     * stopped. Reusing the buffer avoids a second HANDOFF_MAX_INPUTS-sized static array for what
+     * would otherwise be an identical copy. */
     mmst = bootHandoffFinalMap(finalInputs, nFinalInputs, &allocs, finalInputs, HANDOFF_MAX_INPUTS,
                                finalScratch, outRegions, BOOT_HANDOFF_MEMMAP_CAP, &nOutRegions);
     if (mmst != BOOT_OK) {

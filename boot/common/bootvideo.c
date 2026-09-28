@@ -25,6 +25,9 @@ bool bootVideoAccept(const BootVideoMode *m) {
     if (__builtin_popcount(r) > 8 || __builtin_popcount(g) > 8 || __builtin_popcount(b) > 8) {
         return false;
     }
+    if ((r & g) != 0 || (r & b) != 0 || (g & b) != 0) { /* D-109: channels must not overlap */
+        return false;
+    }
     uint32_t highest = r | g | b | m->reservedMask;
     if (highest == 0) {
         return false;

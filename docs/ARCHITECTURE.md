@@ -309,11 +309,16 @@ value means "not provided" for `fb.phys`, `initrdPhys`/`initrdSize`, `rsdpPhys`,
 - **GDT/IDT:** the firmware's own, left in place (now unmapped under the loader's page tables).
   The kernel installs its own first thing.
 
-**BIOS addendum (D-111):** the loader is stage2, not firmware, so "the firmware's own, left in
-place" means stage2's own GDT and its small diagnostic-only IDT (both now unmapped, like UEFI's).
-Both legacy 8259 PICs are fully masked (`IMR = 0xFF`) before the jump into long mode -- BIOS wires
-IRQ0-7 to interrupt vectors 8-15, which collide with the kernel's own exception vectors (§7.2),
-so nothing may be left able to fire one before the kernel installs its own IDT.
+**BIOS addendum (D-111, corrected by D-114):** the loader is stage2, not firmware, so "the
+firmware's own, left in place" means stage2's own GDT. Unlike UEFI's (which the firmware owns and
+which stays wherever the firmware put it), stage2's GDT lives in the `.trampoline` page (D-102),
+which *is* identity-mapped -- the same "an identity mapping of the loader's trampoline page only;
+the kernel removes it" mapping mentioned above, not an unmapped one. There is no PM-side
+diagnostic IDT (D-102's description of one was aspirational and never built; see D-114) -- IDTR is
+simply never loaded in protected mode, so a stray fault triple-faults instead of producing a
+diagnostic. Both legacy 8259 PICs are fully masked (`IMR = 0xFF`) before the jump into long mode --
+BIOS wires IRQ0-7 to interrupt vectors 8-15, which collide with the kernel's own exception vectors
+(§7.2), so nothing may be left able to fire one before the kernel installs its own IDT.
 
 ### 5.5 UEFI loader flow (D-068)
 1. Get the LoadedImage and SimpleFileSystem protocols, then read and parse `/bong/boot.cfg`

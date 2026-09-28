@@ -53,6 +53,20 @@ static BootStatus diskGetSectorCount(uint8_t drive, uint64_t *outSectorCount) {
 
     uint64_t totalSectors = 0;
     bootMemcpy(&totalSectors, buf + 0x10, sizeof(totalSectors)); /* offset 0x10: qword LBA count */
+
+    /* offset 0x18: word, bytes per sector (D-105). diskReadChunk()'s DAP/bounce buffer and
+     * diskRead()'s chunking all hard-code DISK_SECTOR_SIZE (512); a 4Kn drive reporting a larger
+     * sector size here would make every LBA this loader computes point at the wrong bytes, and
+     * could overflow the 16 KiB bounce buffer's assumed sector count. Only BIOSes new enough to
+     * fill the >= 0x1E buffer this call requested report this field at all -- treat 0 (an older
+     * BIOS that only filled the original 0x1A-byte block) as "unreported, assume 512" rather than
+     * a hard failure, since that's what came before this check. */
+    uint16_t bytesPerSector = 0;
+    bootMemcpy(&bytesPerSector, buf + 0x18, sizeof(bytesPerSector));
+    if (bytesPerSector != 0 && bytesPerSector != DISK_SECTOR_SIZE) {
+        return BOOT_ERR_IO;
+    }
+
     *outSectorCount = totalSectors;
     return BOOT_OK;
 }

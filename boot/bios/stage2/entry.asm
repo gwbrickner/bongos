@@ -9,6 +9,8 @@ bits 16
 extern __stage2FileEnd
 extern __bssStart
 extern __bssEnd
+extern __stage2End
+extern __pmStackTop
 extern stage2Main
 global entry16
 global gdtr
@@ -34,6 +36,22 @@ entry16:
     mov ss, ax
     mov sp, 0x7C00
     cld
+
+    ; D-101/D-113 hardening: cross-check __stage2End (the top of everything stage2 uses, including
+    ; its PM stack) against what this BIOS actually reports as usable low memory, before ever
+    ; switching to PM. INT 12h returns AX = KiB of contiguous conventional memory starting at 0
+    ; (real BIOSes reduce this to exclude their own EBDA, so this also indirectly re-covers the
+    ; EBDA-collision case even on a BIOS whose EBDA sits lower than stage2.ld's static budget
+    ; assumed). 32-bit registers are usable here despite `bits 16`: the CPU doesn't care about
+    ; operand size until an instruction actually needs it, only the encoding's prefix byte differs.
+    int 0x12
+    movzx ecx, ax
+    shl ecx, 10                ; ecx = bytes of reported low memory
+    cmp ecx, __stage2End
+    jae .memok
+    mov al, 'M'
+    jmp fatal16
+.memok:
 
     call enable_a20
     test al, al
@@ -198,7 +216,7 @@ pm_entry:
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov esp, 0x00090000       ; a temporary PM stack; replaced once stage2 has its own (D-101)
+    mov esp, __pmStackTop      ; stage2.ld's .stack section (D-101)
 
     ; .bss is NOLOAD (never present in the flat on-disk image, D-101/§5.6 step 3) -- every static
     ; C variable in it (the E820/heap/handoff arrays main.c and handoff.c use) starts as whatever

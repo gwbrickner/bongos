@@ -2,6 +2,7 @@
 
 #include "bootmem.h"
 #include "bootvideo.h"
+#include "loader-serial.h"
 #include "rm.h"
 
 #include <stdbool.h>
@@ -157,6 +158,13 @@ static bool vbePickMode(uint32_t resWidth, uint32_t resHeight, uint16_t *outMode
     if (!bootVideoPickerResult(&picker, &picked, &exactFellBack)) {
         return false;
     }
+    if (exactFellBack) {
+        loaderSerialWriteString("loader: resolution ");
+        loaderSerialWriteUint(resWidth);
+        loaderSerialWriteString("x");
+        loaderSerialWriteUint(resHeight);
+        loaderSerialWriteString(" unavailable, using auto\n");
+    }
     *outMode = (uint16_t)picked.id;
     return true;
 }
@@ -176,6 +184,14 @@ void vbeSetMode(uint32_t resWidth, uint32_t resHeight, BootFramebuffer *fb) {
     }
     BootVideoMode picked;
     if (!vbeModeInfoToVideoMode(mode, &picked)) {
+        return;
+    }
+    if (!bootVideoAccept(&picked)) {
+        /* Shouldn't happen (this same mode passed bootVideoAccept() during picking), but a BIOS
+         * that reports a different ModeInfoBlock on this second query than it did while
+         * enumerating is not something to trust blindly: bootVideoToFramebuffer() below computes
+         * shift/size via __builtin_ctz/popcount on the masks, which is undefined for a zero mask.
+         */
         return;
     }
 

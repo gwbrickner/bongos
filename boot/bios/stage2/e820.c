@@ -24,6 +24,14 @@ uint32_t e820Scan(MemMapInput *out, uint32_t outCap) {
         r.edi = E820_BUFFER_ADDR;
         r.es = 0;
         bootMemset(buf, 0, 24);
+        /* D-107: pre-set the ACPI 3.0 extended-attribute dword's "valid" bit before every call.
+         * A BIOS that reports ECX=24 (claiming the extended field is present) but doesn't
+         * actually write it would otherwise leave this word zeroed by the memset above, making
+         * every single descriptor look "invalid" (bit 0 clear) and silently drop the whole map. */
+        {
+            uint32_t validBit = 1u;
+            bootMemcpy(buf + 20, &validBit, sizeof(validBit));
+        }
 
         rmInt(0x15, &r);
 

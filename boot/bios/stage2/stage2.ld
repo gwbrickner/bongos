@@ -49,8 +49,23 @@ SECTIONS {
         __bssEnd = .;
     }
 
+    /* The 32-bit PM stack (D-101). Previously a hard-coded `mov esp, 0x00090000` in entry.asm --
+     * a real EBDA-collision risk on hardware whose EBDA starts as low as 0x80000 (D-113 accepts
+     * that as a sane EBDA base), since a stack growing down from 0x90000 would run straight into
+     * it. Placing the stack here instead, immediately after stage2's own .bss and well below any
+     * EBDA D-113 would accept as legitimate, avoids the collision structurally rather than by
+     * hoping the BIOS's EBDA happens to be high enough. entry16 (entry.asm) also cross-checks
+     * __stage2End against INT 12h's reported low-memory size before ever switching to PM, in
+     * case a BIOS reports less conventional memory than that for some other reason. */
+    .stack (NOLOAD) : {
+        . = ALIGN(16);
+        __pmStackBottom = .;
+        . += 0x10000; /* 64 KiB (D-101) */
+        __pmStackTop = .;
+    }
+
     __stage2End = .;
-    ASSERT(__stage2End <= 0x70000, "stage2 grew past its 416 KiB on-disk budget")
+    ASSERT(__stage2End <= 0x70000, "stage2 (incl. .bss/.stack) grew past its 416 KiB budget (D-101)")
 
     /DISCARD/ : {
         *(.eh_frame*)

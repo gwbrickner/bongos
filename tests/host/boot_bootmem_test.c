@@ -42,3 +42,20 @@ TEST(bootDivMod64NeedsFullWidth) {
 TEST(bootDivMod64NullRemainderIsIgnored) {
     ASSERT_EQ(bootDivMod64(99, 10, NULL), 9u);
 }
+
+TEST(bootDivMod64DivisorAboveTwoToThe31st) {
+    /* divisor's top bit set (>= 2^31): bootDivMod64's bit-by-bit long division compares a
+     * uint64_t remainder against a uint32_t divisor every iteration -- worth a direct check that
+     * the divisor's own high bit doesn't get mistaken for a sign or otherwise mishandled. */
+    uint32_t divisor = 0xFFFFFFF1u;             /* 2^32 - 15 */
+    uint64_t dividend = 0x300000000ull + 12345; /* 3 * 2^32 + 12345 */
+    uint32_t rem = 0xFFFFFFFFu;
+    uint64_t q = bootDivMod64(dividend, divisor, &rem);
+    ASSERT_EQ(q, dividend / divisor);
+    ASSERT_EQ(rem, (uint32_t)(dividend % divisor));
+
+    /* Dividend exactly equal to the divisor: quotient 1, remainder 0. */
+    uint32_t rem2 = 0xFFFFFFFFu;
+    ASSERT_EQ(bootDivMod64((uint64_t)divisor, divisor, &rem2), 1u);
+    ASSERT_EQ(rem2, 0u);
+}
