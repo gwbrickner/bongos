@@ -1,10 +1,15 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-27 (M2.4 Slab, kmalloc, vmalloc done; M2.5 is next)
+**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress)
 
 ## Current milestone
-None in progress. **M2.4 Slab, kmalloc, vmalloc** is done -- see `docs/logs/M2.4.md` for the full
+**M2.5 BIOS loader** is in progress on branch `m2-5-bios-loader` -- see `docs/logs/M2.5.md` for
+the plan and running log. Just started: branch and log created, about to consult the `architect`
+subagent for the stage1/stage2 design before writing any code. See that log's "Next step" for
+where to resume.
+
+**M2.4 Slab, kmalloc, vmalloc** is done -- see `docs/logs/M2.4.md` for the full
 writeup and its Summary section for the release notes. ROADMAP.md's M2.4 box is checked. Design
 consulted with the `architect` subagent first (D-092 through D-098, several deliberately
 simplified during implementation for a tractable, host-testable design -- see each entry). A real
@@ -200,13 +205,17 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
   `make test-full` pass clean with no boot errors; `make format-check` clean.
 
 ## Next step
-M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8) open against `main`,
-`needs-owner: yes`, waiting on the owner's review.
-A fresh session (or this one, continuing) then starts **M2.5 BIOS loader** following the normal
-session protocol -- create a branch, copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.5.md`, and
-implement per ROADMAP.md's M2.5 step list (see this file's "Next milestone" section above for the
-summary). PRs #6 (M2.2) and #7 (M2.3) remain open against `main`,
-both `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.4/M2.5's own progress.
+**M2.5 BIOS loader** is in progress (branch `m2-5-bios-loader`, log `docs/logs/M2.5.md`). Next:
+consult the `architect` subagent for the concrete stage1/stage2 design (memory map, real-mode
+thunk convention, how much of `boot/common`'s existing UEFI-target objects can be reused vs. need
+an i386 freestanding rebuild, and the shape of the new GPT/FAT32 reader code), then implement per
+ROADMAP.md's M2.5 step list and this log's Plan section. Fix up `mk/image.mk`/`mk/test.mk`,
+`tests/harness/matrix.conf`/`matrix-full.conf`, and `tests/gui/run.sh`'s BIOS references as the
+steps land. Use `qemu-tester` to build/boot-test after each step; `reviewer` before the PR.
+
+M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8), #7 (M2.3), and #6 (M2.2) remain
+open against `main`, all `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.5's
+own progress.
 
 ## Blockers
 _(none)_
