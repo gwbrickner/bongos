@@ -301,20 +301,17 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
 
 ## Next step
 **M2.5 BIOS loader** is in progress (branch `m2-5-bios-loader`, log `docs/logs/M2.5.md`), steps
-1-12 of 13 done (see "Current milestone" above) -- **the BIOS boot menu works**:
-`boot/bios/stage2/menu.c` (new) drives the same shared state machine/drawing code UEFI's menu
-uses, and `tests/gui/ref/bios-{menu,kernel}.png` (newly captured) are confirmed pixel-identical
-to the UEFI references. `make test` passed twice end to end with both firmwares' matrix/GUI/
-countdown-smoke all green. A `qemu-tester` final round for step 12 (mirroring every earlier
-step's pattern) is in flight; **if resuming fresh and that result isn't in the log yet**, check
-`docs/logs/M2.5.md`'s step-12 entry -- if it doesn't say "Confirmed by qemu-tester", either wait
-for it or re-verify yourself (`make test`, `make format-check`) before moving to step 13. Once
-confirmed: step 13 -- docs polish, a `reviewer` subagent pass (fix every Critical finding, fix or
-explain every Should-fix), check ROADMAP.md's M2.5 box, write the log's Summary (release notes),
-update STATUS.md for the next milestone, and open the PR (`needs-owner: yes`, per D-099/D-109/
-D-111's owner-review flags, using `.github/pull_request_template.md`) -- see `docs/logs/M2.5.md`'s
-Plan section for the full step list. Every implementation step is now done; step 13 is the
-milestone's finishing checklist, not new risk.
+1-12 of 13 done (see "Current milestone" above) -- **the BIOS boot menu works,
+`qemu-tester`-confirmed**: `boot/bios/stage2/menu.c` (new) drives the same shared state machine/
+drawing code UEFI's menu uses, and `tests/gui/ref/bios-{menu,kernel}.png` (newly captured) are
+confirmed pixel-identical to the UEFI references. `make test` passed repeatedly end to end with
+both firmwares' matrix/GUI/countdown-smoke all green, zero flakiness across every repeat. Next:
+step 13 -- docs polish, a `reviewer` subagent pass (fix every Critical finding, fix or explain
+every Should-fix), check ROADMAP.md's M2.5 box, write the log's Summary (release notes), update
+STATUS.md for the next milestone, and open the PR (`needs-owner: yes`, per D-099/D-109/D-111's
+owner-review flags, using `.github/pull_request_template.md`) -- see `docs/logs/M2.5.md`'s Plan
+section for the full step list. Every implementation step is now done; step 13 is the milestone's
+finishing checklist, not new risk.
 
 M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8), #7 (M2.3), and #6 (M2.2) remain
 open against `main`, all `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.5's
