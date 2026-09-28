@@ -2,12 +2,12 @@
 # M2.5). Included before mk/image.mk, which references $(BIOS_STAGE1_BIN)/$(BIOS_STAGE2_BIN) as
 # `image` prerequisites.
 #
-# stage2 is a single flat NASM binary today (boot/bios/stage2/skeleton.asm): just enough to prove
-# stage1 -> stage2 handoff works under real QEMU (prints over COM1 and halts). It has no A20/
-# protected-mode switch, no C environment, and no real-mode thunk yet -- those replace this file
-# incrementally as M2.5 continues; once stage2 gains a 32-bit C part (D-104), this becomes a real
-# link step (nasm -f elf32 + the i386 build of boot/common + ld.lld -T stage2.ld + objcopy -O
-# binary), not a single `nasm -f bin` invocation.
+# stage2 is a single flat NASM binary today (boot/bios/stage2/entry.asm): 16-bit real-mode
+# bring-up (A20, the GDT, the switch to 32-bit protected mode), then a fixed banner printed with
+# raw port I/O. No C environment and no real-mode thunk yet -- those replace this file's
+# protected-mode body incrementally as M2.5 continues; once stage2 gains a 32-bit C part (D-104),
+# this becomes a real link step (nasm -f elf32 + the i386 build of boot/common + ld.lld -T
+# stage2.ld + objcopy -O binary), not a single `nasm -f bin` invocation.
 BOOT_BIOS_DIR := $(BUILD)/boot-bios
 
 BIOS_STAGE1_BIN := $(BOOT_BIOS_DIR)/stage1.bin
@@ -23,6 +23,6 @@ $(BIOS_STAGE1_BIN): boot/bios/stage1.asm
 	    rm -f $@; exit 1; \
 	fi
 
-$(BIOS_STAGE2_BIN): boot/bios/stage2/skeleton.asm
+$(BIOS_STAGE2_BIN): boot/bios/stage2/entry.asm
 	@mkdir -p $(dir $@)
 	nasm -f bin -o $@ $<
