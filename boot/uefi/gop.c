@@ -1,12 +1,12 @@
-/* See gop.h. GOP discovery and mode selection (ARCHITECTURE §5.5, D-068). */
+/* See gop.h. GOP discovery, firmware-specific mode enumeration (ARCHITECTURE §5.5, D-068). The
+ * accept/pick/framebuffer-fill rule itself is shared with the BIOS loader's VBE pick
+ * (boot/common/bootvideo.c, D-109). */
 #include "gop.h"
 
 #include "bootmem.h"
+#include "bootvideo.h"
 #include "include/efi/guids.h"
 #include "loader-serial.h"
-
-#define GOP_MAX_DIM   3840u
-#define GOP_MAX_DIM_H 2160u
 
 static bool gopUsable(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop) {
     return gop != NULL && gop->Mode != NULL && gop->Mode->Info != NULL &&
@@ -53,41 +53,39 @@ void loaderGopFind(EFI_SYSTEM_TABLE *st, LoaderGop *lg) {
     }
 }
 
-/* `mask` shifted so its lowest set bit sits at bit 0 is a contiguous run of 1s iff
- * `shifted & (shifted + 1) == 0` (e.g. 0b0111 + 1 = 0b1000, AND is 0; 0b0101 + 1 = 0b0110, AND is
- * nonzero). Requires mask != 0. */
-static bool maskIsContiguous(uint32_t mask) {
-    uint32_t shifted = mask >> __builtin_ctz(mask);
-    return (shifted & (shifted + 1)) == 0;
-}
-
-/* D-068: accept RGBX/BGRX outright; accept a BitMask format only if R/G/B are each non-zero,
- * contiguous, and together span bits 24-31 (a real 32-bit pixel, not e.g. a 16-bit 565 mode). */
-static bool gopAcceptMode(const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info) {
-    if (info->PixelsPerScanLine < info->HorizontalResolution) {
-        return false;
-    }
+/* Reduces one EFI_GRAPHICS_OUTPUT_MODE_INFORMATION to the firmware-agnostic BootVideoMode shape
+ * bootvideo.c's accept/pick rule takes: RGBX/BGRX become explicit masks (D-109), PixelBitMask
+ * carries its masks through as-is. `fbPhys`/`pitch` (in bytes) are filled from `gop`/`info`
+ * directly since those aren't part of EFI_GRAPHICS_OUTPUT_MODE_INFORMATION itself. */
+static void gopToVideoMode(const EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, UINT32 modeNum,
+                           const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info, BootVideoMode *out) {
+    bootMemset(out, 0, sizeof(*out));
+    out->id = modeNum;
+    out->width = info->HorizontalResolution;
+    out->height = info->VerticalResolution;
+    out->pitch = info->PixelsPerScanLine * 4u;
+    out->fbPhys = gop->Mode->FrameBufferBase; /* only meaningful once this mode is actually set */
     switch (info->PixelFormat) {
         case PixelRedGreenBlueReserved8BitPerColor:
+            out->redMask = 0xFF;
+            out->greenMask = 0xFF00;
+            out->blueMask = 0xFF0000;
+            out->reservedMask = 0xFF000000;
+            break;
         case PixelBlueGreenRedReserved8BitPerColor:
-            return true;
-        case PixelBitMask: {
-            uint32_t r = info->PixelInformation.RedMask;
-            uint32_t g = info->PixelInformation.GreenMask;
-            uint32_t b = info->PixelInformation.BlueMask;
-            uint32_t resv = info->PixelInformation.ReservedMask;
-            if (r == 0 || g == 0 || b == 0) {
-                return false;
-            }
-            if (!maskIsContiguous(r) || !maskIsContiguous(g) || !maskIsContiguous(b)) {
-                return false;
-            }
-            uint32_t highest = r | g | b | resv;
-            int top = 31 - __builtin_clz(highest);
-            return top >= 24 && top <= 31;
-        }
+            out->blueMask = 0xFF;
+            out->greenMask = 0xFF00;
+            out->redMask = 0xFF0000;
+            out->reservedMask = 0xFF000000;
+            break;
+        case PixelBitMask:
+            out->redMask = info->PixelInformation.RedMask;
+            out->greenMask = info->PixelInformation.GreenMask;
+            out->blueMask = info->PixelInformation.BlueMask;
+            out->reservedMask = info->PixelInformation.ReservedMask;
+            break;
         default:
-            return false;
+            break; /* leave masks zero: bootVideoAccept() rejects PixelBltOnly and anything else */
     }
 }
 
@@ -106,14 +104,13 @@ static EFI_STATUS gopQueryMode(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, UINT32 mode, U
     return status;
 }
 
-/* Picks a mode number per D-068's rule; -1 (via *found = false) if nothing acceptable exists. */
-static void gopPickMode(EFI_SYSTEM_TABLE *st, EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, uint32_t resWidth,
-                        uint32_t resHeight, UINT32 *outMode, bool *found) {
+/* Streams every GOP mode through bootvideo.c's picker (D-109). Logs and retries as `auto` if an
+ * explicit resolution was requested but not found. */
+static bool gopPickMode(EFI_SYSTEM_TABLE *st, EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, uint32_t resWidth,
+                        uint32_t resHeight, UINT32 *outMode) {
     EFI_BOOT_SERVICES *bs = st->BootServices;
-    *found = false;
-    bool exact = resWidth != 0 && resHeight != 0;
-    uint64_t bestArea = 0;
-    uint32_t bestWidth = 0;
+    BootVideoPicker picker;
+    bootVideoPickerInit(&picker, resWidth, resHeight);
 
     for (UINT32 m = 0; m < gop->Mode->MaxMode; m++) {
         UINTN sizeOfInfo = 0;
@@ -122,90 +119,28 @@ static void gopPickMode(EFI_SYSTEM_TABLE *st, EFI_GRAPHICS_OUTPUT_PROTOCOL *gop,
         if (EFI_ERROR(status) || info == NULL) {
             continue;
         }
-        if (!gopAcceptMode(info)) {
-            bs->FreePool(info);
-            continue;
-        }
-        if (exact) {
-            if (info->HorizontalResolution == resWidth && info->VerticalResolution == resHeight) {
-                *outMode = m;
-                *found = true;
-                bs->FreePool(info);
-                break; /* lowest mode number wins: the loop is already ascending */
-            }
-        } else {
-            if (info->HorizontalResolution <= GOP_MAX_DIM &&
-                info->VerticalResolution <= GOP_MAX_DIM_H) {
-                uint64_t area =
-                    (uint64_t)info->HorizontalResolution * (uint64_t)info->VerticalResolution;
-                if (area > bestArea ||
-                    (area == bestArea && info->HorizontalResolution > bestWidth)) {
-                    bestArea = area;
-                    bestWidth = info->HorizontalResolution;
-                    *outMode = m;
-                    *found = true;
-                }
-            }
+        BootVideoMode candidate;
+        gopToVideoMode(gop, m, info, &candidate);
+        if (bootVideoAccept(&candidate)) {
+            bootVideoPickerOffer(&picker, &candidate);
         }
         bs->FreePool(info);
     }
 
-    if (exact && !*found) {
+    BootVideoMode picked;
+    bool exactFellBack = false;
+    if (!bootVideoPickerResult(&picker, &picked, &exactFellBack)) {
+        return false;
+    }
+    if (exactFellBack) {
         loaderSerialWriteString("loader: resolution ");
         loaderSerialWriteUint(resWidth);
         loaderSerialWriteString("x");
         loaderSerialWriteUint(resHeight);
         loaderSerialWriteString(" unavailable, using auto\n");
-        gopPickMode(st, gop, 0, 0, outMode, found);
     }
-}
-
-static void gopFillFramebuffer(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, BootFramebuffer *fb) {
-    bootMemset(fb, 0, sizeof(*fb));
-    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = gop->Mode->Info;
-    uint64_t pitch = (uint64_t)info->PixelsPerScanLine * 4u;
-    uint64_t size = pitch * (uint64_t)info->VerticalResolution;
-    if (gop->Mode->FrameBufferSize != 0 && size > gop->Mode->FrameBufferSize) {
-        return; /* leave fb zeroed: the mode's own geometry doesn't fit its reported size */
-    }
-
-    fb->phys = gop->Mode->FrameBufferBase;
-    fb->width = info->HorizontalResolution;
-    fb->height = info->VerticalResolution;
-    fb->pitch = (uint32_t)pitch;
-    fb->bpp = 32;
-    switch (info->PixelFormat) {
-        case PixelRedGreenBlueReserved8BitPerColor:
-            fb->redShift = 0;
-            fb->greenShift = 8;
-            fb->blueShift = 16;
-            fb->redSize = fb->greenSize = fb->blueSize = 8;
-            break;
-        case PixelBlueGreenRedReserved8BitPerColor:
-            fb->blueShift = 0;
-            fb->greenShift = 8;
-            fb->redShift = 16;
-            fb->redSize = fb->greenSize = fb->blueSize = 8;
-            break;
-        case PixelBitMask: {
-            uint32_t r = info->PixelInformation.RedMask;
-            uint32_t g = info->PixelInformation.GreenMask;
-            uint32_t b = info->PixelInformation.BlueMask;
-            fb->redShift = (uint8_t)__builtin_ctz(r);
-            fb->redSize = (uint8_t)__builtin_popcount(r);
-            fb->greenShift = (uint8_t)__builtin_ctz(g);
-            fb->greenSize = (uint8_t)__builtin_popcount(g);
-            fb->blueShift = (uint8_t)__builtin_ctz(b);
-            fb->blueSize = (uint8_t)__builtin_popcount(b);
-            break;
-        }
-        default:
-            bootMemset(fb, 0, sizeof(*fb));
-            return;
-    }
-    if (fb->redSize > 8 || fb->greenSize > 8 || fb->blueSize > 8) {
-        bootMemset(fb, 0, sizeof(*fb)); /* gopAcceptMode should already exclude this; defensive */
-    }
+    *outMode = picked.id;
+    return true;
 }
 
 EFI_STATUS loaderGopSetMode(EFI_SYSTEM_TABLE *st, LoaderGop *lg, uint32_t resWidth,
@@ -217,9 +152,7 @@ EFI_STATUS loaderGopSetMode(EFI_SYSTEM_TABLE *st, LoaderGop *lg, uint32_t resWid
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = lg->gop;
 
     UINT32 mode = 0;
-    bool found = false;
-    gopPickMode(st, gop, resWidth, resHeight, &mode, &found);
-    if (!found) {
+    if (!gopPickMode(st, gop, resWidth, resHeight, &mode)) {
         loaderSerialWriteString("loader: no acceptable GOP mode found\n");
         return EFI_SUCCESS;
     }
@@ -231,7 +164,14 @@ EFI_STATUS loaderGopSetMode(EFI_SYSTEM_TABLE *st, LoaderGop *lg, uint32_t resWid
             return status;
         }
     }
-    /* Mode->Info and FrameBufferBase can both change across SetMode -- read them fresh. */
-    gopFillFramebuffer(gop, fb);
+    /* Mode->Info and FrameBufferBase can both change across SetMode -- SetMode() refreshes
+     * `gop->Mode` itself, so read the live struct rather than re-querying. */
+    BootVideoMode picked;
+    gopToVideoMode(gop, mode, gop->Mode->Info, &picked);
+    uint64_t size = (uint64_t)picked.pitch * (uint64_t)picked.height;
+    if (gop->Mode->FrameBufferSize != 0 && size > gop->Mode->FrameBufferSize) {
+        return EFI_SUCCESS; /* leave fb zeroed: doesn't fit its own reported size */
+    }
+    bootVideoToFramebuffer(&picked, fb);
     return EFI_SUCCESS;
 }
