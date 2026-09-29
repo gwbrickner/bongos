@@ -1,12 +1,11 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-12 of 13 done; step 13's
-`reviewer` pass complete (PASS, no Critical) and every Should-fix item fixed or explicitly
-deferred via D-114; rebuild/retest confirmed fully green (`make test`/`make test-full`, both
-firmwares, both memory sizes); a second `reviewer` re-review of the fix batch also complete
-(PASS, no Critical, its own 4 Should-fix items fixed too); only the milestone's finishing
-checklist -- ROADMAP box, Summary, this file's own milestone section, the PR -- is left)
+**Last updated:** 2026-09-29 (M2.5 BIOS loader done: two `reviewer` rounds PASS with no Critical
+findings, every Should-fix item fixed or explicitly deferred via D-114, `make host-tests`/`make
+test`/`make test-full` all green across both firmwares and both memory sizes, ROADMAP.md's M2.5
+box checked, [PR #11](https://github.com/gwbrickner/bongos/pull/11) open against `main`. Next
+milestone to start: M2.6 KASLR + kernel RNG)
 
 ## Current milestone
 No milestone branch currently in progress -- M2.5 just finished (see below); M2.6 is next (see
@@ -38,7 +37,8 @@ PM-side diagnostic IDT and dual teletype+serial pre-VBE logging, both described 
 decisions but never actually built) are recorded as deliberate deferrals in D-114. `make
 host-tests` 247/247 (up from 172 at the milestone's start); `make test`/`make test-full` pass
 clean with no boot errors across both firmwares and both memory sizes, including exact BIOS GUI
-screenshot matches; `make format-check` clean. PR pending (`needs-owner: yes` -- touches the boot
+screenshot matches; `make format-check` clean. [PR #11](https://github.com/gwbrickner/bongos/pull/11)
+open against `main`, `needs-owner: yes` (touches the boot
 ABI, on-disk format parsing, and real-mode interrupt handling).
 
 **M2.4 Slab, kmalloc, vmalloc** is done -- see `docs/logs/M2.4.md` for the full
@@ -236,7 +236,7 @@ sanity test, ChaCha20 matches the RFC 8439 test vectors, and `kaslr=off` gives t
   tests alone. Two `reviewer` rounds found no Critical findings; 7 Should-fix items were fixed
   (see `docs/logs/M2.4.md`). 40 ktests (12 new) and 172 `make host-tests` cases pass; `make test`/
   `make test-full` pass clean with no boot errors; `make format-check` clean.
-- M2.5 (PR pending, `needs-owner: yes`): bongOS boots on legacy BIOS/CSM machines, not just UEFI.
+- M2.5 ([PR #11](https://github.com/gwbrickner/bongos/pull/11) open, `needs-owner: yes`): bongOS boots on legacy BIOS/CSM machines, not just UEFI.
   A 440-byte NASM stage1 MBR (D-100) reads a new stage2: A20 enable, a real-mode<->protected-mode
   switch, a real-mode thunk (`rmInt`/`rmIdle`, D-102) letting 32-bit C call back into real BIOS
   interrupts, and a full C environment reusing almost all of the UEFI loader's shared code --
