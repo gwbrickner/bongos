@@ -32,11 +32,12 @@ Status compressZlibInflate(const uint8_t *in, size_t inLen, uint8_t *out, size_t
                            size_t *outLen, size_t *inUsed);
 
 /* A single fixed-Huffman block with a restricted greedy LZ77 (two candidate distances: 3, and
- * `rowStride` if non-zero, e.g. one image row up). NO_MEMORY if it would exceed `outCap`. */
+ * `rowStride` if non-zero, e.g. one image row up). NO_MEMORY if it would exceed `outCap`.
+ * Unlike the inflate functions, `outLen` must not be NULL. */
 Status compressDeflateFixed(const uint8_t *in, size_t inLen, uint32_t rowStride, uint8_t *out,
                             size_t outCap, size_t *outLen);
 
-/* "78 01" header + compressDeflateFixed + big-endian Adler-32. */
+/* "78 01" header + compressDeflateFixed + big-endian Adler-32. `outLen` must not be NULL. */
 Status compressZlibDeflate(const uint8_t *in, size_t inLen, uint32_t rowStride, uint8_t *out,
                            size_t outCap, size_t *outLen);
 

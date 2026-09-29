@@ -25,7 +25,7 @@ def xorshift(seed, n):
 
 
 def text(n):
-    words = ["bongOS", "kernel", "pixel", "surface", "the", "and", "compress", "window",
+    words = ["kernel", "pixel", "surface", "the", "and", "compress", "window",
              "inflate", "canvas", "glyph", "alpha"]
     out = []
     x = 12345
