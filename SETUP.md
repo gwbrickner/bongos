@@ -44,13 +44,15 @@ Claim the Claude Code cloud credit **by October 7** (it expires November 4): go 
 2. Create an environment called **bongos**:
    - **Setup script:** paste the whole of `tools/ci/install-deps.sh`. It gets cached after the first run.
    - **Network access:** the default or trusted level is enough, since it has to reach the Ubuntu package mirrors and GitHub. Later, M14.5 (ports) needs to download upstream source tarballs; switch to broader access then. The milestone will remind you.
-3. **Model:** pick **Sonnet** for sessions. The `architect` and `reviewer` subagents automatically use Opus for the hard parts, and `qemu-tester`/`Explore` use Haiku. While a subagent is running, `/tasks` shows which model it's actually on.
+3. **Model:** pick **Sonnet** for sessions (D-101). To make it the default, add `"model": "sonnet"` to `.claude/settings.json` yourself; agents aren't allowed to edit their own settings. The `architect`, `bug-sweeper`, and `reviewer` subagents automatically use Opus for the hard parts. `subsystem-hunter` uses Sonnet, and `qemu-tester`/`Explore` use Haiku. While a subagent is running, `/tasks` shows which model it's actually on.
 
 ---
 
 ## Part B: how the loop works
 - Each session does **one milestone**: on its own branch, logging progress, committing and pushing after every working step, and finishing with a PR.
-- **Normal PRs** auto-merge when CI passes. **`needs-owner` PRs** wait for you. Review those on GitHub, merge them, and start the next session.
+- **Before any PR** (D-102): the tests pass, then `bug-sweeper` (Opus) tries to break the milestone and must report `SWEEP: PASS`, then `reviewer` (Opus) must report `VERDICT: PASS`. Each PR embeds a screenshot of the final boot screen (`docs/screenshots/M<p>.<n>.png`).
+- **Normal PRs** auto-merge when CI passes and the body says both `Sweeper: PASS` and `Reviewer: PASS`. **`needs-owner` PRs** wait for you. Review those on GitHub, merge them, and start the next session.
+- **After a milestone merges** (optional, and deeper): run `/milestone-sweep M<p>.<n>` in a session to bug-hunt every subsystem (`docs/BUG_HUNTING.md` §13).
 - **When a session dies** (credit or usage limits, network, anything else), start a new one with the resume prompt. It reads `docs/STATUS.md` and the milestone log, and continues from "Next step".
 - **Things only you can do** show up in `docs/STATUS.md` under **Waiting on owner** (hardware checks, key generation, ACPI dumps), with step-by-step instructions.
 
@@ -63,8 +65,8 @@ Claim the Claude Code cloud credit **by October 7** (it expires November 4): go 
 Read CLAUDE.md, then docs/STATUS.md, docs/ROADMAP.md, and the ARCHITECTURE.md sections that
 M1.1 touches. Start milestone M1.1, following the session protocol in CLAUDE.md exactly
 (branch, milestone log, STATUS.md, commit and push after every working step). Work until
-every "Done when" check passes, run the reviewer subagent, then open the PR with the
-template.
+every "Done when" check passes, then follow CLAUDE.md "Finishing a milestone" (bug-sweeper,
+reviewer, screenshot) and open the PR with the template.
 ```
 
 ### C2. Every session after that

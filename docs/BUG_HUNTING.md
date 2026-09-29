@@ -1,433 +1,455 @@
-# bongOS Bug Hunting Protocol
+# bongOS bug hunting protocol
 
-A repeatable process for finding, triaging, fixing, and preventing bugs in bongOS. Written for both humans and Claude Code sessions. Drop it at `docs/BUG_HUNTING.md` and reference it from `CLAUDE.md`.
+A repeatable process for finding, triaging, fixing, and preventing bugs in bongOS. It's
+written for both humans and Claude sessions, and it's binding for every debugging session and
+every bug fix (see `CLAUDE.md`). Every command in it exists in this repo. If one doesn't work,
+fix this document.
+
+| § | Contents | § | Contents |
+|---|---|---|---|
+| 0 | Ground rules | 7 | Automated testing and static analysis |
+| 1 | Severity levels | 8 | Triage workflow, triple-fault playbook, patterns |
+| 2 | Build profiles | 9 | Bug record template |
+| 3 | Kernel instrumentation | 10 | Real hardware phase |
+| 4 | QEMU hunting configurations | 11 | Who hunts: agents and skills |
+| 5 | GDB workflow | 12 | Release gate checklist |
+| 6 | Subsystem checklists | 13 | Milestone sweep |
 
 ---
 
-## 0. Ground Rules
+## 0. Ground rules
 
-1. **No repro, no fix.** A bug isn't "fixed" until there's a reliable way to trigger it and that trigger stops working after the fix.
-2. **One bug, one branch, one commit.** Never bundle fixes. It makes bisecting later impossible.
-3. **Every fix ships with a regression test** (in-kernel `ktest`, a headless QEMU boot check, or at minimum a documented manual repro).
-4. **Log everything** in GitHub Issues using the template in §9, even bugs fixed in five minutes.
-5. **Don't "fix" by removing the symptom.** Adding a `sti`, a delay, or a bigger stack until the crash goes away is not a root cause.
-6. **Before tagging a release codename**, run the full sweep in §6 and the CI suite in §7. No open S1/S2 bugs allowed at tag time.
+1. **No repro, no fix.** A bug isn't fixed until something triggers it reliably, and that
+   trigger stops working after the fix.
+2. **One bug, one commit.** Never bundle fixes. Bundled fixes make later bisecting impossible.
+   The message is `fix(<subsystem>): <summary>`.
+3. **Every fix ships with a regression test**: a `KTEST`, a host `TEST`, or a boot-matrix
+   check. Show the test failing before the fix and passing after it.
+4. **Record every bug** with the §9 template, even ones fixed in five minutes. Found during a
+   milestone, it goes in `docs/sweeps/M<p>.<n>.md` or the milestone log. Found in a
+   milestone-sweep, it goes in the sweep report.
+5. **Don't "fix" a bug by removing the symptom.** Adding a `sti`, a delay, a bigger stack, or
+   a retry until the crash goes away is not finding the root cause.
+6. **Never weaken, skip, or delete a test** to get a pass (CLAUDE.md Hard rules).
+7. **Before a release**, run the §12 gate. No open S1 or S2 bug is allowed at release time.
 
 ---
 
-## 1. Severity Levels
+## 1. Severity levels
 
 | Level | Name | Meaning | Examples |
 |---|---|---|---|
-| **S1** | Kaboom | Triple fault, hang, panic, reboot loop | Double fault with no IST, deadlock in scheduler |
-| **S2** | Silent Rot | Memory or state corruption, may not crash immediately | Heap overwrite, PMM double-allocates a frame, lost IRQ |
-| **S3** | Wrong | Incorrect behavior, system keeps running | Syscall returns wrong value, wrong keyboard mapping |
-| **S4** | Papercut | Cosmetic or minor | Framebuffer text misaligned, log typo |
+| **S1** | Kaboom | Triple fault, hang, panic, reboot loop | #DF with no IST, deadlock in the scheduler |
+| **S2** | Silent Rot | Memory or state corruption, may not crash right away | Heap overwrite, pmm hands out the same frame twice, lost IRQ, a test that passes against broken code |
+| **S3** | Wrong | Incorrect behavior, but the system keeps running | Wrong `Status` returned, wrong keyboard mapping |
+| **S4** | Papercut | Cosmetic or minor | Misaligned text, a log typo |
 
-S2 bugs are the most dangerous. They often show up later as a "random" S1 somewhere unrelated. Treat any unexplained S1 as a possible S2 until proven otherwise.
-
----
-
-## 2. Debug Build Setup
-
-Maintain two build profiles and hunt in **both**. Bugs that only appear at `-O2` are usually undefined behavior or missing `volatile`.
-
-### Required compiler flags (all builds)
-
-```make
-CFLAGS += -ffreestanding -fno-builtin -nostdlib \
-          -mno-red-zone -mcmodel=kernel -mgeneral-regs-only \
-          -fno-omit-frame-pointer \
-          -Wall -Wextra -Werror -Wshadow -Wpointer-arith \
-          -Wcast-align -Wstrict-prototypes -Wmissing-prototypes
-```
-
-### Debug profile extras
-
-```make
-CFLAGS_DEBUG += -g3 -O0 \
-                -fstack-protector-strong \
-                -fsanitize=undefined \
-                -DBONG_DEBUG=1
-```
-
-- `-fstack-protector-strong` requires you to define `__stack_chk_guard` and `__stack_chk_fail()` in the kernel. Have `__stack_chk_fail` panic with "stack smashed" and a backtrace.
-- `-fsanitize=undefined` requires implementing the `__ubsan_handle_*` functions. Start with the common ones (type mismatch/misalignment, overflow, shift out of bounds, out of bounds, pointer overflow) and have each print file:line over serial, then panic.
-
-### Release-ish profile
-
-```make
-CFLAGS_RELEASE += -g -O2
-```
-
-Keep `-g` even here. Debug symbols cost nothing at runtime and save hours.
+S2 bugs are the most dangerous, because they tend to surface later as a "random" S1 somewhere
+unrelated. Treat any unexplained S1 as a possible S2 until proven otherwise.
 
 ---
 
-## 3. Kernel Instrumentation (build these early)
+## 2. Build profiles
 
-These are the tools you hunt *with*. Build them before the kernel gets big.
+There are two profiles, and every hunt uses **both**. Bugs that appear only at `-O2` are
+usually undefined behavior, a missing `volatile`, or bad inline-asm constraints.
 
-### 3.1 Serial logger
-- COM1 (`0x3F8`) initialized as the **very first** thing in `kmain`, before memory management.
-- Log levels: `logTrace`, `logDebug`, `logInfo`, `logWarn`, `logError`.
-- Every log line prefixed with subsystem tag and tick count: `[  1042][mm] mapped 0x... -> 0x...`
-- Logger must be usable from interrupt context (no allocation, spinlock with IRQs disabled).
-
-### 3.2 Panic handler
-`kernelPanic(const char *fmt, ...)` must:
-1. Disable interrupts (`cli`).
-2. Dump all GPRs, `RIP`, `RFLAGS`, `CR0`, `CR2`, `CR3`, `CR4`, and the CS/SS selectors.
-3. Walk the stack via `RBP` chain and print return addresses (capped at ~32 frames, and bail if `RBP` leaves the known stack range).
-4. Print to **both** serial and framebuffer (framebuffer matters on real hardware).
-5. Halt forever: `for (;;) asm volatile("cli; hlt");`
-
-### 3.3 Symbolizing backtraces
-Add `scripts/symbolize.sh` that pipes a serial log through:
-
-```sh
-addr2line -e build/kernel.elf -f -i -C <address>
-```
-
-Later upgrade: embed a sorted symbol table in the kernel so panics print function names directly.
-
-### 3.4 Assertions
-```c
-#define kAssert(cond) \
-    do { if (!(cond)) kernelPanic("assert failed: %s at %s:%d", #cond, __FILE__, __LINE__); } while (0)
-```
-Assert liberally: alignment of addresses passed to paging functions, IRQ state on lock entry, pointer ranges, list integrity.
-
-### 3.5 Memory poisoning
-| Event | Fill pattern | Why |
+| Profile | Command | Flags (`mk/kernel.mk`) |
 |---|---|---|
-| Heap allocation | `0xCD` | Catches use of uninitialized memory |
-| Heap free | `0xDD` | Catches use-after-free |
-| Freed physical frame | `0xFE` | Catches stale mappings to freed frames |
-| Red zones around heap blocks | `0xAB` guard bytes | Check on free; catches overflows |
+| Debug (default) | `make` | `-O1`, UBSan with an explicit check list (D-076), `-DKERNEL_DEBUG=1` (pmm write-after-free poisoning, slab redzones, and list-unlink hardening, D-082), `-fstack-protector-strong` |
+| Release | `make RELEASE=1` | `-O2`, no UBSan, no `KERNEL_DEBUG`, stack protector still on |
 
-If you ever see `0xCDCDCDCD`, `0xDDDDDDDD`, or `0xFEFEFEFE` in a register dump, you instantly know the bug class.
+Both profiles also get `-ffreestanding -mno-red-zone -mgeneral-regs-only -mcmodel=kernel
+-fno-omit-frame-pointer -Wall -Wextra -Werror` and DWARF debug info.
 
-### 3.6 Guard pages
-- Every kernel stack gets an **unmapped guard page** below it. A stack overflow then page-faults instead of silently corrupting neighbors.
-- The double fault handler **must** run on its own IST stack (TSS IST1), otherwise a stack overflow becomes a triple fault with no info.
-
-### 3.7 Lock debugging (once SMP or preemption exists)
-- Each spinlock records its owner CPU and the `RIP` that acquired it.
-- Detect: recursive acquire, release by non-owner, spinning longer than N iterations (print "possible deadlock" + owner `RIP`).
+**Always `make clean` before switching profiles.** The objects all live in `build/` and don't
+track flags, so without a clean you get a mix of debug and release objects. The full release
+check is:
+```sh
+make clean && make RELEASE=1 && make RELEASE=1 test
+make clean && make            # leave a debug build behind
+```
 
 ---
 
-## 4. QEMU Hunting Configurations
+## 3. Kernel instrumentation (what exists and how to use it)
 
-### 4.1 Standard debug run
+| Tool | Where | Use |
+|---|---|---|
+| **klog** | `kernel/core/klog.c`, `kernel/include/klog.h` | Leveled, tagged logging to serial and fbcon. Serial is COM1 and is up first. |
+| **panic()** | `kernel/core/panic.c` | Turns interrupts off, prints `PANIC: ...` plus a **symbolized backtrace** (KSYM v1, D-075, `docs/specs/ksyms.md`), then halts. Under `ktest=` it reports `KTEST FAIL` and exits QEMU instead. |
+| **panicBug()** | `kernel/include/panic.h` | For kernel-internal invariant violations (a double free, a foreign pointer). A ktest can catch it with `TRAP_CATCH_KERNEL_BUG`. **Never call it with a lock held** (D-082). |
+| **Trap reports** | `kernel/arch/x86_64/trap.c` | Any fault prints the vector, error code, CR2, the registers, and a symbolized backtrace. |
+| **archTrapCatch()** | `kernel/include/arch/trap.h`, D-078 | ktest-only. Runs a function and catches a matching fault or software trip (`STACK_SMASH`, `UBSAN`, `KERNEL_BUG`), so a test can prove that detection works. |
+| **Stack protector / UBSan** | `kernel/core/stack-protector.c`, `ubsan.c` | Print `file:line`, then panic (or get caught by archTrapCatch). |
+| **Poisoning** (debug) | `kernel/mm/pmm.c`, `kernel/mm/slab-internal.h` | Freed pages and slab objects are filled with `0x6B`. Slab redzones are `0xBB` (`SLAB_REDZONE_SIZE` = 16 bytes). |
+| **Misuse checks** (always on) | pmm and slab (D-082, D-096) | Double free, freeing a foreign pointer, and freeing a pointer that isn't the object's start all go to `panicBug()`. |
+| **W^X verifier** | `kernel/mm/vmm.c` | Prints `vmm: W^X verified: ...` at boot, and `make test` requires that line. |
 
+**Poison values to recognize in a register dump:**
+
+| Value | Means |
+|---|---|
+| `0x6B6B6B6B6B6B6B6B` | Use after free (a pmm page or a slab object) |
+| `0xBBBBBBBB...` | Overran a slab object into its redzone |
+
+**Symbolizing an address by hand:** `llvm-addr2line -f -i -e build/kernel/kernel.elf <addr>`.
+Once KASLR lands (M2.6), subtract the `kaslr slide=` value printed at boot first.
+
+#DF, NMI, and #MC already run on their own IST stacks (M2.1, `cpu-init.c`). Still to come:
+guard pages under each kernel stack (arriving with threads), and lock debugging (owner CPU
+plus acquire RIP, recursion and non-owner release detection, and a spinning-too-long warning),
+which arrives with SMP and preemption (M3.x).
+
+---
+
+## 4. QEMU hunting configurations
+
+Everything goes through the harness. Don't hand-roll QEMU command lines.
+
+### 4.1 Standard runs
 ```sh
-qemu-system-x86_64 \
-  -machine q35 -m 512M -smp 1 \
-  -cdrom build/bongos.iso \
-  -serial file:logs/serial.log \
-  -monitor stdio \
-  -d int,cpu_reset,guest_errors -D logs/qemu.log \
-  -no-reboot -no-shutdown
+tests/harness/run-qemu.sh --help                       # every option
+tests/harness/run-qemu.sh --image build/bongos-ktest.img --fw uefi --cpus 1   # the ktest image, headless
+tests/harness/run-qemu.sh --image build/bongos-ktest.img --debug              # + -d int,cpu_reset -> build/logs/<name>.qemu.log
+tests/harness/run-qemu.sh --image build/bongos-ktest.img --mem 3072 --name big # a >4 GiB split (the NORMAL zone)
+make run / make debug / make gdb                       # interactive (for humans)
 ```
-
-- `-no-reboot -no-shutdown` freezes the VM on a triple fault instead of rebooting, so you can inspect state.
-- `-d int` logs every interrupt and exception with full register state. **Only works under TCG**, not KVM.
-- `-monitor stdio` gives the QEMU monitor in your terminal.
+- `build/bongos-ktest.img` boots with `ktest=all` (`tests/harness/ktest-boot.cfg`), runs every
+  ktest, and exits QEMU through `isa-debug-exit`. `build/bongos.img` is the normal image; it
+  never runs ktests.
+- The harness always passes `-no-reboot`, so a triple fault ends the run (it shows as CRASH)
+  instead of looping.
+- `-d int` logs every exception with the full register state. **It only works under TCG.** The
+  cloud container has no KVM, which suits this.
+- The HMP monitor socket is `build/run/<name>.monitor`. Serial goes to
+  `build/logs/<name>.serial.log`.
+- To select only some ktests, put `ktest=<pattern>` in a boot.cfg cmdline (see
+  `kernel/test/ktest.c` for the pattern syntax).
 
 ### 4.2 Config matrix
+Bugs hide in specific configurations. `tests/harness/matrix.conf` (`make test`) and
+`matrix-full.conf` (`make test-full`) hold the rows the current milestone supports, in the
+form `<fw> <cpus> [memMiB]`. Add rows as features land. Before a release, cover:
 
-Bugs hide in specific configurations. Before a release, boot through all of these:
-
-| Variable | Values to test |
+| Variable | Values |
 |---|---|
-| RAM | `64M`, `512M`, `4G`, `8G` (tests memory map parsing and >4 GiB addresses) |
-| CPUs | `-smp 1`, `-smp 2`, `-smp 4` |
-| CPU model | default, `-cpu qemu64`, `-cpu max` |
-| Accel | TCG (default), KVM if available locally |
-| Machine | `q35`, `pc` |
-| Build | debug `-O0`, release `-O2` |
+| Firmware | UEFI; BIOS (once the M2.5 BIOS loader lands) |
+| RAM | 64 MiB (once the pmm handles it), 512 MiB, 3072 MiB (splits across the 4 GiB hole), 8 GiB |
+| CPUs | 1; 2 and 4 (once M3.5 SMP lands) |
+| Profile | debug and release (§2) |
 
 ### 4.3 QEMU monitor cheat sheet
+Connect to it with `nc -U build/run/<name>.monitor`.
 
 | Command | Use |
 |---|---|
 | `info registers` | Full CPU state right now |
-| `info mem` | Active virtual memory mappings (sanity check paging) |
-| `info tlb` | Virtual to physical translations |
-| `info lapic` / `info pic` | Interrupt controller state (missing EOI shows up here) |
-| `x /16gx 0xADDR` | Dump virtual memory |
-| `xp /16gx 0xADDR` | Dump physical memory |
-| `x /10i $pc` | Disassemble at current instruction |
+| `info mem` / `info tlb` | Active mappings / virtual→physical translations (a paging sanity check) |
+| `info lapic` / `info pic` | Interrupt controller state (a missing EOI shows up here) |
+| `x /16gx ADDR` / `xp /16gx ADDR` | Dump virtual / physical memory |
+| `x /10i $pc` | Disassemble at the current instruction |
 
 ---
 
-## 5. GDB Workflow
+## 5. GDB workflow
 
+`make gdb` starts QEMU paused with the gdbstub on `:1234`, then attaches gdb. To do it by hand:
 ```sh
-# terminal 1
-qemu-system-x86_64 <flags from 4.1> -s -S
-
-# terminal 2
-gdb build/kernel.elf \
-  -ex "set architecture i386:x86-64" \
-  -ex "target remote :1234" \
-  -ex "hbreak kmain" \
-  -ex "continue"
+tests/harness/run-qemu.sh --image build/bongos-ktest.img --gdb --name dbg
+gdb build/kernel/kernel.elf -ex "target remote :1234" -ex "hbreak kernelMain" -ex continue
+kill "$(cat build/run/dbg.pid)"          # when done
 ```
+Check the real entry symbol with `nm build/kernel/kernel.elf | grep -i main`.
 
 Tips:
-- Use **`hbreak`** (hardware breakpoints) early in boot and around paging changes. Software breakpoints write `int3` into memory and break when mappings change.
-- `layout split` shows source and assembly together.
-- `info registers rip rsp rbp cr2 cr3`
-- `x/20gx $rsp` to inspect the stack.
-- `watch -l someVar` for a hardware watchpoint on corruption. This is the #1 tool for S2 bugs: find what's being corrupted, watch it, catch the writer red-handed.
-- `bt` works if frame pointers are on.
+- Use **`hbreak`** early in boot and around paging changes. Software breakpoints write `int3`
+  into memory, and they break when the mappings change.
+- `watch -l someVar` sets a hardware watchpoint that catches the writer of corrupted memory.
+  It's the number one tool for S2 bugs.
+- `info registers rip rsp rbp cr2 cr3`, `x/20gx $rsp`, `bt` (frame pointers are on), and
+  `layout split`.
 
 ---
 
-## 6. The Hunt: Subsystem Sweeps
+## 6. Subsystem checklists
 
-Run a sweep on one subsystem at a time. For each, go through the checklist, write a test for anything not already covered, then try to break it on purpose.
+Sweep one subsystem at a time. Go through its checklist, write a test for anything not already
+covered, then try to break it on purpose. The "Paths" line is the scope a sweep covers.
 
-### 6.1 Boot and early init
-- [ ] `.bss` zeroed (or guaranteed zeroed by bootloader; verify, don't assume).
-- [ ] Linker script sections page-aligned; kernel symbols like `kernelEnd` correct.
-- [ ] Bootloader memory map parsed correctly: overlapping entries, unaligned entries, entries above 4 GiB, reserved regions respected.
-- [ ] GDT loaded and segment registers reloaded (including a far return or `lretq` to reload CS).
-- [ ] TSS loaded, IST entries point to the **top** of their stacks.
-- [ ] Boots with 64M RAM and with 8G RAM.
+### 6.1 Boot, loader, and early init
+Paths: `boot/`, `kernel/arch/x86_64/entry.asm`, `early-map.c`, `kernel/core/main.c`,
+`bootinfo.c`, `tools/mkimage/`
+- [ ] BootInfo is validated (magic, version, sizes) before use. Both loaders fill it the same
+  way (ARCHITECTURE §5.3).
+- [ ] `.bss` is zeroed (verify it; don't assume). Linker-script sections are page-aligned.
+  Section symbols are correct.
+- [ ] Memory-map parsing handles overlapping, unaligned, and >4 GiB entries, and respects
+  reserved regions.
+- [ ] GDT loaded and segment registers reloaded (including CS, via `lretq`). TSS loaded, with
+  IST pointers at the **top** of their stacks.
+- [ ] The loader's boot.cfg parser (D-067) rejects malformed input without hanging (host-test
+  it).
+- [ ] Boots at the smallest and largest RAM sizes in the matrix.
 
 ### 6.2 Interrupts and exceptions
-- [ ] All 32 exception vectors have handlers. Unexpected vectors panic with the vector number.
-- [ ] Error-code vs no-error-code exceptions handled correctly (8, 10–14, 17, 21, 29, 30 push error codes). Getting this wrong misaligns the whole frame.
-- [ ] Stubs save/restore **all** GPRs and end with `iretq` (not `iret`).
-- [ ] Stack is 16-byte aligned before calling C handlers.
-- [ ] EOI sent for every hardware IRQ (PIC or LAPIC), and spurious IRQs (7/15 on PIC, LAPIC spurious vector) handled without EOI where required.
-- [ ] Double fault uses IST1.
-- [ ] Try: divide by zero, `ud2`, null dereference, `int3`, write to a read-only page. Each must produce a clean, correct panic.
+Paths: `kernel/arch/x86_64/trap*.{c,asm}`, `cpu-init.c`, `load-gdt.asm`
+- [ ] All 32 exception vectors have handlers. Unexpected vectors panic and name the vector.
+- [ ] Error-code handling is correct: vectors 8, 10–14, 17, 21, 29, and 30 push one. Getting
+  this wrong misaligns the whole frame.
+- [ ] Stubs save and restore **all** GPRs, keep the stack 16-byte aligned before `call`, and
+  end in `iretq`.
+- [ ] #DF, NMI, and #MC run on their own IST stacks.
+- [ ] Every hardware IRQ gets an EOI, and spurious IRQs are handled correctly (once the LAPIC
+  and IOAPIC land).
+- [ ] Deliberate `ud2`, #PF, #GP, divide by zero, and `int3` each produce the correct report,
+  shown by ktests using `archTrapCatch`.
 
 ### 6.3 Physical memory manager
-- [ ] Never hands out frame 0, kernel frames, bootloader-reclaimable frames still in use, or reserved regions.
-- [ ] Double free detected (kAssert on bitmap/stack state).
-- [ ] Allocating until exhaustion returns failure instead of wrapping or crashing.
-- [ ] Stress test: allocate N frames, write a unique pattern into each, verify all, free in random order, repeat.
+Paths: `kernel/mm/pmm*.c`, `buddy.c`, `early.c`, `kernel/include/pmm.h`, `page.h`
+- [ ] Never hands out frame 0, kernel frames, in-use loader frames, or reserved regions.
+- [ ] Double free, freeing the upper half of a buddy pair, and freeing a foreign page are all
+  detected (`pmm_double_free`, D-082).
+- [ ] Allocating until exhaustion returns an error. Nothing wraps and nothing crashes.
+- [ ] Stress: allocate N frames, write a unique pattern into each, verify every one, free them
+  in random order, and repeat. The meminfo self-check line stays `OK`.
 
 ### 6.4 Virtual memory and paging
-- [ ] All addresses canonical (bits 63:48 sign-extend bit 47).
-- [ ] Page table pages zeroed on allocation.
-- [ ] `invlpg` after every unmap/remap; full CR3 reload where needed.
-- [ ] Flags correct: NX on data, no write on `.text` and `.rodata`, User bit only where intended.
-- [ ] Higher-half kernel mapping survives removal of any identity mapping.
-- [ ] `info mem` output matches what you expect after each major init step.
+Paths: `kernel/arch/x86_64/paging.c`, `kernel/mm/vmm.c`, `kva.c`
+- [ ] Every address is canonical. Page-table pages are zeroed on allocation.
+- [ ] `invlpg` runs after every unmap and remap, and CR3 is reloaded where needed (plus a
+  shootdown once SMP exists).
+- [ ] Flags are correct: NX on data, no write on text and rodata, the U bit only where
+  intended, PAT/WC on the framebuffer. There are no W^X aliases through the HHDM or the KVA
+  window (the M2.3 lesson).
+- [ ] The higher-half mapping survives removing the loader's mappings (`loader_reclaimed`).
 
-### 6.5 Kernel heap
-- [ ] Alignment guarantees honored (at least 16 bytes).
-- [ ] Red zones checked on free.
-- [ ] Freeing a pointer not from the heap is detected.
-- [ ] Stress: thousands of random-size alloc/free cycles with pattern verification.
-- [ ] Coalescing of free blocks actually works (heap doesn't grow forever under churn).
+### 6.5 Kernel heap (slab, kmalloc, vmalloc)
+Paths: `kernel/mm/slab*.c`, `vmalloc.c`, `kernel/include/kmalloc.h`, `vmalloc.h`
+- [ ] Alignment guarantees are honored (at least 16 bytes, and natural alignment for power-of-2
+  sizes).
+- [ ] Redzones are checked on free. Freeing a foreign pointer, an interior pointer, or the same
+  pointer twice is detected (D-096).
+- [ ] No lock is held across pmm calls, ctor/dtor calls, or `panicBug()` (the M2.4 lesson).
+- [ ] Stress: thousands of random-size alloc/free cycles with pattern checks. `slabShrinkAll()`
+  returns every page, so the heap doesn't grow forever under churn.
+- [ ] vmalloc's OOM partial failure unwinds completely (the pmm page counts return to
+  baseline).
 
-### 6.6 Scheduler and context switching
-- [ ] Callee-saved registers (`rbx`, `rbp`, `r12`–`r15`) saved/restored.
-- [ ] Each task's kernel stack is separate and has a guard page.
-- [ ] TSS `RSP0` updated on switch when user mode exists.
-- [ ] No context switch while holding a spinlock.
-- [ ] Stress: spawn many tasks that each increment their own counter and yield; verify all counters advance and none corrupt each other.
+### 6.6 Scheduler and context switching (once it exists)
+- [ ] The callee-saved registers (`rbx`, `rbp`, `r12`–`r15`) are saved and restored. Each
+  task has its own kernel stack with a guard page. TSS `RSP0` is updated on each switch.
+- [ ] No context switch happens while a spinlock is held (check the preempt count).
+- [ ] Stress: many tasks that each increment their own counter and yield. All the counters
+  advance, and none corrupts another.
 
-### 6.7 Syscalls and user mode (when it exists)
-- [ ] Every user pointer validated (range, canonical, mapped, User bit) before the kernel touches it.
-- [ ] Enable SMEP/SMAP if the CPU supports them; use `stac`/`clac` only around deliberate user copies.
-- [ ] Invalid syscall numbers return an error, never index out of a table.
-- [ ] Fuzz: a userland program that calls random syscalls with random arguments for 10 minutes. The kernel must never panic from user input.
+### 6.7 Syscalls and user mode (once they exist)
+- [ ] Every user pointer is validated and copied through `copyFromUser`/`copyToUser`. SMEP,
+  SMAP, and UMIP are on (M2.3 enables them). `stac`/`clac` appear only around deliberate
+  copies.
+- [ ] Invalid syscall numbers return an error and never index outside the table. Handle rights
+  are checked and can never grow.
+- [ ] Fuzz: random syscalls with random arguments for 10 minutes. User input must never panic
+  the kernel.
 
 ### 6.8 Drivers
-- [ ] MMIO accessed through `volatile` pointers.
-- [ ] Port I/O widths correct (`inb`/`inw`/`inl`).
-- [ ] Framebuffer writes bounds-checked (pitch vs width is a classic bug).
-- [ ] Keyboard driver handles key release, extended scancodes (`0xE0`), and a buffer overflow when typing fast.
-- [ ] Timer frequency calibrated, not hardcoded (matters on real hardware).
+Paths: `kernel/drivers/`
+- [ ] MMIO goes through `volatile` accessors, with barriers where the device needs them. Port
+  I/O widths are correct.
+- [ ] Framebuffer writes are bounds-checked (pitch ≠ width × bpp is the classic bug).
+- [ ] Keyboard: key release, `0xE0` extended scancodes, and buffer overflow while typing fast.
+- [ ] Timers are calibrated, not hardcoded.
 
-### 6.9 SMP (when it exists)
-- [ ] Every shared structure has a documented lock.
-- [ ] Per-CPU data accessed via `GS` base, correct on every CPU.
-- [ ] TLB shootdowns implemented when unmapping shared memory.
-- [ ] Run every stress test with `-smp 4`.
+### 6.9 SMP (once it exists)
+- [ ] Every shared structure has a documented lock. Per-CPU data goes through the GS base and
+  is correct on every CPU.
+- [ ] TLB shootdowns happen when shared mappings change.
+- [ ] Every stress test runs with 4 CPUs.
 
 ---
 
-## 7. Automated Testing
+## 7. Automated testing and static analysis
 
-### 7.1 In-kernel test framework (`ktest`)
-- Tests registered with a macro into a dedicated linker section, e.g. `KTEST(pmmAllocFree) { ... }`.
-- Built only when `BONG_KTEST=1`. The kernel boots, runs all tests, prints `KTEST PASS name` / `KTEST FAIL name` over serial, then exits QEMU.
-
-### 7.2 Exiting QEMU with a status code
-Add to QEMU flags:
-```sh
--device isa-debug-exit,iobase=0xf4,iosize=0x04
+### 7.1 ktests (in the kernel)
+```c
+#include "ktest.h"
+KTEST(pmm_alloc_free_stress) {           /* the name becomes "KTEST PASS pmm_alloc_free_stress" */
+    KTEST_ASSERT(p != NULL);
+    KTEST_ASSERT_EQ(got, want);          /* prints both values in hex on failure */
+}
 ```
-Writing value `v` to port `0xf4` exits QEMU with status `(v << 1) | 1`. Pick a convention, e.g. write `0x10` for pass (exit 33) and `0x11` for fail (exit 35).
+Put them in `kernel/test/*_test.c` (arch-specific ones go in `kernel/arch/x86_64/test/`). The
+build picks them up automatically, and they run when the cmdline has `ktest=`. If a ktest
+proves a Done-when clause, add its name to `mk/test.mk`'s `_check-ktest-pass` required list.
+Otherwise a dropped test would pass silently.
 
-### 7.3 CI (GitHub Actions)
-On every push and PR:
-1. Build debug and release.
-2. Run `ktest` build headless in QEMU with a 60-second `timeout`.
-3. Fail the job if: exit code isn't the pass code, timeout hits, or `serial.log` contains `PANIC`, `UBSAN`, or `stack smashed`.
-4. Upload `serial.log` and `qemu.log` as artifacts on failure.
-5. Run the boot matrix from §4.2 (at least RAM sizes and `-smp`) on a nightly schedule.
+### 7.2 Host tests
+Use `TEST(name)` with `ASSERT_TRUE`/`ASSERT_EQ`/`ASSERT_STREQ` (`tests/host/framework/test.h`)
+in `tests/host/*_test.c`. They build with ASan and UBSan, and they're the place to test pure
+logic (parsers, allocator algorithms) exhaustively. Kernel sources compiled for the host get
+listed in `mk/host-tests.mk`.
 
-### 7.4 Static analysis
-Run weekly and before every release:
-- `gcc -fanalyzer` (catches leaks, null derefs, use-after-free in C code paths)
-- `cppcheck --enable=all --inconclusive src/`
-- `scan-build make` (Clang static analyzer)
+### 7.3 The exit protocol
+The kernel prints `KTEST START/PASS/FAIL <name>` and a final `KTEST DONE`, then writes to the
+`isa-debug-exit` port 0xF4: `0x10` means all passed (QEMU exits 33), and `0x11` means a failure
+(exits 35). The harness maps a timeout to HANG and a reset or poweroff to CRASH (ARCHITECTURE
+§23).
 
-Treat new findings as S3 by default until triaged.
+### 7.4 CI
+`.github/workflows/ci.yml` runs on every PR and every push to main: `make format-check`,
+`make host-tests`, and `make test`. On failure it uploads `build/logs`.
+`.github/workflows/milestone-sweep.yml` (§13) adds `make test-full`, the release profile, and
+`make analyze`.
+
+### 7.5 Static analysis
+`make analyze` runs the Clang static analyzer over every kernel C source, with the kernel's own
+flags. The report goes to `build/analyze/report.txt`. It exits 0 unless `ANALYZE_STRICT=1`.
+Triage every finding in the code you're changing as a real bug, a false positive (say why), or
+needs investigation. Findings in test code that deliberately misuses the API are usually false
+positives, but check each one. Treat any untriaged finding as S3 until it's triaged.
 
 ---
 
-## 8. Triage Workflow
+## 8. Triage workflow
 
 For every bug:
+1. **Capture.** Save the serial log, the `--debug` qemu log, the exact harness command, the
+   commit, and the profile.
+2. **Reproduce.** Make it trigger reliably. If it's intermittent, use 1 CPU, TCG, and
+   `--extra "-icount shift=auto"` to cut timing nondeterminism. Try both profiles.
+3. **Minimize.** Strip it down to the smallest trigger, ideally a single ktest selected with
+   `ktest=<name>`.
+4. **Classify.** Assign a severity (§1) and a subsystem.
+5. **Bisect if it's a regression.** Use `git bisect run <script>`, where the script builds,
+   runs the minimal repro, and exits 0 for good and 1 for bad.
+6. **Root-cause it.** Write one sentence saying **why** it happened, not just where. If you
+   can't write that sentence, you're not done.
+7. **Fix it** (§0 rules 2 and 5). Change the design only through `architect` and a `D-0xx`
+   entry.
+8. **Add the regression test.** Show it failing before the fix.
+9. **Verify** in both profiles (§2), on the configuration that first triggered it, plus
+   `make test`.
+10. **Record it** (§9).
 
-1. **Capture.** Save `serial.log`, `qemu.log`, the exact QEMU command, the commit hash, and the build profile.
-2. **Reproduce.** Get it to trigger reliably. If it's intermittent, try `-smp 1`, TCG, and `-icount shift=auto` to reduce timing nondeterminism.
-3. **Minimize.** Strip it down to the smallest trigger (a single `ktest` if possible).
-4. **Classify.** Assign severity (§1) and subsystem label.
-5. **Bisect if it's a regression.** `git bisect run scripts/reproBug.sh` where the script returns 0 on good, 1 on bad.
-6. **Root-cause.** Write one sentence explaining *why* it happened, not just where. If you can't write that sentence, you're not done.
-7. **Fix** on a branch named `fix/<subsystem>-<short-name>`.
-8. **Add regression test.**
-9. **Verify** in debug and release builds, and on the config that originally triggered it.
-10. **Close the issue** with the root-cause sentence and the fix commit.
+Same failure after 2 fix attempts? Stop patching and consult `architect` (CLAUDE.md "When
+stuck").
 
-### Triple fault playbook
-The VM froze with `-no-reboot`? Open `logs/qemu.log` and search upward from the end:
-
-1. Find the last `check_exception` lines. The sequence tells the story: e.g. `v=0e` (page fault) → `v=08` (double fault) → triple fault.
-2. The **first** exception in the chain is the real bug. Everything after is fallout.
-3. Common vectors: `v=00` divide error, `v=06` invalid opcode, `v=0d` general protection, `v=0e` page fault.
-4. For a page fault, read `CR2` (faulting address) and the error code bits: bit 0 = page present, bit 1 = write, bit 2 = user mode, bit 3 = reserved bit set, bit 4 = instruction fetch.
-5. Symbolize `RIP` with `addr2line`.
+### Triple-fault playbook
+The run ended in CRASH? Rerun it with `--debug` and search `build/logs/<name>.qemu.log` upward
+from the end:
+1. Find the last `check_exception` lines. The sequence tells the story, for example `v=0e`
+   (#PF) → `v=08` (#DF) → a reset.
+2. The **first** exception in the chain is the real bug. Everything after it is fallout.
+3. The common vectors: `v=00` #DE, `v=06` #UD, `v=0d` #GP, `v=0e` #PF.
+4. For a #PF, CR2 is the faulting address. The error code bits are: 0 = present, 1 = write,
+   2 = user, 3 = reserved bit set, 4 = instruction fetch.
+5. Symbolize RIP (§3).
 
 ### Pattern recognition
 | Symptom | Usual suspect |
 |---|---|
-| `RIP` or `RSP` full of `0xCD`/`0xDD` | Uninitialized or use-after-free |
-| Crash only at `-O2` | Missing `volatile`, UB, or bad inline asm constraints/clobbers |
-| Random crash after interrupts enabled | Stub not saving a register, misaligned stack, wrong error-code handling |
-| Works once, then no more IRQs | Missing EOI |
-| Crash right after CR3 load | Kernel or current stack not mapped in new tables |
-| Garbage in local variables near interrupts | Red zone (forgot `-mno-red-zone`) |
-| `#UD` on a normal-looking instruction | Compiler emitted SSE (missing `-mgeneral-regs-only`) |
-| Double fault with no useful info | Stack overflow, check guard page and IST |
+| Registers or memory full of `0x6B` | Use after free |
+| `0xBB` where data should be | An overrun into a slab redzone |
+| Crash only in release (`-O2`) | UB, a missing `volatile`, or bad inline-asm constraints or clobbers |
+| Random crash after interrupts are enabled | A stub not saving a register, a misaligned stack, or wrong error-code handling |
+| Works once, then no more IRQs | A missing EOI |
+| Crash right after a CR3 load | The kernel, the current stack, or the IST stacks aren't mapped in the new tables |
+| Garbage in locals near interrupts | The red zone (check `-mno-red-zone`) |
+| `#UD` on a normal-looking instruction | SSE emitted (check `-mgeneral-regs-only`) |
+| #DF with no useful info | A stack overflow: check the guard page and IST |
+| A test passes but the feature is broken | A weak test. Mutation-check it (bug-sweeper §4). |
 | Works in QEMU, dies on real hardware | See §10 |
 
 ---
 
-## 9. Bug Report Template
+## 9. Bug record template
 
-Save as `.github/ISSUE_TEMPLATE/bug.md`:
-
+Use one per bug, in the sweep report or the milestone log:
 ```markdown
----
-name: Bug
-about: Report a bongOS bug
-labels: bug
----
-
-**Severity:** S1 / S2 / S3 / S4
-**Subsystem:** boot / int / pmm / vmm / heap / sched / syscall / driver / fs / smp / other
-**Commit:**
-**Build profile:** debug / release
-**Environment:** QEMU (paste full command) / real hardware
-
-**What happened:**
-
-**Expected:**
-
-**Repro steps:**
-1.
-
-**Logs:** (serial.log / qemu.log excerpt, symbolized backtrace)
-
-**Root cause (fill when known):**
-
-**Fix commit:**
-**Regression test:**
+### BUG-<milestone>-<n>: <one-line summary>
+- **Severity:** S1 / S2 / S3 / S4 · **Subsystem:** boot / int / pmm / vmm / heap / sched / syscall / driver / smp / other
+- **Commit found at:** <sha> · **Profile:** debug / release · **Config:** <harness command>
+- **What happened / expected:**
+- **Repro:** exact commands or ktest name
+- **Evidence:** serial or qemu log excerpt, symbolized backtrace
+- **Root cause:** one sentence: why
+- **Fix:** <sha> or "not fixed: <reason>" · **Regression test:** <name>
 ```
-
-Labels: `sev:1` … `sev:4`, `area:<subsystem>`, `regression`, `real-hw-only`, `heisenbug`.
+GitHub Issues are optional. Open one only when a bug is deferred past the current milestone,
+and use the same fields.
 
 ---
 
-## 10. Real Hardware Phase
+## 10. Real hardware phase
 
-Things QEMU hides from you:
-
+Things QEMU hides:
 - **RAM is not zeroed.** Anything you forgot to initialize now contains garbage.
 - **Memory maps are messier:** more reserved holes, ACPI regions, and MMIO ranges.
-- **Timing is real.** PIT/APIC/TSC calibration matters, and races that never showed in TCG show up.
-- **Firmware quirks.** UEFI implementations vary; ACPI tables can be weird.
+- **Timing is real.** PIT, APIC, and TSC calibration matters, and races that never showed up
+  under TCG appear.
+- **Firmware quirks.** UEFI implementations vary, and ACPI tables can be odd.
 
-Debug output on real hardware:
-1. **Serial** if the motherboard has a COM header (check the manual) plus a cheap header-to-DB9 cable and a USB serial adapter on another machine.
-2. **Framebuffer panic screen** as the fallback; that's why §3.2 prints there too. Take a phone photo and symbolize the addresses.
-3. **Log ring buffer** kept at a fixed physical address; after a warm reboot, the next boot can check for and print the previous boot's log (not guaranteed to survive, but often does).
+Getting debug output from real hardware:
+1. **Serial**, if the board has a COM header, using a header-to-DB9 cable and a USB serial
+   adapter on another machine.
+2. **The framebuffer panic screen** (fbcon mirrors klog). Take a phone photo and symbolize the
+   addresses.
+3. **A log ring buffer** at a fixed physical address, printed by the next boot after a warm
+   reboot (planned).
 
-Always boot real hardware from a USB stick, never let bongOS write to your real drives until the storage driver has passed its full sweep. Use a spare drive for filesystem testing.
-
----
-
-## 11. Running a Hunt in Claude Code
-
-Paste this at the start of a cloud session:
-
-> Read `docs/BUG_HUNTING.md`. Run a bug hunt on the **[subsystem]** subsystem following §6.[n].
-> For each checklist item: verify it by reading code and/or writing a `ktest`. Build and run headless in QEMU (TCG, no KVM) using the flags in §4.1 plus `isa-debug-exit`.
-> For each bug found: follow §8 steps 1–9, one branch and one commit per bug, commit message format `fix(<subsystem>): <summary>`, and open an issue body using §9.
-> Do not refactor unrelated code. Do not fix a bug without a repro. Stop and summarize when the checklist is complete or after 3 bugs, whichever comes first.
-
-Tips for keeping sessions efficient:
-- Scope each session to **one subsystem**. Broad "find all the bugs" sessions burn credit and produce shallow results.
-- Have the session end with a summary: items verified, bugs found, tests added, items it couldn't verify.
-- The cloud container likely has no KVM, which is fine (and actually good, since `-d int` needs TCG).
+Always boot real hardware from USB. The real-disk write guard stays on (ROADMAP safety rule).
+Owner hardware checks go in the milestone log and in STATUS.md's "Waiting on owner".
 
 ---
 
-## 12. Release Gate Checklist
+## 11. Who hunts: agents and skills
 
-Before tagging a new codename:
+| When | Who | Scope |
+|---|---|---|
+| After each risky milestone step, and at the milestone finish | `bug-sweeper` (Opus) | That diff: adversarial tests, mutation checks, both profiles, the analyzer, fixes with a repro |
+| Before the PR | `reviewer` (Opus) | Design and contract review of the whole milestone diff |
+| After a milestone merges (the owner runs it) | `/milestone-sweep` → `subsystem-hunter` (Sonnet), one per subsystem | Everything that exists, checklist by checklist (§6) |
+| A bug survives 2 fix attempts | `architect` (Opus) | Root-cause diagnosis |
 
-- [ ] CI green on debug and release
-- [ ] Full boot matrix (§4.2) passes
-- [ ] Static analysis run, all findings triaged
-- [ ] Syscall fuzzer ran 10+ minutes with no panic (once syscalls exist)
-- [ ] Zero open S1 or S2 issues
-- [ ] Booted on real hardware at least once
-- [ ] `CHANGELOG.md` lists fixed bugs with issue numbers
+For an ad-hoc hunt in a session, tell it: "Follow `docs/BUG_HUNTING.md` §8 for <symptom>" or
+"Hunt §6.<n> for <subsystem>". Keep each session scoped to **one** subsystem. Broad "find all
+the bugs" sessions produce shallow results.
 
 ---
 
-## 13. Milestone Sweep
+## 12. Release gate checklist
 
-A full sweep of every implemented subsystem, run after each milestone. Two halves:
+Before a release:
+- [ ] CI is green. `make test` and `make test-full` pass in **both** profiles (§2).
+- [ ] The full config matrix (§4.2) passes for every row the implemented features support.
+- [ ] `make analyze` ran, and every finding is triaged.
+- [ ] The syscall fuzzer ran 10+ minutes with no panic (once syscalls exist).
+- [ ] No open S1 or S2 bugs.
+- [ ] Real hardware has booted at least once (the owner check is recorded).
+- [ ] The release notes (the milestone log Summaries) list the bugs that were fixed.
 
-**Automated (free, runs on tag push):**
-```sh
-git tag milestone/<name> && git push origin milestone/<name>
-```
-This triggers `.github/workflows/milestone-sweep.yml`: static analysis plus the full §4.2 boot matrix (16 QEMU runs). Wait for it to finish before starting the Claude half.
+---
 
-**Claude Code (manual kickoff in a cloud session):**
+## 13. Milestone sweep
+
+A full sweep of every implemented subsystem, run after a milestone merges. It has two halves:
+
+**Automated (CI):** `.github/workflows/milestone-sweep.yml` runs from the Actions tab
+("Run workflow"), or it runs itself when a `sweep/*` branch is pushed. It builds both
+profiles, runs `make test-full` and the release `make test`, and runs `make analyze`, then
+uploads the logs and the analyzer report.
+
+**Claude (a cloud session the owner starts):**
 ```
-/milestone-sweep <name>
+/milestone-sweep M<p>.<n>
 ```
-This runs `.claude/skills/milestone-sweep/SKILL.md`, which acts as a coordinator: baseline build and tests, scopes which subsystems exist and which changed, then hands each subsystem to the `subsystem-hunter` subagent (`.claude/agents/subsystem-hunter.md`) one at a time, so each gets a fresh context. Reports land in `docs/sweeps/<name>/`, with `SUMMARY.md` as the entry point. All work happens on a `sweep/<name>` branch for review before merging.
+This runs `.claude/skills/milestone-sweep/SKILL.md`. It acts as a coordinator: a baseline in
+both profiles, then scoping which subsystems exist and which changed, then handing each
+subsystem to `subsystem-hunter` one at a time, so each gets a fresh context. The reports land
+in `docs/sweeps/M<p>.<n>-full/`, with `SUMMARY.md` as the entry point. All the work happens on
+a `sweep/M<p>.<n>` branch, for the owner to review before merging.
 
 **Sweep policy:**
-- S1/S2 bugs with a solid repro get fixed during the sweep (max 3 per subsystem).
-- S3/S4 bugs get logged only and fixed in normal sessions later.
+- S1 and S2 bugs with a solid repro get fixed during the sweep (at most 3 per subsystem).
+- S3 and S4 bugs get logged only, and are fixed later in normal sessions.
 - Unverified checklist items in `SUMMARY.md` become the next session's to-do list.
