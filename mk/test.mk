@@ -65,6 +65,14 @@ PMM_REQUIRED_KTESTS := pmm_alloc_free_stress pmm_no_leak pmm_zone_correctness pm
 PAGING_REQUIRED_KTESTS := paging_text_write_faults paging_data_exec_faults paging_fb_wc \
                          paging_wx_verify paging_text_hhdm_alias_readonly vmm_map_unmap \
                          loader_reclaimed
+# M2.4's Done-when clauses (ROADMAP.md): stress, alignment, redzone overflow detected, a guard page
+# write faults -- plus the rest of kmalloc_test.c / vmalloc_test.c. Same reasoning: exit 33 alone
+# wouldn't notice a dropped test file.
+SLAB_REQUIRED_KTESTS := kmalloc_stress kmalloc_alignment kmalloc_double_free slab_ctor_dtor \
+                        kmalloc_redzone_overflow kmalloc_poison_detects_uaf \
+                        vmalloc_guard_page_faults vmalloc_map_free_no_leak \
+                        vmalloc_interior_free_rejected vmalloc_not_vmalloc_page_rejected \
+                        vmalloc_oom_rollback
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus mem; do \
@@ -100,6 +108,12 @@ _check-ktest-pass:
 	    for t in $(PAGING_REQUIRED_KTESTS); do \
 	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
 	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M2.3 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
+	    for t in $(SLAB_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M2.4 Done-when guarantee not met)"; \
 	            status=1; \
 	        fi; \
 	    done; \
