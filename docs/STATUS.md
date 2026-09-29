@@ -20,7 +20,7 @@ Start **M2.6 KASLR + kernel RNG** (`needs-owner`). Its Needs, M2.4 and M2.5, are
 4. The first commit also adds M2.4's Done-when ktests to `_check-ktest-pass` (see Open leads).
 
 ## Current milestone
-**M2.6 KASLR + kernel RNG** in progress on branch `claude/amazing-cray-tovyk0` (log: `docs/logs/M2.6.md`). Architect design done (in the log); step 1 (loader relocation code) committed; next is bug-sweeper on step 1, then step 2.
+**M2.6 KASLR + kernel RNG** in progress on branch `claude/amazing-cray-tovyk0` (log: `docs/logs/M2.6.md`). Architect design done (in the log); steps 1 (loader relocation code) and 2 (kernel slide awareness: kernelSlide, ksymDecodeLookupSlid, backtrace slide line, BootInfo window check, `kaslr:` log line, ktest `ksym_slide_accounted`) committed; next is bug-sweeper step mode on step 2, then step 3 (wire both loaders, kaslr-check.sh, kaslr-off image, kaslr ktests; see the log's Next step).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
