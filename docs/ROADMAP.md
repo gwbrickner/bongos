@@ -13,11 +13,10 @@
   logged in the milestone log. Everything else in the milestone can still merge.
 - **Done when** lists objective checks. All of them must pass in `make test` (or
   `make test-full`/`make host-tests` where stated), in a cloud session, before the PR.
-- **Finishing a milestone:**
-  1. Check its box here.
-  2. Update `docs/STATUS.md`.
-  3. Merge the PR.
-  4. Tag `v0.<phase>.<n>` (from phase 16 on: `v1.<phase-15>.<n>`).
+- **Finishing a milestone:** follow `CLAUDE.md` "Finishing a milestone" (tests, then the
+  `bug-sweeper` and `reviewer` gates, then the screenshot, this file's box, STATUS.md, and
+  the PR). When the squash commit `M<p>.<n>: ...` lands on main, `release.yml` tags
+  `v0.<phase>.<n>` (from phase 16 on: `v1.<phase-15>.<n>`) and publishes the image.
 - **Releases:** CI publishes the image for each tag. The GitHub Release title uses the
   phase's codename.
 

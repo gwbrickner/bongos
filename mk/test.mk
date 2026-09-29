@@ -6,7 +6,7 @@
 # image (build/bongos.img) never runs ktests or writes port 0xF4. `make test` also runs the M1.4
 # GUI screenshot tests (D-070, tests/gui/run.sh) and a countdown smoke test against the shipped
 # boot.cfg, on top of the ktest matrix.
-.PHONY: test test-full _check-ktest-pass gui-test update-refs
+.PHONY: test test-full _check-ktest-pass gui-test update-refs screenshot
 test: image imgdiff
 	tests/harness/run-matrix.sh tests/harness/matrix.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix.conf
@@ -27,6 +27,12 @@ test-full: image
 FW ?= uefi
 gui-test: image imgdiff
 	tests/gui/run.sh --fw $(FW)
+
+# Boots the normal image (build/bongos.img, no ktests) and saves its final screen as a PNG (D-115).
+# The finish protocol (CLAUDE.md) runs `make screenshot SHOT=docs/screenshots/M<p>.<n>.png`.
+SHOT ?= build/shots/final.png
+screenshot: image imgdiff
+	tests/harness/screenshot.sh --fw $(FW) --out '$(SHOT)'
 
 # Captures fresh GUI test reference PNGs. The caller must view every regenerated PNG and record
 # why in the milestone log before committing (CLAUDE.md: regenerating a reference to turn a

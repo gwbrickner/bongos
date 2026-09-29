@@ -1,6 +1,6 @@
 # Merge policy (D-045): PRs that touch sensitive areas (or say "needs-owner: yes") get the
 # needs-owner label and wait for the owner. Everything else auto-merges once CI is green,
-# as long as the PR body says "Reviewer: PASS".
+# as long as the PR body says both "Sweeper: PASS" and "Reviewer: PASS" (D-118).
 # Requires: repo setting "Allow auto-merge", branch protection on main requiring the "ci"
 # check, and (recommended) a BOT_TOKEN secret so merges trigger the release workflow.
 name: pr-policy
@@ -34,9 +34,14 @@ jobs:
             echo "Sensitive area -> needs-owner; waiting for the owner."
             exit 0
           fi
-          if echo "$body" | grep -q 'Reviewer: PASS'; then
+          # Whole-line matches only (CRLF-safe), so template placeholders or prose that merely
+          # mention "PASS" can never enable auto-merge.
+          clean=$(printf '%s\n' "$body" | tr -d '\r')
+          if printf '%s\n' "$clean" | grep -Eq '^Sweeper: PASS( \(docs/sweeps/M[0-9]+\.[0-9]+\.md\))?$' &&
+             printf '%s\n' "$clean" | grep -Eq '^Reviewer: PASS$'; then
             gh pr merge "$PR" --auto --squash -R "$REPO"
             echo "Auto-merge enabled; merges when CI is green."
           else
-            echo "No 'Reviewer: PASS' in the PR body; not enabling auto-merge."
+            gh pr merge "$PR" --disable-auto -R "$REPO" || true
+            echo "The PR body lacks 'Sweeper: PASS' and/or 'Reviewer: PASS'; auto-merge is off."
           fi

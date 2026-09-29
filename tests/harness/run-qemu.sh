@@ -11,7 +11,7 @@ usage: run-qemu.sh [options]
   --mem MB          RAM in MiB (default 512)
   --timeout S       seconds before HANG (default 120)
   --name NAME       log name (default <fw>-<cpus>cpu)
-  --debug           add -d int,cpu_reset logging to build/logs/NAME.qemu.log
+  --debug           add -d int,cpu_reset logging to build/logs/NAME.qemu.log (forces TCG)
   --interactive     show a window / serial on stdio, no timeout (for humans)
   --gdb             start paused with -s -S, serial to a log file, and return immediately;
                      writes its pid to build/run/NAME.pid so a caller can gdb it and kill it
@@ -24,11 +24,15 @@ usage: run-qemu.sh [options]
                      (expect/screendump/send steps) before letting the guest (ktest=all) drive
                      QEMU to its own isa-debug-exit, mapped to PASS/FAIL/HANG as usual.
                      Screendumps land in build/shots/NAME-<step-name>.ppm.
+  --script-only     with --script: the run ends when the script does (its last step should be
+                     `quit`), PASS if every step succeeded. For images that never reach
+                     isa-debug-exit, e.g. tests/harness/screenshot.sh on build/bongos.img.
 Monitor socket: build/run/NAME.monitor (screendump, sendkey, system_powerdown).
 Serial log:     build/logs/NAME.serial.log
 USAGE
 }
 IMAGE=build/bongos.img FW=uefi CPUS=1 MEM=512 TIMEOUT=120 NAME="" DEBUG=0 INTERACTIVE=0 GDBMODE=0 EXTRA="" SCRIPT=""
+SCRIPT_ONLY=0
 EXPECT_PATTERNS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -36,11 +40,12 @@ while [ $# -gt 0 ]; do
         --mem) MEM=$2; shift 2 ;; --timeout) TIMEOUT=$2; shift 2 ;; --name) NAME=$2; shift 2 ;;
         --debug) DEBUG=1; shift ;; --interactive) INTERACTIVE=1; shift ;; --gdb) GDBMODE=1; shift ;;
         --extra) EXTRA=$2; shift 2 ;; --expect-serial) EXPECT_PATTERNS+=("$2"); shift 2 ;;
-        --script) SCRIPT=$2; shift 2 ;;
+        --script) SCRIPT=$2; shift 2 ;; --script-only) SCRIPT_ONLY=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option $1"; usage; exit 2 ;;
     esac
 done
+[ "$SCRIPT_ONLY" = 1 ] && [ -z "$SCRIPT" ] && { echo "--script-only needs --script"; usage; exit 2; }
 [ -n "$NAME" ] || NAME="${FW}-${CPUS}cpu"
 mkdir -p build/logs build/run
 [ -f "$IMAGE" ] || { echo "RESULT $NAME: ERROR (no image at $IMAGE)"; exit 1; }
@@ -69,8 +74,9 @@ if [ "$FW" = "uefi" ]; then
     fi
 fi   # bios: QEMU's default SeaBIOS
 
+# --debug forces TCG: `-d int` logs nothing under KVM.
 ACCEL=(-accel tcg)
-[ -w /dev/kvm ] && ACCEL=(-accel kvm -accel tcg)
+[ -w /dev/kvm ] && [ "$DEBUG" != 1 ] && ACCEL=(-accel kvm -accel tcg)
 
 DBG=()
 [ "$DEBUG" = 1 ] && DBG=(-d int,cpu_reset -D "build/logs/$NAME.qemu.log")
@@ -118,6 +124,18 @@ if [ -n "$SCRIPT" ]; then
     python3 tests/harness/qemu-script.py --serial "$SERIAL_SOCK" --qmp "$QMP_SOCK" \
         --log "$LOG" --shots "$SHOTS_DIR" --prefix "$FW" --timeout "$TIMEOUT" "$SCRIPT"
     scriptStatus=$?
+
+    if [ "$SCRIPT_ONLY" = 1 ]; then
+        kill "$qemupid" 2>/dev/null
+        wait "$qemupid" 2>/dev/null
+        trap - EXIT
+        if [ "$scriptStatus" -ne 0 ]; then
+            echo "RESULT $NAME: ERROR (script $SCRIPT failed; see above and $LOG)"
+            exit 1
+        fi
+        echo "RESULT $NAME: PASS"
+        exit 0
+    fi
 
     # The script's own steps are done; the guest's `ktest=all` cmdline still needs to run its
     # ktests and drive QEMU to isa-debug-exit on its own, within whatever's left of the timeout.

@@ -2,19 +2,35 @@
 **Branch:** `m<p>-<n>-<slug>` · **Started:** <YYYY-MM-DD> · **State:** in progress | done | blocked
 
 ## Summary
-_Fill this in when the milestone is finished: what it delivers, in 3-6 lines. It becomes the release notes._
+_Fill this in when the milestone is finished: what it delivers, in 3–6 lines. It becomes the
+release notes, so write for a reader who hasn't seen the log._
 
 ## Plan
-_Break the roadmap steps into concrete sub-steps. Note which subagents you'll consult._
+_Break the roadmap steps into concrete sub-steps. For each one, name the files, the tests that
+prove it, and which Done-when clause it serves. Mark the **risky** ones (CLAUDE.md "Working"):
+they get an `architect` consult before, and a `bug-sweeper` step pass after._
+
+| # | Sub-step | Risky? | Tests that prove it |
+|---|---|---|---|
+| 1 | | | |
 
 ## Log
-_Newest entry at the bottom. Add one entry per working step, and at least every ~30 minutes._
+_Newest entry at the bottom. Add one entry per working step, and at least one every ~30
+minutes._
 
 ### <YYYY-MM-DD HH:MM>: <short title>
-- **Changed:** files and areas
+- **Changed:** files and functions
 - **Why:**
-- **Tests:** what ran, and the result
-- **Next step:** precise enough for a fresh session to continue
+- **Tests:** the exact commands run, and their results (PASS/FAIL counts)
+- **State:** green | WIP (what fails, and why)
+- **Next step:** the file, function, and failing test, plus the command to reproduce it.
+  Precise enough for a fresh session to continue.
+
+## Verification (fill in at the finish)
+- **Tests:** `make format-check` / `make host-tests` / `make test` / `make test-full`: results
+- **bug-sweeper:** `SWEEP: PASS` at `<sha>`. Report: `docs/sweeps/M<p>.<n>.md`
+- **reviewer:** `VERDICT: PASS`. Any Should-fix items deferred, and why
+- **Screenshot:** `docs/screenshots/M<p>.<n>.png`, checked visually: <what it shows>
 
 ## Decisions made
 _Link the D-0xx entries added to DECISIONS.md._

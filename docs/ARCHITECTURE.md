@@ -4,6 +4,25 @@ This is the source of truth for every design decision. If code and this document
 this document wins, unless a newer entry in `docs/DECISIONS.md` changes it. When that
 happens, update this document in the same PR.
 
+**Index.** Read only the sections your work touches. `grep -n '^## \|^### ' docs/ARCHITECTURE.md`
+lists every subsection with its line number.
+
+| § | Section | § | Section |
+|---|---|---|---|
+| 0 | Vision and scope (and the third-party exceptions) | 13 | Devices and drivers |
+| 1 | Targets (QEMU, the reference PC, minimum CPU) | 14 | ACPI |
+| 2 | Repository layout | 15 | Storage and filesystems |
+| 3 | Build and toolchain (profiles, flags, make targets) | 16 | Networking |
+| 4 | Coding conventions | 17 | Crypto (**EXPERIMENTAL**) |
+| 5 | Boot: disk image, boot.cfg, **BootInfo ABI**, entry state, UEFI/BIOS loaders | 18 | Userspace |
+| 6 | Memory management: VA layout, pmm, paging, VM objects, swap, randomization | 19 | Graphics and GUI |
+| 7 | CPU, SMP, interrupts, time, locking | 20 | Audio |
+| 8 | Scheduler | 21 | Security summary |
+| 9 | Kernel objects, handles, capabilities | 22 | Linux binary compatibility |
+| 10 | Native system call ABI | 23 | Testing strategy (ktest protocol, archTrapCatch) |
+| 11 | IPC and userspace drivers | 24 | Debugging and observability |
+| 12 | Loadable kernel modules | 25 | Project process (releases, merge policy) |
+
 ---
 
 ## 0. Vision and scope
@@ -155,7 +174,9 @@ state machine; the slab allocator's own bufctl-based double-free/bad-pointer che
 release builds too; `KERNEL_DEBUG` is only for checks with a real per-operation cost.
 
 **Make targets:** `all`, `image` (-> `build/bongos.img`), `test` (quick matrix), `test-full`,
-`host-tests`, `debug`, `run`, `run-bios`, `gdb`, `format`, `lint`, `clean`.
+`host-tests`, `gui-test`, `update-refs`, `analyze` (Clang static analyzer, D-116), `screenshot`
+(final boot screen -> PNG, D-115), `debug`, `run`, `run-bios`, `gdb`, `format`, `format-check`,
+`lint`, `clean`. The build doesn't track compiler flags, so switching `RELEASE` needs a `make clean`.
 
 ---
 
@@ -1176,6 +1197,8 @@ Every milestone ships with tests, and `make test` must pass before any PR.
 | Network interop | from the host: `ping`, OpenSSH `ssh`, `curl`, `openssl s_server`, via QEMU user networking + `hostfwd` | `tests/net/` |
 | Audio | capture QEMU WAV output, check tone | `tests/audio/` |
 | GUI | QEMU monitor `screendump` compared against reference PNGs with a tolerance (`tools/imgdiff`) | `tests/gui/` |
+| Milestone screenshot | the final boot screen of `build/bongos.img`, committed per milestone and embedded in the PR (D-115) | `make screenshot`, `docs/screenshots/` |
+| Static analysis | Clang analyzer over the kernel sources; findings triaged by `bug-sweeper` (D-116) | `make analyze` |
 | Real hardware | manual checklist in the milestone, run by the owner, result recorded in the milestone log | `docs/ROADMAP.md` |
 
 **Result protocol:** the kernel prints `KTEST PASS name` or `KTEST FAIL name: reason` on
@@ -1225,8 +1248,9 @@ stay always-fatal, or (#BP) already resume unconditionally before archTrapCatch 
     in the release titles, e.g. "bongOS 0.2.3 (Blue Dream)".
   - `v1.0` means daily-drivable: the desktop, the core apps, networking, packages, and
     installing to a real disk all work.
-- **Merge policy:** PRs auto-merge when CI is green **and** the `reviewer` subagent reports no
-  Critical findings. The exception is any PR labeled `needs-owner`, which waits for the owner.
+- **Merge policy:** PRs auto-merge when CI is green **and** the PR body carries both
+  `Sweeper: PASS` (the `bug-sweeper` subagent's finish-mode gate, D-118) and `Reviewer: PASS`
+  (the `reviewer` subagent reports no Critical findings). The exception is any PR labeled `needs-owner`, which waits for the owner.
   These PRs always get the label:
   - memory management
   - interrupts or SMP
@@ -1234,4 +1258,6 @@ stay always-fatal, or (#BP) already resume unconditionally before archTrapCatch 
   - security features or crypto
   - on-disk filesystem formats
   - the boot handoff ABI
-- **Progress logging, decisions, and session rules:** see `CLAUDE.md`.
+  - the project's own automation: `.github/` and `.claude/` (workflows, agents, hooks)
+- **Progress logging, decisions, session rules, and the PR gate:** see `CLAUDE.md`. Bug
+  handling: `docs/BUG_HUNTING.md`.

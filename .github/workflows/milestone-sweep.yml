@@ -1,71 +1,57 @@
-# Runs automatically when you push a milestone tag, e.g.:
-#   git tag milestone/paging && git push origin milestone/paging
-# Assumes make targets: debug, release, ktest (PROFILE=debug|release -> build/bongos-ktest.iso), analyze
-# Adjust target names and ISO path to match your Makefile.
-
-name: Milestone Sweep
+# The automated half of a milestone sweep (docs/BUG_HUNTING.md §13): both build profiles, the full
+# boot matrix, and the Clang static analyzer. Run it from the Actions tab ("Run workflow"), or
+# push a sweep/* branch (the /milestone-sweep skill creates one).
+name: milestone-sweep
 
 on:
   push:
-    tags: ['milestone/*']
+    branches: ['sweep/**']
   workflow_dispatch:
 
-jobs:
-  static-analysis:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y nasm xorriso cppcheck clang clang-tools gcc
-      - name: Build debug + release
-        run: make debug && make release
-      - name: GCC analyzer
-        run: make analyze 2>&1 | tee gcc-analyzer.txt
-      - name: cppcheck
-        run: cppcheck --enable=all --inconclusive --inline-suppr src/ 2> cppcheck.txt || true
-      - name: Clang static analyzer
-        run: scan-build -o scan-results make debug || true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: static-analysis
-          path: |
-            gcc-analyzer.txt
-            cppcheck.txt
-            scan-results/
+# The skill pushes several times per sweep; only the newest push's run matters.
+concurrency:
+  group: milestone-sweep-${{ github.ref }}
+  cancel-in-progress: true
 
-  boot-matrix:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        mem: [64M, 512M, 4G, 8G]
-        smp: [1, 4]
-        profile: [debug, release]
+jobs:
+  sweep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 nasm xorriso
-      - name: Build ktest ISO
-        run: make ktest PROFILE=${{ matrix.profile }}
-      - name: Run ktest in QEMU
+      - name: Enable KVM (falls back to TCG if unavailable)
         run: |
-          set +e
-          timeout 120 qemu-system-x86_64 \
-            -machine q35 -m ${{ matrix.mem }} -smp ${{ matrix.smp }} \
-            -cdrom build/bongos-ktest.iso \
-            -serial file:serial.log -display none \
-            -no-reboot \
-            -device isa-debug-exit,iobase=0xf4,iosize=0x04
-          code=$?
-          echo "QEMU exit code: $code"
-          if [ $code -eq 124 ]; then echo "::error::Timed out (hang?)"; exit 1; fi
-          if grep -qE "PANIC|UBSAN|stack smashed|KTEST FAIL" serial.log; then
-            echo "::error::Failure markers found in serial log"; exit 1
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+      - name: Install dependencies
+        run: sudo bash tools/ci/install-deps.sh
+      - name: Format check
+        run: make format-check
+      - name: Host tests
+        run: make host-tests
+      - name: Debug build + full boot matrix
+        run: make && make test-full
+      - name: Static analysis
+        run: make analyze
+      - name: Save debug logs
+        if: always()
+        run: mkdir -p sweep-out && cp -r build/logs sweep-out/debug-logs 2>/dev/null; cp build/analyze/report.txt sweep-out/analyze.txt 2>/dev/null; true
+      # The build doesn't track flags, so switching profiles needs a clean (docs/BUG_HUNTING.md §2).
+      - name: Release build + boot matrix
+        id: release
+        run: make clean && make RELEASE=1 && make RELEASE=1 test
+      - name: Save release logs
+        if: always() && steps.release.outcome != 'skipped'
+        run: cp -r build/logs sweep-out/release-logs 2>/dev/null; true
+      - name: Scan serial logs for failure markers
+        if: always()
+        run: |
+          if grep -rlE 'PANIC|UBSAN|stack smashed|KTEST FAIL' sweep-out/*-logs/*.serial.log 2>/dev/null; then
+            echo "::error::Failure markers found in the serial logs above"; exit 1
           fi
-          if [ $code -ne 33 ]; then echo "::error::Unexpected exit code $code"; exit 1; fi
-      - name: Upload logs on failure
-        if: failure()
+      - name: Upload sweep artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: serial-${{ matrix.mem }}-smp${{ matrix.smp }}-${{ matrix.profile }}
-          path: serial.log
+          name: milestone-sweep
+          path: sweep-out
