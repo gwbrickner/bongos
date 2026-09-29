@@ -38,7 +38,8 @@ BIOS_STAGE2_COMMON_SOURCES := boot/common/bootmem.c boot/common/memmap.c boot/co
                                boot/common/bootgpt.c boot/common/bootfat.c boot/common/bootcfg.c \
                                boot/common/bootvideo.c boot/common/elf.c boot/common/paging.c \
                                boot/common/boothandoff.c boot/common/bootacpi.c \
-                               boot/common/fbtext.c boot/common/bootmenu.c boot/common/bootkey.c
+                               boot/common/fbtext.c boot/common/bootmenu.c boot/common/bootkey.c \
+                               boot/common/elf-reloc.c boot/common/bootkaslr.c
 BIOS_STAGE2_ASM_SOURCES := boot/bios/stage2/entry.asm boot/bios/stage2/rm.asm \
                            boot/bios/stage2/trampoline.asm
 # fbtext.c links against the generated font data (mk/font.mk's $(CONSOLE_FONT_C)), not a

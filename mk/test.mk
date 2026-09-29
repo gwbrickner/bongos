@@ -7,7 +7,7 @@
 # GUI screenshot tests (D-070, tests/gui/run.sh) and a countdown smoke test against the shipped
 # boot.cfg, on top of the ktest matrix.
 .PHONY: test test-full _check-ktest-pass gui-test update-refs screenshot
-test: image imgdiff
+test: image imgdiff kaslr-reloc-check
 	tests/harness/run-matrix.sh tests/harness/matrix.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix.conf
 	tests/gui/run.sh --fw uefi
@@ -17,7 +17,7 @@ test: image imgdiff
 	tests/harness/run-qemu.sh --fw bios --image $(IMAGE) --name countdown-smoke-bios --timeout 30 \
 		--expect-serial "loader: timeout, booting default" --expect-serial "kernel: init done"
 
-test-full: image
+test-full: image kaslr-reloc-check
 	tests/harness/run-matrix.sh tests/harness/matrix-full.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix-full.conf
 

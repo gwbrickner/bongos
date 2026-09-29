@@ -114,3 +114,45 @@ $(KERNEL_ELF): $(KERNEL_OBJECTS) $(KSYMS_OBJECT) $(KERNEL_LD) $(KSYMS_BIN)
 
 .PHONY: kernel
 kernel: branding $(KERNEL_ELF)
+
+# KASLR relocation cross-check (M2.6, D-120, docs/logs/M2.6.md "A6"): the loader slides kernel.elf
+# by adding the slide to every 64/32S relocation (boot/common/elf-reloc.c). That must be exactly
+# what linking at the slid base would have produced, so relink the SAME objects with a copy of
+# kernel.ld whose KERNEL_LINK_BASE is 0x1E000000 higher, and have tools/kaslrcheck run the loader's
+# own elfParse/elfLoad/elfRelocate on kernel.elf and require a byte-identical image. The sed is
+# guarded: the build fails unless exactly one line of kernel.ld changed, so a reworded linker
+# script cannot silently turn this into "compare the kernel with itself".
+KASLR_CHECK_SLIDE := 0x1E000000
+KERNEL_ALT_LD  := $(KERNEL_BUILD)/kernel.alt.ld
+KERNEL_ALT_ELF := $(KERNEL_BUILD)/kernel.alt.elf
+KASLRCHECK_BIN := $(BUILD)/tools/kaslrcheck/kaslrcheck
+KASLRCHECK_SRCS := tools/kaslrcheck/main.c boot/common/elf.c boot/common/elf-reloc.c \
+                   boot/common/bootmem.c boot/common/boot-status.c
+
+$(KERNEL_ALT_LD): $(KERNEL_LD)
+	@mkdir -p $(dir $@)
+	@n=$$(grep -c '^KERNEL_LINK_BASE[[:space:]]*=[[:space:]]*0xFFFFFFFF80000000;' $<); \
+	if [ "$$n" != 1 ]; then \
+	    echo "mk/kernel.mk: $< must contain exactly one 'KERNEL_LINK_BASE = 0xFFFFFFFF80000000;' line (found $$n)"; \
+	    exit 1; \
+	fi
+	sed 's/^\(KERNEL_LINK_BASE[[:space:]]*=[[:space:]]*\)0xFFFFFFFF80000000;/\10xFFFFFFFF9E000000;/' $< > $@
+	@changed=$$(diff $< $@ | grep -c '^>'); \
+	if [ "$$changed" != 1 ] || ! grep -q '^KERNEL_LINK_BASE[[:space:]]*=[[:space:]]*0xFFFFFFFF9E000000;' $@; then \
+	    echo "mk/kernel.mk: sed changed $$changed lines of $< (want exactly 1, KERNEL_LINK_BASE)"; \
+	    rm -f $@; exit 1; \
+	fi
+
+$(KERNEL_ALT_ELF): $(KERNEL_OBJECTS) $(KSYMS_OBJECT) $(KERNEL_ALT_LD)
+	@mkdir -p $(dir $@)
+	ld.lld -T $(KERNEL_ALT_LD) -nostdlib -static --emit-relocs -z max-page-size=0x1000 \
+		--build-id=none --orphan-handling=error -o $@ $(KERNEL_OBJECTS) $(KSYMS_OBJECT)
+
+$(KASLRCHECK_BIN): $(KASLRCHECK_SRCS) $(wildcard boot/common/include/*.h)
+	@mkdir -p $(dir $@)
+	clang -std=c17 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
+		-fno-sanitize-recover=all -Iboot/common/include -o $@ $(KASLRCHECK_SRCS)
+
+.PHONY: kaslr-reloc-check
+kaslr-reloc-check: $(KERNEL_ELF) $(KERNEL_ALT_ELF) $(KASLRCHECK_BIN)
+	ASAN_OPTIONS=detect_leaks=0 $(KASLRCHECK_BIN) $(KERNEL_ELF) $(KERNEL_ALT_ELF) $(KASLR_CHECK_SLIDE)
