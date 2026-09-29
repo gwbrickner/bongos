@@ -18,6 +18,10 @@ Script grammar (one step per line, blank lines and '#'-comments ignored):
                        \\xHH -- OVMF's TerminalDxe decodes VT100 escapes (e.g. \\e[B for the down
                        arrow) the same way a real serial terminal would, and delivers them to
                        ConIn merged with the PS/2/USB keyboard (ARCHITECTURE §5.5, D-068).
+  sleep <seconds>     keeps teeing serial into the log for <seconds> (a float), e.g. to let the
+                       framebuffer settle after the last expected line before a screendump.
+  quit                QMP `quit`: QEMU exits immediately. Used by --script-only runs (D-099's
+                       tests/harness/screenshot.sh), which never reach isa-debug-exit.
 """
 import argparse
 import json
@@ -111,6 +115,13 @@ class Qmp:
             if "error" in msg:
                 raise ScriptError(f"QMP command failed: {msg['error']}")
             # else: an async event ("event": ...) -- ignore and keep reading.
+
+    def quit(self):
+        # QEMU may close the socket before (or instead of) replying, so a missing reply is fine.
+        try:
+            self.execute("quit")
+        except (ScriptError, OSError):
+            pass
 
     def execute(self, command, **arguments):
         self._send({"execute": command, "arguments": arguments} if arguments else {"execute": command})
@@ -228,6 +239,14 @@ def run_script(script_path, serial_sock_path, qmp_sock_path, log_path, shots_dir
                     do_screendump(qmp, shots_dir, prefix, line[len("screendump ") :].strip())
                 elif line.startswith("send "):
                     serial_raw.sendall(unescape(line[len("send ") :]))
+                elif line.startswith("sleep "):
+                    try:
+                        seconds = float(line[len("sleep ") :])
+                    except ValueError:
+                        raise ScriptError(f"bad sleep duration: {line}")
+                    serial.drain_until_closed(time.monotonic() + seconds)
+                elif line == "quit":
+                    qmp.quit()
                 else:
                     raise ScriptError(f"unrecognized step: {line}")
             except ScriptError as e:
