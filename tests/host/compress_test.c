@@ -300,3 +300,26 @@ TEST(compressChecksumVectors) {
     uint32_t a = compressAdler32(1, wiki, 4);
     ASSERT_EQ(compressAdler32(a, wiki + 4, 5), (uint32_t)0x11E60398u);
 }
+
+/* An empty output needs no buffer: `out` may be NULL when `outCap` is 0. Zero-length stored
+ * blocks (what zlib emits for an empty input at level 0, and for every Z_SYNC_FLUSH) must not do
+ * pointer arithmetic or a memcpy on that NULL (UB, which UBSan traps here). */
+TEST(compressInflateEmptyOutputWithNullBuffer) {
+    static const uint8_t storedEmpty[] = {0x78, 0x01, 0x01, 0x00, 0x00, 0xFF,
+                                          0xFF, 0x00, 0x00, 0x00, 0x01};
+    static const uint8_t fixedEmpty[] = {0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01};
+    static const uint8_t storedOne[] = {0x01, 0x01, 0x00, 0xFE, 0xFF, 'A'};
+    size_t outLen = 99, used = 99;
+    ASSERT_EQ(compressZlibInflate(storedEmpty, sizeof(storedEmpty), NULL, 0, &outLen, &used),
+              STATUS_OK);
+    ASSERT_EQ(outLen, (size_t)0);
+    ASSERT_EQ(used, sizeof(storedEmpty));
+    ASSERT_EQ(compressZlibInflate(fixedEmpty, sizeof(fixedEmpty), NULL, 0, &outLen, &used),
+              STATUS_OK);
+    ASSERT_EQ(outLen, (size_t)0);
+    ASSERT_EQ(used, sizeof(fixedEmpty));
+    ASSERT_EQ(compressInflateRaw(storedOne, sizeof(storedOne), NULL, 0, &outLen, &used),
+              STATUS_ERR_NO_MEMORY);
+    ASSERT_EQ(compressInflateRaw(NULL, 0, NULL, 0, NULL, NULL), STATUS_ERR_INVALID);
+    ASSERT_EQ(compressZlibInflate(NULL, 0, NULL, 0, NULL, NULL), STATUS_ERR_INVALID);
+}

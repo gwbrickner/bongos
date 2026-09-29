@@ -328,7 +328,9 @@ Status compressInflateRaw(const uint8_t *in, size_t inLen, uint8_t *out, size_t 
                 st = STATUS_ERR_NO_MEMORY;
                 break;
             }
-            memcpy(out + produced, br.data + br.bytePos, len);
+            if (len > 0) { /* `out` may be NULL when outCap is 0 (compress.h) */
+                memcpy(out + produced, br.data + br.bytePos, len);
+            }
             produced += len;
             br.bytePos += len;
         } else if (btype == 1 || btype == 2) {

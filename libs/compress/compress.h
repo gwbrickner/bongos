@@ -14,9 +14,10 @@
 
 #include "uapi/status.h"
 
-/* Decompresses the raw DEFLATE stream `in[0..inLen)` into `out` (capacity `outCap`), setting
- * `*outLen` to the bytes produced and `*inUsed` to the bytes of `in` the stream occupied
- * (including the final partial byte). Either out-parameter may be NULL. Decoding stops at the
+/* Decompresses the raw DEFLATE stream `in[0..inLen)` into `out` (capacity `outCap`; `out` may be
+ * NULL when `outCap` is 0), setting `*outLen` to the bytes produced and `*inUsed` to the bytes of
+ * `in` the stream occupied (including the final partial byte). Either out-parameter may be NULL.
+ * On failure `*outLen` is the partial output and `*inUsed` is 0. Decoding stops at the
  * final block; trailing input is left alone. Rejects over-subscribed and (except the single-code
  * case zlib allows) incomplete Huffman codes, hlit > 286, hdist > 30, and a dynamic block with no
  * end-of-block code. */
