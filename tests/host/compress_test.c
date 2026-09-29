@@ -323,3 +323,23 @@ TEST(compressInflateEmptyOutputWithNullBuffer) {
     ASSERT_EQ(compressInflateRaw(NULL, 0, NULL, 0, NULL, NULL), STATUS_ERR_INVALID);
     ASSERT_EQ(compressZlibInflate(NULL, 0, NULL, 0, NULL, NULL), STATUS_ERR_INVALID);
 }
+
+/* RFC 1950 §2.2: CINFO (the window size, CMF bits 4-7) above 7 is not allowed; zlib rejects it
+ * ("invalid window size"). Every CINFO 0..7 with a valid FCHECK is accepted. */
+TEST(compressZlibRejectsCinfoAbove7) {
+    size_t zLen = 0;
+    uint8_t *z = readFixture("text.z6", &zLen);
+    ASSERT_TRUE(z != NULL);
+    uint8_t *out = malloc(16384);
+    ASSERT_TRUE(out != NULL);
+    for (uint32_t cinfo = 0; cinfo < 16; cinfo++) {
+        z[0] = (uint8_t)((cinfo << 4) | 8);
+        z[1] = 0x80; /* FLEVEL 2, FDICT 0; fix up FCHECK below */
+        z[1] = (uint8_t)(z[1] + (31 - ((uint32_t)z[0] * 256u + z[1]) % 31u) % 31u);
+        size_t outLen = 0;
+        Status st = compressZlibInflate(z, zLen, out, 16384, &outLen, NULL);
+        ASSERT_EQ(st, cinfo <= 7 ? STATUS_OK : STATUS_ERR_INVALID);
+    }
+    free(out);
+    free(z);
+}

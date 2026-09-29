@@ -23,6 +23,9 @@ Status compressZlibInflate(const uint8_t *in, size_t inLen, uint8_t *out, size_t
     if ((cmf & 0x0Fu) != 8) {
         return STATUS_ERR_INVALID; /* CM must be 8 (deflate) */
     }
+    if ((cmf >> 4) > 7) {
+        return STATUS_ERR_INVALID; /* CINFO (log2(window) - 8) above 7: RFC 1950 §2.2 */
+    }
     if (((uint32_t)cmf * 256u + flg) % 31u != 0) {
         return STATUS_ERR_INVALID; /* FCHECK */
     }

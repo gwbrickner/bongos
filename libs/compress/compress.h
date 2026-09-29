@@ -24,10 +24,10 @@
 Status compressInflateRaw(const uint8_t *in, size_t inLen, uint8_t *out, size_t outCap,
                           size_t *outLen, size_t *inUsed);
 
-/* zlib format: validates the 2-byte header (CM=8, FCHECK, no preset dictionary), inflates, and
- * verifies the Adler-32 that follows the DEFLATE stream (read at in[2 + rawUsed], not at the end
- * of `in`, so a caller may pass a buffer with trailing bytes). `*inUsed` counts the whole zlib
- * stream, trailer included. */
+/* zlib format: validates the 2-byte header (CM=8, CINFO<=7, FCHECK, no preset dictionary),
+ * inflates, and verifies the Adler-32 that follows the DEFLATE stream (read at in[2 + rawUsed], not
+ * at the end of `in`, so a caller may pass a buffer with trailing bytes). `*inUsed` counts the
+ * whole zlib stream, trailer included. On failure neither out-parameter is written. */
 Status compressZlibInflate(const uint8_t *in, size_t inLen, uint8_t *out, size_t outCap,
                            size_t *outLen, size_t *inUsed);
 
