@@ -1,5 +1,9 @@
-/* See deflate.h. */
-#include "deflate.h"
+/* See compress.h: a single fixed-Huffman block (RFC 1951 §3.2.6) with a restricted greedy LZ77
+ * that only tries two candidate back-reference distances per position (3, and the caller-supplied
+ * `rowStride`), per D-070. */
+#include "compress/compress.h"
+
+#include <stdbool.h>
 
 #include <string.h>
 
@@ -122,8 +126,8 @@ static uint32_t matchLength(const uint8_t *data, size_t pos, uint32_t dist, uint
     return len;
 }
 
-bool deflateFixed(const uint8_t *data, size_t size, uint32_t rowStride, uint8_t *out, size_t outCap,
-                  size_t *outLen) {
+Status compressDeflateFixed(const uint8_t *data, size_t size, uint32_t rowStride, uint8_t *out,
+                            size_t outCap, size_t *outLen) {
     BitWriter bw = {out, outCap, 0, 0, 0, false};
 
     bwBits(&bw, 1, 1); /* BFINAL: this is the only block */
@@ -161,7 +165,7 @@ bool deflateFixed(const uint8_t *data, size_t size, uint32_t rowStride, uint8_t 
             pos++;
         }
         if (bw.overflow) {
-            return false;
+            return STATUS_ERR_NO_MEMORY;
         }
     }
 
@@ -172,8 +176,8 @@ bool deflateFixed(const uint8_t *data, size_t size, uint32_t rowStride, uint8_t 
     bwFlushByte(&bw);
 
     if (bw.overflow) {
-        return false;
+        return STATUS_ERR_NO_MEMORY;
     }
     *outLen = bw.bytePos;
-    return true;
+    return STATUS_OK;
 }

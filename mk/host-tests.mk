@@ -51,6 +51,13 @@ HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -I
                             -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms \
                             -Ikernel/mm
 
+# libs/compress and libs/gfx (M12.2, D-140..D-147): pure portable libraries, one wildcard each so a
+# new source file needs no edit here. `-Ilibs` lets code and tests say "compress/compress.h" and
+# "gfx/gfx.h" (bare basenames would collide with tools/imgdiff's image.h/png.h on the path).
+HOST_TEST_EXTRA_SRCS += $(wildcard libs/compress/*.c) $(wildcard libs/gfx/*.c)
+HOST_TEST_EXTRA_HDRS += $(wildcard libs/compress/*.h) $(wildcard libs/gfx/*.h)
+HOST_TEST_EXTRA_INCLUDES += -Ilibs
+
 .PHONY: host-tests
 host-tests: $(HOST_TEST_BIN)
 	$(HOST_TEST_BIN)

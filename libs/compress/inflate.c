@@ -1,7 +1,8 @@
-/* See inflate.h. Implements RFC 1951 directly: a canonical-Huffman decoder (the counts/offsets
+/* See compress.h. Implements RFC 1951 directly: a canonical-Huffman decoder (the counts/offsets
  * construction RFC 1951 §3.2.2 specifies), then the three block types (§3.2.3-3.2.7). */
-#include "inflate.h"
+#include "compress/compress.h"
 
+#include <stdbool.h>
 #include <string.h>
 
 typedef struct {
@@ -50,7 +51,11 @@ typedef struct {
     uint16_t symbols[HUFF_MAX_SYMS];
 } HuffTree;
 
-static bool huffBuild(HuffTree *h, const uint8_t *lengths, int n) {
+/* Builds the decode table and enforces zlib's code-completeness rules: an over-subscribed set is
+ * always invalid; an incomplete set is invalid too, except an empty set (a block with no distance
+ * codes) and a lit/len or distance set whose only code has length 1. `isCodeLengths` (the
+ * code-length alphabet) must always be complete. */
+static bool huffBuild(HuffTree *h, const uint8_t *lengths, int n, bool isCodeLengths) {
     if (n > HUFF_MAX_SYMS) {
         return false;
     }
@@ -62,6 +67,26 @@ static bool huffBuild(HuffTree *h, const uint8_t *lengths, int n) {
         h->counts[lengths[i]]++;
     }
     h->counts[0] = 0; /* length 0 means "this symbol doesn't appear" */
+    int maxLen = 0;
+    for (int len = HUFF_MAX_BITS; len >= 1; len--) {
+        if (h->counts[len] != 0) {
+            maxLen = len;
+            break;
+        }
+    }
+    if (maxLen != 0) {
+        int left = 1;
+        for (int len = 1; len <= HUFF_MAX_BITS; len++) {
+            left <<= 1;
+            left -= h->counts[len];
+            if (left < 0) {
+                return false; /* over-subscribed */
+            }
+        }
+        if (left > 0 && (isCodeLengths || maxLen != 1)) {
+            return false; /* incomplete */
+        }
+    }
     uint16_t offs[HUFF_MAX_BITS + 2];
     offs[1] = 0;
     for (int len = 1; len <= HUFF_MAX_BITS; len++) {
@@ -125,13 +150,15 @@ static void buildFixedTrees(HuffTree *lit, HuffTree *dist) {
     for (; i < 288; i++) {
         litLengths[i] = 8;
     }
-    huffBuild(lit, litLengths, 288);
+    huffBuild(lit, litLengths, 288, false);
 
-    uint8_t distLengths[30];
-    for (i = 0; i < 30; i++) {
+    /* 32 five-bit codes, not 30: a 30-code set is incomplete and would fail huffBuild's check;
+     * symbols 30 and 31 are rejected where distances are decoded. */
+    uint8_t distLengths[32];
+    for (i = 0; i < 32; i++) {
         distLengths[i] = 5;
     }
-    huffBuild(dist, distLengths, 30);
+    huffBuild(dist, distLengths, 32, false);
 }
 
 static const uint8_t CLC_ORDER[19] = {16, 17, 18, 0, 8,  7, 9,  6, 10, 5,
@@ -147,6 +174,9 @@ static bool buildDynamicTrees(BitReader *br, HuffTree *lit, HuffTree *dist) {
     int hlit = hlitField + 257;
     int hdist = hdistField + 1;
     int hclen = hclenField + 4;
+    if (hlit > 286 || hdist > 30) {
+        return false;
+    }
 
     uint8_t clLengths[19];
     memset(clLengths, 0, sizeof(clLengths));
@@ -158,7 +188,7 @@ static bool buildDynamicTrees(BitReader *br, HuffTree *lit, HuffTree *dist) {
         clLengths[CLC_ORDER[i]] = (uint8_t)v;
     }
     HuffTree clTree;
-    if (!huffBuild(&clTree, clLengths, 19)) {
+    if (!huffBuild(&clTree, clLengths, 19, true)) {
         return false;
     }
 
@@ -208,48 +238,51 @@ static bool buildDynamicTrees(BitReader *br, HuffTree *lit, HuffTree *dist) {
             return false;
         }
     }
-    return huffBuild(lit, lengths, hlit) && huffBuild(dist, lengths + hlit, hdist);
+    if (lengths[256] == 0) {
+        return false; /* no end-of-block code: the block could never terminate */
+    }
+    return huffBuild(lit, lengths, hlit, false) && huffBuild(dist, lengths + hlit, hdist, false);
 }
 
-static bool inflateBlockData(BitReader *br, const HuffTree *lit, const HuffTree *dist, uint8_t *out,
-                             size_t outCap, size_t *outLen) {
+static Status inflateBlockData(BitReader *br, const HuffTree *lit, const HuffTree *dist,
+                               uint8_t *out, size_t outCap, size_t *outLen) {
     for (;;) {
         int32_t sym = huffDecode(br, lit);
         if (sym < 0) {
-            return false;
+            return STATUS_ERR_INVALID;
         }
         if (sym < 256) {
             if (*outLen >= outCap) {
-                return false;
+                return STATUS_ERR_NO_MEMORY;
             }
             out[(*outLen)++] = (uint8_t)sym;
         } else if (sym == 256) {
-            return true;
+            return STATUS_OK;
         } else {
             uint32_t lsym = (uint32_t)sym - 257;
             if (lsym >= 29) {
-                return false;
+                return STATUS_ERR_INVALID;
             }
             int32_t extra = brBits(br, LENGTH_EXTRA[lsym]);
             if (extra < 0) {
-                return false;
+                return STATUS_ERR_INVALID;
             }
             uint32_t length = LENGTH_BASE[lsym] + (uint32_t)extra;
 
             int32_t dsym = huffDecode(br, dist);
             if (dsym < 0 || dsym >= 30) {
-                return false;
+                return STATUS_ERR_INVALID;
             }
             int32_t dextra = brBits(br, DIST_EXTRA[dsym]);
             if (dextra < 0) {
-                return false;
+                return STATUS_ERR_INVALID;
             }
             uint32_t distance = DIST_BASE[dsym] + (uint32_t)dextra;
             if (distance == 0 || distance > *outLen) {
-                return false;
+                return STATUS_ERR_INVALID;
             }
-            if (*outLen + length > outCap) {
-                return false;
+            if (length > outCap - *outLen) {
+                return STATUS_ERR_NO_MEMORY;
             }
             size_t srcPos = *outLen - distance;
             for (uint32_t i = 0; i < length; i++) {
@@ -261,52 +294,68 @@ static bool inflateBlockData(BitReader *br, const HuffTree *lit, const HuffTree 
     }
 }
 
-bool inflateRaw(const uint8_t *data, size_t size, uint8_t *out, size_t outCap, size_t *outLen) {
-    BitReader br = {data, size, 0, 0, 0};
-    *outLen = 0;
+Status compressInflateRaw(const uint8_t *in, size_t inLen, uint8_t *out, size_t outCap,
+                          size_t *outLen, size_t *inUsed) {
+    BitReader br = {in, inLen, 0, 0, 0};
+    size_t produced = 0;
+    Status st = STATUS_OK;
     for (;;) {
         int bfinal = brBit(&br);
         int32_t btype = brBits(&br, 2);
         if (bfinal < 0 || btype < 0) {
-            return false;
+            st = STATUS_ERR_INVALID;
+            break;
         }
         if (btype == 0) {
             br.bitCount = 0; /* discard the rest of the current byte -- stored blocks are
                               * byte-aligned */
-            if (br.bytePos + 4 > br.size) {
-                return false;
+            if (br.size - br.bytePos < 4) {
+                st = STATUS_ERR_INVALID;
+                break;
             }
             uint16_t len = (uint16_t)(br.data[br.bytePos] | (br.data[br.bytePos + 1] << 8));
             uint16_t nlen = (uint16_t)(br.data[br.bytePos + 2] | (br.data[br.bytePos + 3] << 8));
             if ((uint16_t)(~len) != nlen) {
-                return false;
+                st = STATUS_ERR_INVALID;
+                break;
             }
             br.bytePos += 4;
-            if (br.bytePos + len > br.size || *outLen + len > outCap) {
-                return false;
+            if (len > br.size - br.bytePos) {
+                st = STATUS_ERR_INVALID;
+                break;
             }
-            memcpy(out + *outLen, br.data + br.bytePos, len);
-            *outLen += len;
+            if (len > outCap - produced) {
+                st = STATUS_ERR_NO_MEMORY;
+                break;
+            }
+            memcpy(out + produced, br.data + br.bytePos, len);
+            produced += len;
             br.bytePos += len;
-        } else if (btype == 1) {
+        } else if (btype == 1 || btype == 2) {
             HuffTree lit, dist;
-            buildFixedTrees(&lit, &dist);
-            if (!inflateBlockData(&br, &lit, &dist, out, outCap, outLen)) {
-                return false;
+            if (btype == 1) {
+                buildFixedTrees(&lit, &dist);
+            } else if (!buildDynamicTrees(&br, &lit, &dist)) {
+                st = STATUS_ERR_INVALID;
+                break;
             }
-        } else if (btype == 2) {
-            HuffTree lit, dist;
-            if (!buildDynamicTrees(&br, &lit, &dist)) {
-                return false;
-            }
-            if (!inflateBlockData(&br, &lit, &dist, out, outCap, outLen)) {
-                return false;
+            st = inflateBlockData(&br, &lit, &dist, out, outCap, &produced);
+            if (st != STATUS_OK) {
+                break;
             }
         } else {
-            return false; /* btype 3 is reserved */
+            st = STATUS_ERR_INVALID; /* btype 3 is reserved */
+            break;
         }
         if (bfinal) {
-            return true;
+            break;
         }
     }
+    if (outLen != NULL) {
+        *outLen = produced;
+    }
+    if (inUsed != NULL) {
+        *inUsed = (st == STATUS_OK) ? br.bytePos : 0;
+    }
+    return st;
 }

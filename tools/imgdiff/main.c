@@ -1,7 +1,8 @@
 /* tools/imgdiff: compares two images (PPM/PNG) with an optional tolerance and mask, or converts
  * between the two formats (ARCHITECTURE §23, ROADMAP M1.4, D-070). A host tool (own clang, no
  * cross flags), per ARCHITECTURE §0's host-tool exception. No third-party image/codec library:
- * the PNG/zlib/DEFLATE codec is this tool's own (png.c/zlib_wrap.c/inflate.c/deflate.c). */
+ * the PNG/zlib/DEFLATE codec is this tool's own (png.c here, plus libs/compress:
+ * inflate/deflate/zlib/CRC-32). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

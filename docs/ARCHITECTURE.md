@@ -113,6 +113,7 @@ libs/
   libc/            custom libc: native API wrappers, C17 standard library, POSIX layer
   crypto/          crypto primitives (also compiled into the kernel)
   bongfs/          bongfs core logic shared by kernel, mkfs, and fsck
+  compress/        deflate/inflate, zlib wrapper, Adler-32/CRC-32 (shared by gfx, imgdiff, pkg)
   gfx/             2D rasterizer, image decoders (PNG/JPEG/BMP/GIF), font engine
   ui/              GUI toolkit
   net/             DHCP, DNS, TLS 1.3, HTTP/1.1, SSH protocol libraries

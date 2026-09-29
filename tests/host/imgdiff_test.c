@@ -4,11 +4,11 @@
  * own reasoning for the same #define). */
 #define _DEFAULT_SOURCE
 #include "compare.h"
+#include "compress/compress.h"
 #include "framework/test.h"
 #include "image.h"
 #include "png.h"
 #include "ppm.h"
-#include "zlib_wrap.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -164,12 +164,12 @@ TEST(imgdiffZlibRejectsBadAdler) {
     }
     uint8_t zbuf[256];
     size_t zlen = 0;
-    ASSERT_TRUE(zlibDeflate(data, sizeof(data), 0, zbuf, sizeof(zbuf), &zlen));
+    ASSERT_EQ(compressZlibDeflate(data, sizeof(data), 0, zbuf, sizeof(zbuf), &zlen), STATUS_OK);
     zbuf[zlen - 1] ^= 0xFF; /* corrupt the last Adler-32 byte */
 
     uint8_t out[64];
     size_t outLen = 0;
-    ASSERT_TRUE(!zlibInflate(zbuf, zlen, out, sizeof(out), &outLen));
+    ASSERT_TRUE(compressZlibInflate(zbuf, zlen, out, sizeof(out), &outLen, NULL) != STATUS_OK);
 }
 
 TEST(imgdiffZlibRoundTrip) {
@@ -179,11 +179,11 @@ TEST(imgdiffZlibRoundTrip) {
     }
     uint8_t zbuf[512];
     size_t zlen = 0;
-    ASSERT_TRUE(zlibDeflate(data, sizeof(data), 0, zbuf, sizeof(zbuf), &zlen));
+    ASSERT_EQ(compressZlibDeflate(data, sizeof(data), 0, zbuf, sizeof(zbuf), &zlen), STATUS_OK);
 
     uint8_t out[300];
     size_t outLen = 0;
-    ASSERT_TRUE(zlibInflate(zbuf, zlen, out, sizeof(out), &outLen));
+    ASSERT_EQ(compressZlibInflate(zbuf, zlen, out, sizeof(out), &outLen, NULL), STATUS_OK);
     ASSERT_EQ(outLen, (size_t)300);
     ASSERT_EQ(memcmp(out, data, sizeof(data)), 0);
 }
