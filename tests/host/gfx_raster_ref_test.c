@@ -934,3 +934,49 @@ TEST(gfxPathAllocationFailureAndVerbCap) {
     ASSERT_EQ(p.nVerbs, GFX_PATH_MAX_VERBS);
     gfxPathFree(&p);
 }
+
+/* Entry-point color sanitizing (D-141) on the path fill: a straight-alpha color passed by mistake
+ * still leaves every pixel premultiplied-valid, both ops, partial coverage included. */
+TEST(gfxFillPathSanitizesColor) {
+    for (int op = 0; op < 2; op++) {
+        uint32_t px[8 * 8];
+        for (int i = 0; i < 64; i++) {
+            px[i] = 0x20101010u;
+        }
+        GfxCanvas c;
+        ASSERT_EQ(gfxCanvasInit(&c, (GfxSurface){px, 8, 8, 8}, NULL), STATUS_OK);
+        GfxPath p;
+        gfxPathInit(&p, NULL);
+        ASSERT_EQ(gfxPathAddEllipse(&p, 4, 4, 3.3f, 2.7f), STATUS_OK);
+        ASSERT_EQ(
+            gfxFillPath(&c, &p, GFX_FILL_NONZERO, 0x40FFFFFFu, op ? GFX_OP_SRC : GFX_OP_SRC_OVER),
+            STATUS_OK);
+        for (int i = 0; i < 64; i++) {
+            uint32_t a = px[i] >> 24;
+            ASSERT_TRUE(((px[i] >> 16) & 0xFFu) <= a && ((px[i] >> 8) & 0xFFu) <= a &&
+                        (px[i] & 0xFFu) <= a);
+        }
+        ASSERT_EQ(px[4 * 8 + 4], op ? 0x40404040u : 0x584C4C4Cu); /* 0x40 + 16*191/255 */
+        gfxPathFree(&p);
+        gfxCanvasDestroy(&c);
+    }
+}
+
+/* A mask wider than the 131072-cell band budget: one row per band, still exact. */
+TEST(gfxFillPathMaskWiderThanBandBudget) {
+    int32_t w = 200000;
+    uint8_t *md = calloc((size_t)w * 3, 1);
+    ASSERT_TRUE(md != NULL);
+    GfxMask m = {md, w, 3, w};
+    GfxPath p;
+    gfxPathInit(&p, NULL);
+    ASSERT_EQ(gfxPathAddRect(&p, 10.5f, 0.5f, 199980.0f, 2.0f), STATUS_OK);
+    ASSERT_EQ(gfxFillPathMask(&m, &p, GFX_FILL_NONZERO, NULL), STATUS_OK);
+    ASSERT_EQ(md[10], (uint8_t)64);                      /* 1/2 x 1/2 */
+    ASSERT_EQ(md[(size_t)w + 11], (uint8_t)255);         /* row 1, fully inside */
+    ASSERT_EQ(md[(size_t)w + 199990], (uint8_t)128);     /* right edge at 199990.5 */
+    ASSERT_EQ(md[(size_t)w * 2 + 100000], (uint8_t)128); /* bottom edge at 2.5 */
+    ASSERT_EQ(md[(size_t)w + 199991], (uint8_t)0);
+    gfxPathFree(&p);
+    free(md);
+}
