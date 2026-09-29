@@ -439,8 +439,8 @@ TEST(gfxBlitOverlappingSelfBlendMatchesCopy) {
             GfxSurface src = {copy, 9, 7, 9};
             GfxOp o = op ? GFX_OP_SRC_OVER : GFX_OP_SRC;
             uint8_t alpha = op ? 255 : 128; /* SRC_OVER at 255 is the same per-pixel path */
-            gfxBlit(&f.c, D[k][0], D[k][1], &f.c.surf, (GfxRect){1, 1, 8, 6}, o, alpha);
-            gfxBlit(&g.c, D[k][0], D[k][1], &src, (GfxRect){1, 1, 8, 6}, o, alpha);
+            gfxBlit(&f.c, 1 + D[k][0], 1 + D[k][1], &f.c.surf, (GfxRect){1, 1, 8, 6}, o, alpha);
+            gfxBlit(&g.c, 1 + D[k][0], 1 + D[k][1], &src, (GfxRect){1, 1, 8, 6}, o, alpha);
             for (int32_t y = 0; y < 7; y++) {
                 for (int32_t x = 0; x < 9; x++) {
                     ASSERT_EQ(fixturePx(&f, x, y), fixturePx(&g, x, y));
@@ -496,4 +496,66 @@ TEST(gfxBlendMatchesReferenceFormula) {
             ASSERT_EQ(a[i], gfxBlendPixel(prev, col, 255u, op));
         }
     }
+}
+
+/* Saturation, not wrap-around: a rect reaching INT32_MAX/MIN under a nonzero origin still covers
+ * the whole surface, an origin pushed past INT32_MAX stays there (nothing becomes visible), and
+ * the clip bounds of a saturated origin are empty rather than a wrapped, bogus rect. */
+TEST(gfxOriginAndRectSaturate) {
+    static const int32_t O[][2] = {{5, 5}, {-5, -5}, {INT32_MAX, 0}, {INT32_MIN, 0}};
+    for (size_t k = 0; k < 2; k++) {
+        Fixture f;
+        ASSERT_TRUE(fixtureInit(&f, 6, 5, 0xFF000000u));
+        gfxCanvasSetOrigin(&f.c, O[k][0], O[k][1]);
+        gfxFillRect(&f.c, (GfxRect){INT32_MIN, INT32_MIN, INT32_MAX, INT32_MAX}, 0xFFFFFFFFu,
+                    GFX_OP_SRC);
+        for (int32_t y = 0; y < 5; y++) {
+            for (int32_t x = 0; x < 6; x++) {
+                ASSERT_EQ(fixturePx(&f, x, y), 0xFFFFFFFFu);
+            }
+        }
+        ASSERT_TRUE(guardIntact(&f));
+        fixtureFree(&f);
+    }
+    Fixture f;
+    ASSERT_TRUE(fixtureInit(&f, 6, 5, 0xFF000000u));
+    gfxCanvasTranslate(&f.c, INT32_MAX, INT32_MIN);
+    gfxCanvasTranslate(&f.c, INT32_MAX, INT32_MIN); /* wrapping would give (-2, 0) */
+    ASSERT_EQ(f.c.originX, INT32_MAX);
+    ASSERT_EQ(f.c.originY, INT32_MIN);
+    gfxFillRect(&f.c, (GfxRect){-4, 0, 4, 4}, 0xFFFFFFFFu, GFX_OP_SRC);
+    ASSERT_EQ(fixturePx(&f, 0, 0), 0xFF000000u);
+    for (size_t k = 2; k < 4; k++) {
+        gfxCanvasSetOrigin(&f.c, O[k][0], O[k][1]);
+        GfxRect b = gfxCanvasClipBounds(&f.c);
+        ASSERT_TRUE(b.x0 <= b.x1);
+        ASSERT_TRUE(k == 2 ? (b.x0 == -INT32_MAX && b.x1 == 6 - INT32_MAX)
+                           : (b.x0 == INT32_MAX && b.x1 == INT32_MAX));
+    }
+    fixtureFree(&f);
+}
+
+/* Every entry point sanitizes (D-141): a straight-alpha color or source pixel drawn over a
+ * transparent destination gives exactly the clamped premultiplied value, never an invalid one. */
+TEST(gfxEntryPointsSanitizeExactly) {
+    for (int op = 0; op < 2; op++) {
+        GfxOp o = op ? GFX_OP_SRC : GFX_OP_SRC_OVER;
+        Fixture f;
+        ASSERT_TRUE(fixtureInit(&f, 4, 4, 0));
+        gfxFillRect(&f.c, (GfxRect){0, 0, 2, 2}, 0x40FFFF20u, o);
+        ASSERT_EQ(fixturePx(&f, 1, 1), 0x40404020u);
+        uint32_t bad[1] = {0x40FF20FFu};
+        GfxSurface bs = {bad, 1, 1, 1};
+        gfxBlit(&f.c, 3, 3, &bs, (GfxRect){0, 0, 1, 1}, o, op ? 200 : 255);
+        ASSERT_EQ(fixturePx(&f, 3, 3), op ? 0x32321932u : 0x40402040u);
+        fixtureFree(&f);
+    }
+    uint8_t md[1] = {255};
+    GfxMask m = {md, 1, 1, 1};
+    Fixture f;
+    ASSERT_TRUE(fixtureInit(&f, 2, 2, 0));
+    gfxFillMask(&f.c, 1, 0, &m, 0x40FFFFFFu);
+    ASSERT_EQ(fixturePx(&f, 1, 0), 0x40404040u);
+    ASSERT_EQ(fixturePx(&f, 0, 0), 0u);
+    fixtureFree(&f);
 }
