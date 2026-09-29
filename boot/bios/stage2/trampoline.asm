@@ -9,7 +9,7 @@
 ; so the table has to be inside the one page guaranteed to still be reachable. gdtr itself (in
 ; entry.asm, .text16) already points at `gdt` here via a link-time-resolved cross-section address,
 ; so no `lgdt` reload happens in this file -- the GDTR loaded back in entry16 is still the active
-; one, and rm.asm's own `lgdt [fs:gdtr]` (after every thunk round trip) keeps pointing at the same
+; one, and rm.asm's own `lgdt [cs:gdtr]` (after every thunk round trip) keeps pointing at the same
 ; table for exactly this reason.
 bits 32
 
@@ -119,7 +119,11 @@ gdtEnd:
 
 ; entry.asm's `gdtr` can't compute `gdtEnd - gdt` itself (a cross-object-file symbol difference
 ; NASM has no relocation for -- see the comment there) and hard-codes `6 * 8 - 1` instead. Guard
-; against that drifting from the table above: this line assembles to nothing when the two agree
-; (`times 0 db 0`) and fails to assemble ("underflowing" a negative repeat count) the moment an
-; entry is added or removed here without updating entry.asm's hard-coded count to match.
+; against that drifting from the table above with two `times` lines whose repeat counts are each
+; other's negation: both assemble to nothing ("times 0 db 0") when the two agree, but if an entry
+; is added (table grows), the first line's count goes negative and fails to assemble; if an entry
+; is removed (table shrinks), the first line would silently pad with zero bytes instead of
+; catching it, so the second line (whose count goes negative in exactly that case) catches it
+; instead.
 times (6 * 8) - (gdtEnd - gdt) db 0
+times (gdtEnd - gdt) - (6 * 8) db 0

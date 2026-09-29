@@ -1,9 +1,12 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-12 of 13 done, step 13's
+**Last updated:** 2026-09-28 (M2.5 BIOS loader in progress -- steps 1-12 of 13 done; step 13's
 `reviewer` pass complete (PASS, no Critical) and every Should-fix item fixed or explicitly
-deferred via D-114; rebuild/retest of the fixes in progress before the PR)
+deferred via D-114; rebuild/retest confirmed fully green (`make test`/`make test-full`, both
+firmwares, both memory sizes); a second `reviewer` re-review of the fix batch also complete
+(PASS, no Critical, its own 4 Should-fix items fixed too); only the milestone's finishing
+checklist -- ROADMAP box, Summary, this file's own milestone section, the PR -- is left)
 
 ## Current milestone
 **M2.5 BIOS loader** is in progress on branch `m2-5-bios-loader` -- see `docs/logs/M2.5.md` for

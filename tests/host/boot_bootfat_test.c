@@ -384,11 +384,19 @@ TEST(bootFatReadRejectsBufferTooSmall) {
 
 /* Reviewer finding #13(a): a BPB claiming `RsvdSecCnt + NumFATs*FATSz32 >= TotSec32` would
  * otherwise underflow `dataSectors` to a huge 64-bit value whose (uint32_t) cast could land
- * inside the valid FAT32 cluster-count range, letting a hostile/corrupt volume mount. */
+ * inside the valid FAT32 cluster-count range, letting a hostile/corrupt volume mount.
+ *
+ * Shrinking TotSec32 below RsvdSecCnt+NumFATs*FATSz32 (as an earlier version of this test did)
+ * doesn't actually exercise the new guard: the resulting (uint32_t) cast of the underflowed
+ * `dataSectors` lands at 0xFFFFFFFF or nearby, which the pre-existing
+ * `countOfClusters >= 0x0FFFFFF5u` range check already rejects on its own, so the test would
+ * pass identically with or without this fix. Growing FATSz32 instead -- large enough that
+ * `NumFATs*FATSz32` alone exceeds 2^32 and overflows *past* TotSec32 rather than shrinking
+ * TotSec32 towards it -- keeps `countOfClusters` (computed from the *other* fields, still
+ * in-range) away from that pre-existing guard, so only the new check can catch it. */
 TEST(bootFatMountRejectsUnderflowingReservedPlusFats) {
     FatImage f = buildFatImage();
-    uint64_t reservedAndFats = RSVD_SECS + (uint64_t)NUM_FATS * f.fatSz32;
-    writeLE32(f.image + 32, (uint32_t)(reservedAndFats - 1)); /* BPB_TOTSEC32_OFF */
+    writeLE32(f.image + 36, 0x80000000u); /* BPB_FATSZ32_OFF: NumFATs(2) * this alone is 2^32 */
     BootBlockDev dev = {fakeRead, &f, SECTOR, f.totalSectors};
     BootFatVol vol;
     uint8_t scratch[SECTOR];

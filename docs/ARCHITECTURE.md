@@ -315,8 +315,12 @@ which stays wherever the firmware put it), stage2's GDT lives in the `.trampolin
 which *is* identity-mapped -- the same "an identity mapping of the loader's trampoline page only;
 the kernel removes it" mapping mentioned above, not an unmapped one. There is no PM-side
 diagnostic IDT (D-102's description of one was aspirational and never built; see D-114) -- IDTR is
-simply never loaded in protected mode, so a stray fault triple-faults instead of producing a
-diagnostic. Both legacy 8259 PICs are fully masked (`IMR = 0xFF`) before the jump into long mode --
+simply never loaded in protected mode, so it still holds whatever it held on entry to PM (the
+live real-mode IVT: base 0, limit 0x3FF), which the CPU reads as IDT gate descriptors once
+something actually faults. That almost certainly ends in a triple fault (a bogus gate descriptor
+producing #GP, whose own handler is equally bogus, producing #DF, and so on), but isn't
+guaranteed to, so a stray fault here produces no diagnostic rather than a guaranteed one. Both
+legacy 8259 PICs are fully masked (`IMR = 0xFF`) before the jump into long mode --
 BIOS wires IRQ0-7 to interrupt vectors 8-15, which collide with the kernel's own exception vectors
 (§7.2), so nothing may be left able to fire one before the kernel installs its own IDT.
 

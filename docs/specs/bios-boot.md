@@ -74,7 +74,9 @@ everything else undefined.
 7. After the whole read loop, check the loaded copy's magic at linear 0x8004 equals `S2HD`;
    mismatch is fatal -- error `M`.
 8. On any fatal error: print `"stage1 error " <code-char> <AH-as-2-hex-digits>` via INT 10h
-   AH=0Eh teletype output, then `cli; hlt` in a loop.
+   AH=0Eh teletype output, then `cli; hlt` in a loop. The status byte is only ever meaningful for
+   error `R` (the read-retry path is the only one that saves the failing call's AH); errors `E`,
+   `P`, and `M` print `00`, since nothing sets that byte before them.
 9. On success: far-jump to `0000:8000` with DL = boot drive, DS=ES=SS=0, SP=0x7C00,
    SI = 0x07A8 (linear address of the relocated patch block), IF=1, DF=0.
 
@@ -99,8 +101,9 @@ Fixed low-memory scratch (all real-mode-reachable, all below 0x8000 except where
 stage2's link layout (`boot/bios/stage2/stage2.ld`, base address 0x8000):
 
 1. `.text16` -- the header (`KEEP(*(.text16.header))` first), the 16-bit entry, A20 code, the
-   GDT/IDT descriptors, the real-mode thunk. Must end at or before linear 0x10000
-   (`ASSERT(. <= 0x10000, "stage2 .text16 overflows the 16-bit-reachable region")`).
+   `gdtr` GDT-descriptor pointer (the 6-byte limit+base structure `lgdt` loads -- the GDT table
+   itself lives in `.trampoline`, below), the real-mode thunk. Must end at or before linear
+   0x10000 (`ASSERT(. <= 0x10000, "stage2 .text16 overflows the 16-bit-reachable region")`).
 2. `.trampoline`, `ALIGN(4096)`, <= 4096 bytes (`ASSERT`ed): the protected-mode GDT, the
    long-mode trampoline, and its parameter block. Page-aligned because it is identity-mapped
    into the final page tables verbatim.
@@ -153,9 +156,12 @@ registers, executes a **far call through the live IVT entry** for `intNo` (not a
 returned `eflags` field) back into `*r`, restores PM, and returns. Neither `rmInt` nor `rmIdle`
 is reentrant; both use the same fixed scratch area. IF=1 only inside the real-mode window it
 opens; the 32-bit C code always runs with IF=0. GDTR is reloaded on every return to PM, since
-BIOS code is free to replace it. A small PM-only IDT (32 interrupt gates, selector 0x08) logs
-the vector/error-code/EIP over serial and halts on any fault that reaches it -- turning a stray
-bug in this code into one diagnostic line instead of a silent hang.
+BIOS code is free to replace it. **Not built** (D-114): there is no PM-only diagnostic IDT.
+`IDTR` is never loaded in protected mode at all -- it still holds whatever the CPU's power-on
+default or a prior real-mode `int`/`lidt` left it as (the live IVT: base 0, limit 0x3FF, read as
+IDT gate descriptors once IDTR is consulted in PM), so a stray fault in this code almost
+certainly triple-faults rather than producing a diagnostic. D-102's original description of a
+32-gate diagnostic IDT here was aspirational and never implemented; deferred past M2.5.
 
 ## 5. Long-mode entry (D-111)
 

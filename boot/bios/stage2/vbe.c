@@ -14,6 +14,9 @@
 #define VBE_OK_AX         0x004Fu /* AL=4Fh (function supported) + AH=00h (call succeeded) */
 #define VBE_MODE_LIST_MAX 256u /* bounds the mode-list walk regardless of what the BIOS reports */
 #define VBE_LFB_BIT       0x4000u /* Set Mode bit 14: use the linear framebuffer */
+#define VBE_VERSION_3_0   0x0300u /* VbeVersion at/above which the LinBytesPerScanLine and
+                                     Lin{Red,Green,Blue,Rsvd}{MaskSize,FieldPosition} fields
+                                     (D-114) are valid to read */
 
 /* VBE far pointers (VbeInfoBlock's VideoModePtr) pack a real-mode segment:offset into one u32,
  * offset in the low word -- the same layout rm.asm reads directly out of the IVT. Always resolves
@@ -35,8 +38,11 @@ static uint32_t vbeMaskFromSizePos(uint8_t size, uint8_t pos) {
 /* INT 10h AX=4F00h (Get VBE Controller Info). "VBE2" pre-filled into the buffer requests the
  * VBE 2.0+ extended fields (in particular VideoModePtr's reach beyond the original 256-byte
  * block); real VBE 2.0+ BIOSes look for it and turn it into "VESA" plus the extended fields on
- * return. */
-static bool vbeGetControllerInfo(uint32_t *outVideoModePtr) {
+ * return. Also returns VbeVersion (offset 4, word) and TotalMemory (offset 0x12, word, in 64 KiB
+ * blocks -- widened to bytes here) so the caller can gate the VBE 3.0-only ModeInfoBlock fields
+ * and bound a mode's framebuffer size against what the card actually reports having (D-114). */
+static bool vbeGetControllerInfo(uint32_t *outVideoModePtr, uint16_t *outVbeVersion,
+                                 uint64_t *outTotalMemoryBytes) {
     uint8_t *buf = (uint8_t *)(uintptr_t)VBE_INFO_ADDR;
     bootMemset(buf, 0, 512);
     buf[0] = 'V';
@@ -60,6 +66,14 @@ static bool vbeGetControllerInfo(uint32_t *outVideoModePtr) {
     uint32_t videoModePtr = 0;
     bootMemcpy(&videoModePtr, buf + 14, sizeof(videoModePtr));
     *outVideoModePtr = videoModePtr;
+
+    uint16_t vbeVersion = 0;
+    bootMemcpy(&vbeVersion, buf + 4, sizeof(vbeVersion));
+    *outVbeVersion = vbeVersion;
+
+    uint16_t totalMemoryBlocks = 0;
+    bootMemcpy(&totalMemoryBlocks, buf + 0x12, sizeof(totalMemoryBlocks));
+    *outTotalMemoryBytes = (uint64_t)totalMemoryBlocks * 65536u;
     return true;
 }
 
@@ -81,8 +95,17 @@ static bool vbeGetModeInfo(uint16_t mode) {
  * firmware-agnostic BootVideoMode shape. Only 32bpp direct-color modes with a linear framebuffer
  * are considered acceptable here (bootVideoAccept() would reject anything else anyway, but
  * checking ModeAttributes/BitsPerPixel/MemoryModel directly avoids feeding it masks derived from
- * a banked or paletted mode's meaningless Red/Green/BlueMaskSize fields). */
-static bool vbeModeInfoToVideoMode(uint16_t mode, BootVideoMode *out) {
+ * a banked or paletted mode's meaningless Red/Green/BlueMaskSize fields).
+ *
+ * `vbeVersion`/`totalMemoryBytes` come from the controller-info call (D-114): at VBE 3.0+, the
+ * base BytesPerScanLine/Red-Green-Blue-RsvdMaskSize/FieldPosition fields describe the *banked*
+ * mode, which can legitimately differ from the linear one this loader actually uses (the
+ * Lin*-prefixed fields at offsets 50/54-61) -- reading the banked fields on such hardware could
+ * pick a pitch or mask that doesn't match the linear framebuffer this loader writes through.
+ * `totalMemoryBytes` bounds the framebuffer size against what the card actually reports having,
+ * so a mode whose computed footprint doesn't fit can't be picked. */
+static bool vbeModeInfoToVideoMode(uint16_t mode, uint16_t vbeVersion, uint64_t totalMemoryBytes,
+                                   BootVideoMode *out) {
     const uint8_t *mi = (const uint8_t *)(uintptr_t)VBE_MODE_INFO_ADDR;
 
     uint16_t attrs = 0;
@@ -108,6 +131,22 @@ static bool vbeModeInfoToVideoMode(uint16_t mode, BootVideoMode *out) {
     uint32_t physBase = 0;
     bootMemcpy(&physBase, mi + 40, sizeof(physBase));
 
+    if (vbeVersion >= VBE_VERSION_3_0) {
+        uint16_t linBytesPerScanLine = 0;
+        bootMemcpy(&linBytesPerScanLine, mi + 50, sizeof(linBytesPerScanLine));
+        if (linBytesPerScanLine != 0) {
+            bytesPerScanLine = linBytesPerScanLine;
+        }
+        redSize = mi[54];
+        redPos = mi[55];
+        greenSize = mi[56];
+        greenPos = mi[57];
+        blueSize = mi[58];
+        bluePos = mi[59];
+        rsvdSize = mi[60];
+        rsvdPos = mi[61];
+    }
+
     bootMemset(out, 0, sizeof(*out));
     out->id = mode;
     out->width = xRes;
@@ -121,13 +160,23 @@ static bool vbeModeInfoToVideoMode(uint16_t mode, BootVideoMode *out) {
         24-bit RGB triple alone tops out at bit 23, and every real 32bpp VBE mode's reserved/
         alpha field is exactly what supplies the missing high bits */
     out->fbPhys = physBase;
+
+    if (totalMemoryBytes != 0) {
+        uint64_t fbBytes = (uint64_t)out->pitch * (uint64_t)out->height;
+        if (fbBytes > totalMemoryBytes) {
+            return false; /* doesn't fit the card's own reported memory size */
+        }
+    }
     return true;
 }
 
-/* Streams every VBE mode through bootvideo.c's picker (D-109), mirroring gop.c's gopPickMode(). */
-static bool vbePickMode(uint32_t resWidth, uint32_t resHeight, uint16_t *outMode) {
+/* Streams every VBE mode through bootvideo.c's picker (D-109), mirroring gop.c's gopPickMode().
+ * Also hands back the controller's VbeVersion/TotalMemory (already fetched here) so the caller's
+ * later re-query of the picked mode doesn't need a second AX=4F00h call. */
+static bool vbePickMode(uint32_t resWidth, uint32_t resHeight, uint16_t *outMode,
+                        uint16_t *outVbeVersion, uint64_t *outTotalMemoryBytes) {
     uint32_t videoModePtr = 0;
-    if (!vbeGetControllerInfo(&videoModePtr)) {
+    if (!vbeGetControllerInfo(&videoModePtr, outVbeVersion, outTotalMemoryBytes)) {
         return false;
     }
 
@@ -145,7 +194,7 @@ static bool vbePickMode(uint32_t resWidth, uint32_t resHeight, uint16_t *outMode
             continue;
         }
         BootVideoMode candidate;
-        if (!vbeModeInfoToVideoMode(mode, &candidate)) {
+        if (!vbeModeInfoToVideoMode(mode, *outVbeVersion, *outTotalMemoryBytes, &candidate)) {
             continue;
         }
         if (bootVideoAccept(&candidate)) {
@@ -172,8 +221,9 @@ static bool vbePickMode(uint32_t resWidth, uint32_t resHeight, uint16_t *outMode
 void vbeSetMode(uint32_t resWidth, uint32_t resHeight, BootFramebuffer *fb) {
     bootMemset(fb, 0, sizeof(*fb));
 
-    uint16_t mode = 0;
-    if (!vbePickMode(resWidth, resHeight, &mode)) {
+    uint16_t mode = 0, vbeVersion = 0;
+    uint64_t totalMemoryBytes = 0;
+    if (!vbePickMode(resWidth, resHeight, &mode, &vbeVersion, &totalMemoryBytes)) {
         return; /* no acceptable VBE mode; leave fb zeroed (D-064) */
     }
 
@@ -183,7 +233,8 @@ void vbeSetMode(uint32_t resWidth, uint32_t resHeight, BootFramebuffer *fb) {
         return;
     }
     BootVideoMode picked;
-    if (!vbeModeInfoToVideoMode(mode, &picked)) {
+    if (!vbeModeInfoToVideoMode(mode, vbeVersion, totalMemoryBytes, &picked)) {
+        loaderSerialWriteString("loader: VBE mode info changed on re-query; aborting\n");
         return;
     }
     if (!bootVideoAccept(&picked)) {
@@ -192,6 +243,7 @@ void vbeSetMode(uint32_t resWidth, uint32_t resHeight, BootFramebuffer *fb) {
          * enumerating is not something to trust blindly: bootVideoToFramebuffer() below computes
          * shift/size via __builtin_ctz/popcount on the masks, which is undefined for a zero mask.
          */
+        loaderSerialWriteString("loader: VBE mode failed re-accept; aborting\n");
         return;
     }
 

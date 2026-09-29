@@ -20,6 +20,12 @@
 #define BIOS_TICKS_PER_SECOND 18u
 #define BDA_TICK_COUNTER_ADDR 0x046Cu /* BDA "clock ticks since midnight" (u32) */
 
+/* Bounds every "drain until nothing left" loop below: a UART that passes the readiness probe but
+ * keeps reporting data-ready forever (stuck hardware, a misbehaving test harness) would otherwise
+ * hang this function indefinitely with no diagnostic. Comfortably above anything a real drain
+ * should ever see (a few queued bytes/keystrokes at most). */
+#define MENU_DRAIN_MAX_ITERATIONS 4096u
+
 static uint32_t readBdaTicks(void) {
     return *(volatile const uint32_t *)bootPhysToPtr(BDA_TICK_COUNTER_ADDR);
 }
@@ -81,11 +87,13 @@ uint32_t loaderMenuRun(const char *text, uint64_t textLen, const BootCfg *cfg, B
      * unintended immediate boot. */
     {
         uint8_t drainByte;
-        while (loaderSerialReadByte(&drainByte)) {
+        for (uint32_t i = 0; i < MENU_DRAIN_MAX_ITERATIONS && loaderSerialReadByte(&drainByte);
+             i++) {
             /* discard */
         }
         uint8_t drainScan, drainAscii;
-        while (biosKeyReady(&drainScan, &drainAscii)) {
+        for (uint32_t i = 0;
+             i < MENU_DRAIN_MAX_ITERATIONS && biosKeyReady(&drainScan, &drainAscii); i++) {
             biosKeyRead(&drainScan, &drainAscii);
         }
     }
@@ -112,7 +120,8 @@ uint32_t loaderMenuRun(const char *text, uint64_t textLen, const BootCfg *cfg, B
         BootKey key = {BOOT_KEY_OTHER, 0};
 
         uint8_t serialByte;
-        while (loaderSerialReadByte(&serialByte)) {
+        for (uint32_t i = 0; i < MENU_DRAIN_MAX_ITERATIONS && loaderSerialReadByte(&serialByte);
+             i++) {
             if (bootKeyParserFeed(&serialParser, serialByte, &key)) {
                 gotKey = true;
                 break;

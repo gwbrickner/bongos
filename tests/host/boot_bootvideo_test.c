@@ -33,8 +33,9 @@ TEST(bootVideoAcceptRejectsZeroOrNoncontiguousMask) {
 }
 
 TEST(bootVideoAcceptRejectsOverlappingChannels) {
-    /* Green and blue share bit 8 (0xFF00 & 0x1FE00 == 0x100): each mask is individually
-     * contiguous and <=8 bits, but D-109 requires non-overlapping channels too. */
+    /* Green (bits 8-15, 0xFF00) and blue (bits 9-16, 0x1FE00) share bits 9-15
+     * (0xFF00 & 0x1FE00 == 0xFE00): each mask is individually contiguous and <=8 bits, but D-109
+     * requires non-overlapping channels too. */
     BootVideoMode overlapGb = mkMode(0, 1024, 768, 0xFF, 0xFF00, 0x1FE00, 0xFE000000);
     ASSERT_TRUE(!bootVideoAccept(&overlapGb));
     BootVideoMode overlapRg = mkMode(0, 1024, 768, 0x1FE, 0xFF00, 0xFF0000, 0xFF000000);

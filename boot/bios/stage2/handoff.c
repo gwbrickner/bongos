@@ -84,8 +84,8 @@ static bool handoffIsHhdmType(uint32_t bootMemType) {
 }
 
 /* Several KiB apiece: static rather than on the stack, which otherwise competes with this
- * function's own modest temporary PM stack (entry.asm's pm_entry, 0x90000) -- same reasoning as
- * UEFI's handoff.c file-scope statics. */
+ * function's own modest 64 KiB PM stack (stage2.ld's `.stack` section, D-101) -- same reasoning
+ * as UEFI's handoff.c file-scope statics. */
 static MemMapInput e820Regions[E820_MAX_REGIONS];
 static BootMemRegion normalized[E820_MAX_REGIONS];
 static uint64_t normScratch[E820_MAX_REGIONS * 2];

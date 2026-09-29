@@ -174,10 +174,12 @@ EFI_STATUS loaderGopSetMode(EFI_SYSTEM_TABLE *st, LoaderGop *lg, uint32_t resWid
          * enumerating is not something to trust blindly: bootVideoToFramebuffer() below computes
          * shift/size via __builtin_ctz/popcount on the masks, which is undefined for a zero mask.
          */
+        loaderSerialWriteString("loader: GOP mode failed re-accept after SetMode; aborting\n");
         return EFI_SUCCESS;
     }
     uint64_t size = (uint64_t)picked.pitch * (uint64_t)picked.height;
     if (gop->Mode->FrameBufferSize != 0 && size > gop->Mode->FrameBufferSize) {
+        loaderSerialWriteString("loader: GOP framebuffer size exceeds FrameBufferSize; aborting\n");
         return EFI_SUCCESS; /* leave fb zeroed: doesn't fit its own reported size */
     }
     bootVideoToFramebuffer(&picked, fb);

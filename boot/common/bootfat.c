@@ -281,10 +281,11 @@ static void lfnFeed(LfnAccum *a, const uint8_t *entry) {
             a->buf[base + i] = (char)(u & 0x7Fu);
         }
     }
-    /* A name whose length is an exact multiple of 13 has no NUL unit anywhere in the group (the
-     * real VFAT spec still pads such a group with a trailing all-0xFFFF entry that itself has no
-     * NUL either -- the terminator is implicit once the lowest-numbered entry lands with no NUL
-     * seen). Without this, hasTerm never gets set and the group would be silently unmatchable. */
+    /* A name whose length is an exact multiple of 13 has no NUL unit anywhere in the group at
+     * all -- VFAT doesn't add an extra all-0xFFFF padding entry for this case, it simply omits
+     * the terminator, so the terminator has to be treated as implicit once the lowest-numbered
+     * entry lands with no NUL seen. Without this, hasTerm never gets set and the group would be
+     * silently unmatchable. */
     if (!sawTerm && seq == 1 && !a->hasTerm) {
         a->hasTerm = true;
         a->len = a->maxSeq * LFN_CHARS_PER_ENTRY;

@@ -77,16 +77,21 @@ bits 16
     xor ax, ax
     mov ds, ax
     mov es, ax
-    mov fs, ax                 ; fs stays 0 for the rest of this window: the caller's ds/es
-    mov gs, ax                 ; (loaded below) must never shadow our own access to rmScratch/IVT
+    mov fs, ax                 ; fs=0 for the pre-call reads below (rmScratch/the IVT lookup):
+    mov gs, ax                 ; the caller's own ds/es (loaded below) must never shadow those.
+                                ; Only the *pre-call* half of this function depends on that --
+                                ; everything captured after `call far` below switches to cs:,
+                                ; since FS isn't part of the documented BIOS INT ABI and a handler
+                                ; could have touched it.
     mov ss, ax
     mov esp, 0x7C00              ; the real-mode stack (docs/specs/bios-boot.md's memory map).
                                   ; The full 32-bit esp, not just sp: real mode only *uses* the
                                   ; low 16 bits as SP, but esp's high half was still whatever the
-                                  ; PM caller's stack pointer left there (around 0x0008xxxx) --
-                                  ; loading only sp would leave that garbage in place, and some
-                                  ; BIOS/option-ROM code (32-bit-aware VBE BIOSes, -m16-style C)
-                                  ; addresses relative to esp, not sp.
+                                  ; PM caller's stack pointer left there (stage2.ld's `.stack`
+                                  ; section, well under 0x70000) -- loading only sp would leave
+                                  ; that garbage in place, and some BIOS/option-ROM code
+                                  ; (32-bit-aware VBE BIOSes, -m16-style C) addresses relative to
+                                  ; esp, not sp.
 
     ; Resolve the IVT entry into a fixed scratch dword *before* loading any of the caller's
     ; registers below. An earlier version computed it directly into bx right before the call
