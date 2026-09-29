@@ -28,7 +28,8 @@ clean.
 
 ## 2. Baseline (stop if this fails)
 1. Release first: `make clean && make RELEASE=1 && make RELEASE=1 test`. Record the result
-   and the `KTEST DONE passed=... failed=...` line from `build/logs/uefi-1cpu.serial.log`.
+   and each matrix row's `KTEST DONE passed=... failed=...` line
+   (`grep -H '^KTEST DONE' build/logs/*.serial.log`).
 2. Then debug: `make clean && make`, then `make format-check`, `make host-tests`, and
    `make test-full`. Record the results and each matrix row's `KTEST DONE` line.
 3. `make analyze`, then copy `build/analyze/report.txt` to `<dir>/static-analysis.txt`.
@@ -59,8 +60,8 @@ Invoke `subsystem-hunter` with:
 
 Wait for it to return. Then run `git status --porcelain`. The hunter should have committed
 everything. Treat any uncommitted change as a suspected leftover experiment: read the diff,
-revert it with `git checkout -- <file>` unless it's clearly its report, a test, or an
-intended fix, and commit what's kept by naming paths. Then push, before starting the next
+revert it with `git checkout -- <file>` (an untracked file: read it, then `rm <path>`; never
+`git clean`) unless it's clearly its report, a test, or an intended fix, and commit what's kept by naming paths. Then push, before starting the next
 subsystem. If a hunter reports it couldn't finish, record that in the plan and move on.
 Retry at most once.
 

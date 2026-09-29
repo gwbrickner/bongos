@@ -57,13 +57,15 @@ The root has no copies of these files. Always use the `docs/` versions.
 When you call a subagent, give it everything it needs in the prompt: the milestone ID, the
 base ref, which files and functions changed, and what you want back. It starts with no memory
 of this conversation. Run `bug-sweeper` and `qemu-tester` in the foreground, and don't start
-other QEMU work while they run.
+other QEMU work while they run. Commit your own work before you invoke `bug-sweeper` or
+`subsystem-hunter`: the tree must be clean, so their commits contain only their own changes.
 
 **After an editing subagent returns** (`bug-sweeper`, `subsystem-hunter`), run
 `git status --porcelain` and `git log --oneline -5` before anything else. Its work should all
 be committed. Treat any uncommitted change as a suspected leftover mutation or half-finished
-fix. Read the diff, and revert it (`git checkout -- <file>`) unless it's clearly an intended
-test, report, or fix. Never commit it blind.
+fix. Read the diff, and revert it (`git checkout -- <file>`; for an untracked file, read it and
+then `rm <path>`) unless it's clearly an intended test, report, or fix. Never use `git clean`.
+Never commit it blind.
 
 ## Session protocol
 

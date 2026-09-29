@@ -317,7 +317,9 @@ The kernel prints `KTEST START/PASS/FAIL <name>` and a final `KTEST DONE`, then 
 
 ### 7.5 Static analysis
 `make analyze` runs the Clang static analyzer over every kernel C source, with the kernel's own
-flags. The report goes to `build/analyze/report.txt`. It exits 0 unless `ANALYZE_STRICT=1`.
+flags. The report goes to `build/analyze/report.txt`. It exits 1 if clang failed on any file (that
+file went unanalyzed, so fix the build or the analyzer flags). Warnings fail it only with
+`ANALYZE_STRICT=1`.
 Triage every finding in the code you're changing as a real bug, a false positive (say why), or
 needs investigation. Findings in test code that deliberately misuses the API are usually false
 positives, but check each one. Treat any untriaged finding as S3 until it's triaged.
