@@ -65,14 +65,26 @@ void gfxEdgeListAdd(GfxEdgeList *l, int32_t x0, int32_t y0, int32_t x1, int32_t 
 }
 
 /* Float user coordinate -> 24.8 device coordinate: clamp first (a float-to-int cast of an
- * out-of-range value is undefined), round half away from zero, add the integer origin, clamp. */
+ * out-of-range value is undefined), round half away from zero, add the integer origin, clamp.
+ * The rounding is exact: `s = v*256` is exact (a power-of-two scale, |s| <= 2^28), `i` is s
+ * truncated, and `s - i` is exact (Sterbenz), so a value already on the 1/256 grid never moves.
+ * (`(int64_t)(s + 0.5f)` would not be: the float add rounds 0.49999997 up to 1, and an odd s in
+ * [2^23, 2^24) up to the next even integer.) */
 static int32_t toFixed(float v, int32_t origin) {
     if (v > GFX_COORD_MAX) {
         v = GFX_COORD_MAX;
     } else if (v < -GFX_COORD_MAX) {
         v = -GFX_COORD_MAX;
     }
-    int64_t f = (int64_t)(v * 256.0f + (v >= 0.0f ? 0.5f : -0.5f)) + (int64_t)origin * 256;
+    float s = v * 256.0f;
+    int64_t i = (int64_t)s;
+    float frac = s - (float)i;
+    if (frac >= 0.5f) {
+        i++;
+    } else if (frac <= -0.5f) {
+        i--;
+    }
+    int64_t f = i + (int64_t)origin * 256;
     if (f > FIXED_LIMIT) {
         f = FIXED_LIMIT;
     } else if (f < -FIXED_LIMIT) {

@@ -404,6 +404,53 @@ TEST(gfxFillPathRectEqualsFillRect) {
     }
 }
 
+/* toFixed rounds to the nearest 1/256 px exactly: a coordinate already on the grid is never
+ * moved, whatever its magnitude, so drawing at x + k equals drawing at x shifted by an origin of
+ * k. (Float `v*256 + 0.5` rounds 0.49999997 up to 1, and an odd grid value in [2^23, 2^24) up to
+ * the next even one.) */
+TEST(gfxFlattenRoundsExactlyToGrid) {
+    /* x = 32768 + 1/256 px (fixed 2^23 + 1, odd) vs the same edge at 8 + 1/256 moved by origin */
+    const float offsets[] = {32768.0f, 40000.0f, 65520.0f, 0.0f}; /* sums stay below 2^16 */
+    for (int k = 0; k < 4; k++) {
+        uint8_t m1[16 * 2], m2[16 * 2];
+        uint32_t pa[16 * 2], pb[16 * 2];
+        for (int i = 0; i < 32; i++) {
+            pa[i] = pb[i] = 0xFF000000u;
+        }
+        GfxCanvas ca, cb;
+        ASSERT_EQ(gfxCanvasInit(&ca, (GfxSurface){pa, 16, 2, 16}, NULL), STATUS_OK);
+        ASSERT_EQ(gfxCanvasInit(&cb, (GfxSurface){pb, 16, 2, 16}, NULL), STATUS_OK);
+        gfxCanvasSetOrigin(&cb, -(int32_t)offsets[k], 0);
+        GfxPath p, q;
+        gfxPathInit(&p, NULL);
+        gfxPathInit(&q, NULL);
+        ASSERT_EQ(gfxPathAddRect(&p, 8.0f + 1.0f / 256.0f, 0, 4, 2), STATUS_OK);
+        ASSERT_EQ(gfxPathAddRect(&q, offsets[k] + 8.0f + 1.0f / 256.0f, 0, 4, 2), STATUS_OK);
+        ASSERT_EQ(gfxFillPath(&ca, &p, GFX_FILL_NONZERO, 0xFFFFFFFFu, GFX_OP_SRC), STATUS_OK);
+        ASSERT_EQ(gfxFillPath(&cb, &q, GFX_FILL_NONZERO, 0xFFFFFFFFu, GFX_OP_SRC), STATUS_OK);
+        for (int i = 0; i < 32; i++) {
+            m1[i] = (uint8_t)pa[i];
+            m2[i] = (uint8_t)pb[i];
+        }
+        ASSERT_EQ(m1[8], (uint8_t)254); /* 255/256 of pixel 8 */
+        ASSERT_EQ(memcmp(m1, m2, sizeof(m1)), 0);
+        gfxPathFree(&p);
+        gfxPathFree(&q);
+        gfxCanvasDestroy(&ca);
+        gfxCanvasDestroy(&cb);
+    }
+    /* just under half a grid step rounds down (to 0), not up */
+    uint8_t md[4] = {0, 0, 0, 0};
+    GfxMask m = {md, 4, 1, 4};
+    GfxPath p;
+    gfxPathInit(&p, NULL);
+    float under = (0.5f - 1.0f / 33554432.0f) / 256.0f; /* (0.5 - 2^-25) / 256, exact */
+    ASSERT_EQ(gfxPathAddRect(&p, under, 0, 2, 1), STATUS_OK);
+    ASSERT_EQ(gfxFillPathMask(&m, &p, GFX_FILL_NONZERO, NULL), STATUS_OK);
+    ASSERT_EQ(md[0], (uint8_t)255);
+    gfxPathFree(&p);
+}
+
 /* Through the public API: a fill under a random canvas clip equals the unclipped fill inside the
  * clip, bit for bit (a repaint of a damaged sub-rect must reproduce the original pixels), and
  * leaves everything outside it untouched. */
