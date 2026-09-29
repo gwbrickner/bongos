@@ -79,12 +79,18 @@ typedef struct {
  * absolute addresses. `slide` must be 4 KiB aligned and keep the image inside the kernel window,
  * else BOOT_ERR_ELF_RANGE; slide 0 still validates the table but changes no byte.
  *
- * `dest` must be img->span bytes. `stats` may be NULL. On a pass-1 failure `dest` is untouched;
- * a pass-2 failure is impossible for a table pass 1 accepted unless two entries overlap and the
- * second wraps, so after ANY failure the caller must discard `dest` (re-run elfLoad, or fall back
- * to slide 0 on a fresh copy) rather than boot it. No locks, never sleeps, boot-time or host-test
- * only (interrupts are not in play); does not allocate; no 64-bit division (i386 stage2 links no
- * libgcc). Returns BOOT_ERR_ELF_HEADER for NULL arguments or a bad ELF magic/class. */
+ * `dest` must be img->span bytes, exactly as elfLoad left it: every relocated location must still
+ * hold the bytes elfLoad copied from `file`, else BOOT_ERR_ELF_RELOC (so an already-slid image is
+ * rejected, not slid twice). `stats` may be NULL. On a pass-1 failure `dest` is untouched. Pass 2
+ * fails only when an entry names bytes an earlier entry already rewrote (every exact duplicate,
+ * and any overlap of an earlier entry's low 32 bits, which a non-zero slide always changes; pass
+ * 1, reading the untouched image, cannot see these). An overlap of only the upper half of a 64 is
+ * not detectable without per-byte state (the toolchain never emits one, and kaslr-reloc-check
+ * would show it). After a pass-2 failure `dest` is partly slid, so after ANY failure the caller
+ * must discard `dest` (re-run elfLoad for the slide-0 fallback) rather than boot it. No
+ * locks, never sleeps, boot-time or host-test only (interrupts are not in play); does not allocate;
+ * no 64-bit division (i386 stage2 links no libgcc). Returns BOOT_ERR_ELF_HEADER for NULL arguments
+ * or a bad ELF magic/class. */
 BootStatus elfRelocate(const ElfImage *img, const uint8_t *file, uint64_t fileSize, uint8_t *dest,
                        uint64_t slide, ElfRelocStats *stats);
 

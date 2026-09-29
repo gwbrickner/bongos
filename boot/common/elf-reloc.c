@@ -106,9 +106,10 @@ static void readSection(const RelocCtx *ctx, uint32_t idx, RawSectionHeader *out
 /* Locates the width-byte location at virtual address `va` in the loaded image: it must sit inside
  * the target section [tAddr, tAddr+tSize) and inside the file-backed part of one PT_LOAD (the
  * .bss-style memsz-filesz tail holds nothing that came from the file, so a reloc there is a lie),
- * and inside `dest`. Returns the offset into `dest`, or a negative value on failure. */
+ * and inside `dest`. Stores the offset into `dest` in *outOff and the offset of the same bytes in
+ * `file` in *outFileOff; returns a negative value on failure. */
 static int locateReloc(const RelocCtx *ctx, uint64_t va, uint32_t width, uint64_t tAddr,
-                       uint64_t tSize, uint64_t *outOff) {
+                       uint64_t tSize, uint64_t *outOff, uint64_t *outFileOff) {
     if (va < tAddr || !rangeFits(va - tAddr, width, tSize)) {
         return -1;
     }
@@ -116,10 +117,12 @@ static int locateReloc(const RelocCtx *ctx, uint64_t va, uint32_t width, uint64_
         const ElfSegment *s = &ctx->img->segs[i];
         if (va >= s->vaddr && rangeFits(va - s->vaddr, width, s->filesz)) {
             uint64_t off = va - ctx->img->linkBase; /* vaddr >= linkBase: linkBase is the lowest */
-            if (!rangeFits(off, width, ctx->img->span)) {
-                return -1;
+            if (!rangeFits(off, width, ctx->img->span) || s->offset > ctx->fileSize ||
+                !rangeFits(va - s->vaddr, width, ctx->fileSize - s->offset)) {
+                return -1; /* overflow-safe: never forms s->offset + (va - s->vaddr) unchecked */
             }
             *outOff = off;
+            *outFileOff = s->offset + (va - s->vaddr);
             return 0;
         }
     }
@@ -127,9 +130,20 @@ static int locateReloc(const RelocCtx *ctx, uint64_t va, uint32_t width, uint64_
 }
 
 /* Validates (apply == 0) or applies (apply == 1) one 64/32S relocation at dest+off. The two share
- * this function so pass 2 can never disagree with pass 1 about what is legal. */
-static BootStatus slideLocation(const RelocCtx *ctx, uint32_t type, uint64_t off, int apply) {
+ * this function so pass 2 can never disagree with pass 1 about what is legal. The location must
+ * still hold exactly the bytes elfLoad copied from file+fileOff: in pass 1 that proves `dest` is
+ * this file's freshly loaded image (not an already-slid one, which would be slid twice); in pass 2
+ * it catches a second entry naming bytes an earlier entry already rewrote (a duplicate or an
+ * overlap), which pass 1, reading the untouched image, cannot see. */
+static BootStatus slideLocation(const RelocCtx *ctx, uint32_t type, uint64_t off, uint64_t fileOff,
+                                int apply) {
     uint8_t *loc = ctx->dest + off;
+    uint32_t width = (type == R_X86_64_64) ? 8u : 4u;
+    for (uint32_t i = 0; i < width; i++) {
+        if (loc[i] != ctx->file[fileOff + i]) {
+            return BOOT_ERR_ELF_RELOC;
+        }
+    }
     if (type == R_X86_64_64) {
         uint64_t v = readU64(loc);
         uint64_t nv = v + ctx->slide;
@@ -253,11 +267,11 @@ static BootStatus relocWalk(const RelocCtx *ctx, int apply, ElfRelocStats *stats
                         break; /* an absolute value: does not move with the image */
                     }
                     uint32_t width = (type == R_X86_64_64) ? 8u : 4u;
-                    uint64_t off;
-                    if (locateReloc(ctx, r.offset, width, ts.addr, ts.size, &off) != 0) {
+                    uint64_t off, fileOff;
+                    if (locateReloc(ctx, r.offset, width, ts.addr, ts.size, &off, &fileOff) != 0) {
                         return BOOT_ERR_ELF_RELOC;
                     }
-                    BootStatus st = slideLocation(ctx, type, off, apply);
+                    BootStatus st = slideLocation(ctx, type, off, fileOff, apply);
                     if (st != BOOT_OK) {
                         return st;
                     }

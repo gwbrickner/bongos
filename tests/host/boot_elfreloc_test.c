@@ -611,6 +611,99 @@ TEST(relocStatsPointerMayBeNull) {
     ASSERT_EQ(destText32(&fx, EXEC_LOC), 0x80000040u + (uint32_t)SLIDE);
 }
 
+/* Two entries naming the same location would add the slide twice: every location must still
+ * hold its load-time (file) bytes when it is slid, so the second one is rejected. */
+TEST(relocDuplicateLocationIsRejected) {
+    setupWith(&fx);
+    pokeData64(&fx, DATA_VA + 8, KBASE + 0x40);
+    addReloc(&fx, 1, DATA_VA + 8, R_64, Y_TEXT, 0x40);
+    addReloc(&fx, 1, DATA_VA + 8, R_64, Y_TEXT, 0x40);
+    ASSERT_EQ(fxRun(&fx, SLIDE), BOOT_ERR_ELF_RELOC);
+    /* The same for a duplicated 32S in code. */
+    setupWith(&fx);
+    addExecReloc(&fx);
+    ASSERT_EQ(fxRun(&fx, SLIDE), BOOT_ERR_ELF_RELOC);
+}
+
+/* An entry overlapping the low half of an earlier one (in either width order): a non-zero slide
+ * below 4 GiB always changes the low 32 bits it is added to, so the later entry sees rewritten
+ * bytes. (An overlap reaching only the upper half of a 64 is invisible without per-byte state;
+ * the toolchain never emits one and kaslr-reloc-check would show it: see elf64.h.) */
+TEST(relocOverlapIntoRewrittenBytesIsRejected) {
+    setupWith(&fx);
+    pokeData64(&fx, DATA_VA + 8, KBASE + 0x40);
+    addReloc(&fx, 1, DATA_VA + 8, R_64, Y_TEXT, 0x40);
+    addReloc(&fx, 1, DATA_VA + 8, R_32S, Y_TEXT, 0);
+    ASSERT_EQ(fxRun(&fx, SLIDE), BOOT_ERR_ELF_RELOC);
+    setupWith(&fx);
+    pokeData64(&fx, DATA_VA + 8, KBASE + 0x40);
+    addReloc(&fx, 1, DATA_VA + 12, R_32S, Y_TEXT, 0); /* the 64's upper half: 0xFFFFFFFF */
+    addReloc(&fx, 1, DATA_VA + 12, R_64, Y_TEXT, 0);  /* starts in bytes the 32S rewrote */
+    ASSERT_EQ(fxRun(&fx, 0), BOOT_OK); /* each is fine on its own (the 64 reads 0xFFFFFFFF) */
+    ASSERT_EQ(fxRun(&fx, SLIDE), BOOT_ERR_ELF_RELOC);
+}
+
+/* Relocating the same image twice (a caller retry) must not slide it by 2x: pass 1 sees that the
+ * locations no longer hold the file's bytes and rejects the second call before writing. */
+TEST(relocSameImageTwiceIsRejectedAndLeavesTheFirstResult) {
+    setupWith(&fx);
+    pokeData64(&fx, DATA_VA + 8, KBASE + 0x40);
+    addReloc(&fx, 1, DATA_VA + 8, R_64, Y_TEXT, 0x40);
+    ASSERT_EQ(fxRun(&fx, SLIDE), BOOT_OK);
+    uint8_t once[0x2000];
+    memcpy(once, fx.dest, sizeof(once));
+    ASSERT_EQ(elfRelocate(&fx.img, fx.file, FILE_SIZE, fx.dest, SLIDE, NULL), BOOT_ERR_ELF_RELOC);
+    ASSERT_TRUE(memcmp(once, fx.dest, sizeof(once)) == 0);
+    ASSERT_EQ(destData64(&fx, DATA_VA + 8), KBASE + 0x40 + SLIDE);
+    /* slide 0 validates too, so it also notices the image is not the file's. */
+    ASSERT_EQ(elfRelocate(&fx.img, fx.file, FILE_SIZE, fx.dest, 0, NULL), BOOT_ERR_ELF_RELOC);
+}
+
+/* `dest` must be what elfLoad produced from this `file`: a stale or foreign image is rejected in
+ * pass 1 (nothing written) instead of being slid. */
+TEST(relocDestNotLoadedFromThisFileIsRejected) {
+    setupWith(&fx);
+    pokeData64(&fx, DATA_VA + 8, KBASE + 0x40);
+    addReloc(&fx, 1, DATA_VA + 8, R_64, Y_TEXT, 0x40);
+    ASSERT_EQ(elfParse(fx.file, FILE_SIZE, &fx.img), BOOT_OK);
+    ASSERT_EQ(elfLoad(&fx.img, fx.file, fx.dest), BOOT_OK);
+    fx.dest[(DATA_VA + 8 - KBASE) + 3] ^= 0x01;
+    memcpy(fx.before, fx.dest, sizeof(fx.dest));
+    ASSERT_EQ(elfRelocate(&fx.img, fx.file, FILE_SIZE, fx.dest, SLIDE, NULL), BOOT_ERR_ELF_RELOC);
+    ASSERT_TRUE(destUnchanged(&fx));
+}
+
+/* 32S sign extension at the exact int32 boundaries, both directions of the image window. */
+TEST(reloc32SSignExtensionBoundaries) {
+    setupWith(&fx);
+    pokeData32(&fx, DATA_VA + 8, 0x80000000u); /* INT32_MIN: -2 GiB, the window base */
+    addReloc(&fx, 1, DATA_VA + 8, R_32S, Y_TEXT, 0);
+    pokeData32(&fx, DATA_VA + 12, 0xFFFFFFFFu - (uint32_t)0x1E000000u); /* -1 - slide */
+    addReloc(&fx, 1, DATA_VA + 12, R_32S, Y_TEXT, 0);
+    ASSERT_EQ(fxRun(&fx, 0x1E000000ULL), BOOT_OK);
+    ASSERT_EQ(destData32(&fx, DATA_VA + 8), 0x9E000000u);
+    ASSERT_EQ(destData32(&fx, DATA_VA + 12), 0xFFFFFFFFu);
+    /* -slide ... -1 + 1 == 0: crossing from negative to zero is still representable. */
+    setupWith(&fx);
+    pokeData32(&fx, DATA_VA + 8, (uint32_t)(0x100000000ULL - SLIDE));
+    addReloc(&fx, 1, DATA_VA + 8, R_32S, Y_TEXT, 0);
+    ASSERT_EQ(fxRun(&fx, SLIDE), BOOT_OK);
+    ASSERT_EQ(destData32(&fx, DATA_VA + 8), 0u);
+}
+
+/* The largest slide the relocator accepts is exactly the largest bootKaslrPickSlide could pick
+ * for this image (window - alignUp(span, 2 MiB)) or more, never less. */
+TEST(relocAcceptsEveryAlignedSlideInTheWindow) {
+    for (uint64_t slide = 0; slide + 0x2000 <= 0x20000000ULL; slide += 0x200000ULL) {
+        setupWith(&fx);
+        pokeData64(&fx, DATA_VA + 8, KBASE + 0x40);
+        addReloc(&fx, 1, DATA_VA + 8, R_64, Y_TEXT, 0x40);
+        ASSERT_EQ(fxRun(&fx, slide), BOOT_OK);
+        ASSERT_EQ(destData64(&fx, DATA_VA + 8), KBASE + 0x40 + slide);
+        ASSERT_EQ(destText32(&fx, EXEC_LOC), (uint32_t)(0x80000040u + slide));
+    }
+}
+
 /* ---- section header table bounds ---- */
 
 TEST(relocSectionHeaderTableBoundsAreChecked) {
