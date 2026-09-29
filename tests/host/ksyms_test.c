@@ -300,3 +300,41 @@ TEST(ksymSlidAllowsNullSymAddrAndRejectsBadBlob) {
     ksymsBlobFree(&blob);
     freeSlidSyms(syms);
 }
+
+/* The `addr < slide` guard is load-bearing, not just tidy: the kernel's own blob can never cover
+ * the wrapped value (textEnd is far below 2^64 - slide), but the function is pure and takes any
+ * blob. With a text range at the very top of the address space, `addr - slide` for a small
+ * `addr` wraps straight into it; without the guard a user-space-looking address would resolve to
+ * a symbol (and `symAddr + slide` would wrap back to a tiny number). */
+TEST(ksymSlidAddressBelowSlideNeverWrapsIntoHighText) {
+    ElfFuncSym syms[2] = {
+        makeSym(0xFFFFFFFFFFF00000ULL, "topFunc"),
+        makeSym(0xFFFFFFFFFFF80000ULL, "topFunc2"),
+    };
+    ElfFuncSymList list = {syms, 2};
+    KsymsBlob blob = ksymsEncode(&list, 0xFFFFFFFFFFF00000ULL, 0xFFFFFFFFFFFFF000ULL);
+    const uint64_t slide = 0x200000ULL;
+    char name[64];
+    uint64_t symAddr = 0x9999;
+
+    /* 0x100010 - 0x200000 wraps to 0xFFFFFFFFFFF00010, inside [textBase, textEnd). */
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0x100010ULL, slide, name, sizeof(name),
+                                   &symAddr),
+              STATUS_ERR_NOT_FOUND);
+    ASSERT_EQ(symAddr, 0x9999ULL);
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0x180000ULL, slide, name, sizeof(name),
+                                   &symAddr),
+              STATUS_ERR_NOT_FOUND);
+    ASSERT_EQ(symAddr, 0x9999ULL);
+
+    /* Same blob, slide 0: the high text itself still resolves (the guard is only about wrap). */
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0xFFFFFFFFFFF80004ULL, 0, name,
+                                   sizeof(name), &symAddr),
+              STATUS_OK);
+    ASSERT_STREQ(name, "topFunc2");
+    ASSERT_EQ(symAddr, 0xFFFFFFFFFFF80000ULL);
+
+    ksymsBlobFree(&blob);
+    free(syms[0].name);
+    free(syms[1].name);
+}
