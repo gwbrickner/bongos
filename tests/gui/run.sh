@@ -25,6 +25,9 @@ build/tools/mkimage/mkimage --output "$IMAGE" --efi build/boot-uefi/BOOTX64.EFI 
     --kernel build/kernel/kernel.elf --boot-cfg tests/gui/menutest-boot.cfg || exit 1
 
 mkdir -p build/shots
+# Only this run's screendumps may be compared (or promoted by --update-refs): a stale one from an
+# earlier or interrupted run would otherwise fail with "no reference", or become a bogus ref.
+rm -f build/shots/"$FW"-*.ppm
 status=0
 for script in tests/gui/scripts/*.script; do
     name=$(basename "$script" .script)

@@ -21,6 +21,16 @@ and the owner.
   line in `docs/sweeps/M<p>.<n>.md`, else `origin/main`).
 - optionally: the files and functions that changed, and known concerns
 
+## Run rules
+- **Timeouts:** `make test` takes about 2–3 minutes, and `make test-full` and the release run
+  take longer. Give every Bash call that builds or boots QEMU a 600000 ms timeout.
+- **Only one QEMU job at a time.** Never background one QEMU run while starting another.
+- **Never run interactive commands:** `make run`, `make debug`, `make gdb`, or `--interactive`.
+  They block until killed. For a fault log, use `tests/harness/run-qemu.sh ... --debug` (it
+  forces TCG). For gdb, use `--gdb` plus `gdb -batch -ex ...`, then kill the pid.
+- **`make clean` deletes `build/logs/`.** Scan a run's serial logs (step 5) *before* the next
+  clean.
+
 ## 0. Load context (read these; don't skim)
 1. `CLAUDE.md` (Hard rules and Build and test), and `docs/BUG_HUNTING.md` §0, §1, §7, §8, plus
    the §6 checklist for every subsystem the diff touches.
@@ -73,6 +83,10 @@ Take each changed function in turn:
   Done-when clause, add it to `mk/test.mk`'s required list.
 
 ## 4. Audit the Done-when checks (mutation spot-check)
+**Precondition:** commit your fixes and tests first. `git status --porcelain` must be empty
+before the first mutation. Then `git checkout -- <file>` restores exactly the pre-mutation
+file, and nothing else can be lost. Mutate one file at a time.
+
 For **each** Done-when clause of the milestone (`finish` mode), or each behavior the step
 added (`step` mode):
 1. Name the test that proves it, and confirm the test runs in `make test` (it's listed in a
@@ -81,21 +95,23 @@ added (`step` mode):
    condition, skip an `invlpg`, drop a free). Rebuild and run the test, confirm it **fails**,
    then `git checkout -- <file>` to restore the code. A test that still passes against broken
    code is a finding (S2): strengthen the test.
-3. Record each mutation and its result in the report. Never commit a mutation. Before you
-   finish, run `git status` and `git diff` and make sure none is left behind.
+3. Record each mutation and its result in the report. Never commit a mutation. After the last
+   one, `git status --porcelain` must be empty again.
+4. A clause that really can't be broken by a code change (for example, "boots on the owner's
+   PC") may be marked **not mutation-testable**, with a one-sentence reason. Use this rarely:
+   the reviewer checks every such claim.
 
 ## 5. Profiles, matrix, and analysis
 - `step` mode: debug `make test`. Also run `make test-full` if the step touches memory.
-- `finish` mode, in this order (only one QEMU job at a time):
-  1. `make test-full`
-  2. `make analyze`. Triage every warning in a file the diff touches as a real bug, a false
+- `finish` mode, in this order (release first, so the debug logs survive for the reviewer):
+  1. `make clean && make RELEASE=1 && make RELEASE=1 test`, then **scan the logs**. Bugs that
+     show up only at `-O2` usually mean UB, a missing `volatile`, or bad asm constraints.
+  2. `make clean && make && make test-full && make test`, then **scan the logs**.
+  3. `make analyze`. Triage every warning in a file the diff touches as a real bug, a false
      positive (say why), or needs investigation. Record warnings in untouched files as leads
-     only.
-  3. `make clean && make RELEASE=1 && make RELEASE=1 test`. Bugs that show up only at `-O2`
-     usually mean UB, a missing `volatile`, or bad asm constraints.
-  4. `make clean && make` to leave a debug build behind.
-- Grep every serial log in `build/logs/` for `PANIC`, `UBSAN`, `stack smashed`, `KTEST FAIL`,
-  and `[error]`. Any unexpected hit is a finding, even when the run passed.
+     only. A clang error or a failed file is a finding.
+- **Scan the logs** means: `grep -nE 'PANIC|UBSAN|stack smashed|KTEST FAIL|\[error\]'
+  build/logs/*.serial.log`. Any unexpected hit is a finding, even when the run passed.
 
 ## 6. Fix policy
 - **In the diff, with a reliable repro:** fix it, whatever its severity. Each bug gets its own
@@ -107,11 +123,15 @@ added (`step` mode):
   hypothesis.
 - **Outside the diff:** log it, don't fix it.
 - Never weaken, skip, or delete a test. Never touch `main`. **Don't push.** The caller pushes.
+- Commit by naming paths (`git add <files>`), never `git add -A` or `commit -a`, so no stray
+  build output or leftover mutation gets swept in.
 - After any fix, rerun the step 5 checks that could be affected before you declare PASS.
 
 ## 7. Report
 Append a section to `docs/sweeps/M<p>.<n>.md` (create the file if it doesn't exist) and
-commit it with your fixes (`M<p>.<n>: bug-sweeper <mode> pass`):
+commit it with your fixes (`M<p>.<n>: bug-sweeper <mode> pass`). The findings table is this
+report's form of a BUG_HUNTING §9 record. For S1 and S2 bugs, also add a full §9 block
+underneath.
 ```
 ## <mode> sweep, <YYYY-MM-DD>, <base>..<HEAD sha>
 Swept through <HEAD sha>
@@ -136,5 +156,7 @@ Swept through <HEAD sha>
 
 **PASS** requires all of these: no open S1, S2, or S3 finding in the diff; every gate green in
 the profiles this mode requires; every Done-when clause (in `finish` mode) backed by a test
-that failed under its mutation; and every analyzer warning in touched files triaged. Anything
-less is FAIL. Say exactly what's missing.
+that failed under its mutation, or explicitly marked not mutation-testable with a reason; every
+analyzer warning in touched files triaged; and `git status --porcelain` empty at the end.
+Anything less is FAIL. Say exactly what's missing, and whether the caller could fix it or it
+needs a design decision.

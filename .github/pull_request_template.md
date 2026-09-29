@@ -14,7 +14,7 @@ _(copy the Summary from docs/logs/M<p>.<n>.md)_
 - Release profile (`make clean && make RELEASE=1 && make RELEASE=1 test`): <result>
 
 ### Sweep and review
-_Write each PASS line only when it's true. `pr-policy.yml` auto-merges only with both of them._
+_Replace each placeholder line with exactly `Sweeper: PASS (docs/sweeps/M<p>.<n>.md)` and `Reviewer: PASS`, each on its own line, only when they're true. `pr-policy.yml` auto-merges only on exact matches of both._
 
 Sweeper: <PASS or FAIL> (docs/sweeps/M<p>.<n>.md)
 Reviewer: <PASS or FAIL>

@@ -34,7 +34,11 @@ jobs:
             echo "Sensitive area -> needs-owner; waiting for the owner."
             exit 0
           fi
-          if echo "$body" | grep -q 'Sweeper: PASS' && echo "$body" | grep -q 'Reviewer: PASS'; then
+          # Whole-line matches only (CRLF-safe), so template placeholders or prose that merely
+          # mention "PASS" can never enable auto-merge.
+          clean=$(printf '%s\n' "$body" | tr -d '\r')
+          if printf '%s\n' "$clean" | grep -Eq '^Sweeper: PASS( \(docs/sweeps/M[0-9]+\.[0-9]+\.md\))?$' &&
+             printf '%s\n' "$clean" | grep -Eq '^Reviewer: PASS$'; then
             gh pr merge "$PR" --auto --squash -R "$REPO"
             echo "Auto-merge enabled; merges when CI is green."
           else

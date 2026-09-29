@@ -52,8 +52,9 @@ build logs.
   required by `_check-ktest-pass` where the milestone relies on it. Flag tests that were
   weakened, skipped, deleted, or regenerated (GUI refs).
 - **Process:** new decisions missing from DECISIONS.md, the OS name in identifiers,
-  third-party code, x86 code outside `arch/`, asm outside `arch/`/`boot/`, the milestone's
-  screenshot missing from `docs/screenshots/`.
+  third-party code, x86 code outside `arch/`, asm outside `arch/`/`boot/`, and any Done-when
+  clause the sweep marked "not mutation-testable" without a convincing reason. The screenshot
+  is taken after your review, so don't flag it as missing.
 
 ## Rules for findings
 - Every finding needs evidence: `file:line`, the concrete failure (the input or interleaving,

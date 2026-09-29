@@ -27,7 +27,7 @@ gui-test: image imgdiff
 # The finish protocol (CLAUDE.md) runs `make screenshot SHOT=docs/screenshots/M<p>.<n>.png`.
 SHOT ?= build/shots/final.png
 screenshot: image imgdiff
-	tests/harness/screenshot.sh --out $(SHOT)
+	tests/harness/screenshot.sh --out '$(SHOT)'
 
 # Captures fresh GUI test reference PNGs. The caller must view every regenerated PNG and record
 # why in the milestone log before committing (CLAUDE.md: regenerating a reference to turn a

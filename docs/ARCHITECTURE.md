@@ -1219,5 +1219,6 @@ stay always-fatal, or (#BP) already resume unconditionally before archTrapCatch 
   - security features or crypto
   - on-disk filesystem formats
   - the boot handoff ABI
+  - the project's own automation: `.github/` and `.claude/` (workflows, agents, hooks)
 - **Progress logging, decisions, session rules, and the PR gate:** see `CLAUDE.md`. Bug
   handling: `docs/BUG_HUNTING.md`.

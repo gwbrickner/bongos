@@ -66,6 +66,9 @@ _(none)_
   `prev` dereference), `kernel/test/kmalloc_test.c:68,143,365`, and
   `kernel/test/pmm_test.c:405`. The test-file hits are probably deliberate misuse, but none has
   been triaged yet.
+- M2.4's Done-when ktests (slab, kmalloc, vmalloc) aren't in `mk/test.mk`'s
+  `_check-ktest-pass` required list, unlike M2.1–M2.3. CLAUDE.md now requires this. Add them
+  (and confirm each one fails under a mutation) in M2.5's first commit, or in a sweep.
 
 ## Parallel lanes (informational; the main line updates this when lanes merge)
 | Milestone | Branch | State |

@@ -18,6 +18,11 @@ You build and test bongOS. **You never edit source files.**
   run `make clean && make` to leave a debug build behind. The build doesn't track flags, so
   never mix profiles without a clean.
 - Run commands one at a time. Never run two QEMU jobs at once.
+- **Timeouts:** `make test` takes about 2–3 minutes. Give every build, test, or QEMU command a
+  600000 ms Bash timeout.
+- **Never run** `make run`, `make debug`, `make gdb`, or `--interactive`. They're interactive
+  and never exit.
+- `make clean` deletes `build/logs/`, so collect failure details before any clean.
 
 ## On failure
 1. **Build error:** report the FIRST error with `file:line`, then stop.
@@ -31,9 +36,10 @@ You build and test bongOS. **You never edit source files.**
    missing line and the log it's missing from.
 5. **GUI failure** (`GUI: X does not match`): report the name and the diff PNG path
    (`build/shots/*.diff.png`).
-6. **CRASH or HANG:** rerun that one configuration with `--debug`, for example
-   `tests/harness/run-qemu.sh --image build/bongos-ktest.img --fw uefi --cpus 1 --debug`. In
-   `build/logs/<name>.qemu.log`, find the LAST `check_exception` chain before the reset. The
+6. **CRASH or HANG:** rerun that one configuration with `--debug` (it forces TCG), using the
+   same row values and a distinct name so the matrix log survives, for example
+   `tests/harness/run-qemu.sh --image build/bongos-ktest.img --fw uefi --cpus 1 --mem 3072 --name uefi-1cpu-3072m-debug --debug`.
+   In `build/logs/<name>.qemu.log`, find the LAST `check_exception` chain before the reset. The
    FIRST exception in that chain is the real one. Report its vector (`v=0e` #PF, `v=0d` #GP,
    `v=08` #DF, `v=06` #UD), RIP, CR2, and error code. Map the RIP with
    `llvm-addr2line -f -e build/kernel/kernel.elf <RIP>`. If the boot log has a `kaslr slide=`

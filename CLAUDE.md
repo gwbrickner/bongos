@@ -32,7 +32,7 @@ The root has no copies of these files. Always use the `docs/` versions.
 | `make gui-test` / `make update-refs` | GUI tests only / regenerate reference PNGs (regenerating counts as weakening a test, see Hard rules) |
 | `make analyze` | Clang static analyzer over the kernel. Report: `build/analyze/report.txt` |
 | `make screenshot SHOT=<path>.png` | Boots `build/bongos.img` and saves the final screen as a PNG |
-| `make debug` / `make gdb` / `make run` | QEMU with `-d int,cpu_reset` / the gdbstub / an interactive window |
+| `make debug` / `make gdb` / `make run` | **Humans only: interactive, never exit.** Agents use `tests/harness/run-qemu.sh ... --debug` (fault log, forces TCG) or `--gdb` + `gdb -batch` instead (BUG_HUNTING §4–5) |
 
 - Harness: `tests/harness/run-qemu.sh --help`. Serial logs go to `build/logs/<name>.serial.log`.
 - Tool setup: `tools/ci/install-deps.sh` (used by both the cloud environment and CI). If apt
@@ -40,6 +40,9 @@ The root has no copies of these files. Always use the `docs/` versions.
   rerun the script.
 - **Only one QEMU-running job at a time.** Parallel runs collide on `build/run/` sockets and
   logs. Never run `make test` while a subagent is testing.
+- **Timeouts:** `make test` takes about 2–3 minutes, longer than the default Bash timeout. Pass
+  a 600000 ms timeout for `make test`, `make test-full`, release runs, and `make screenshot`.
+- `make clean` deletes `build/logs/`. Read or copy the logs you need first.
 
 ## Subagents
 | Agent | Model | Use it for |
@@ -55,6 +58,12 @@ When you call a subagent, give it everything it needs in the prompt: the milesto
 base ref, which files and functions changed, and what you want back. It starts with no memory
 of this conversation. Run `bug-sweeper` and `qemu-tester` in the foreground, and don't start
 other QEMU work while they run.
+
+**After an editing subagent returns** (`bug-sweeper`, `subsystem-hunter`), run
+`git status --porcelain` and `git log --oneline -5` before anything else. Its work should all
+be committed. Treat any uncommitted change as a suspected leftover mutation or half-finished
+fix. Read the diff, and revert it (`git checkout -- <file>`) unless it's clearly an intended
+test, report, or fix. Never commit it blind.
 
 ## Session protocol
 
@@ -103,8 +112,9 @@ After **every working step**, and **at least every ~30 minutes**:
    `make test-full` on HEAD. Fix any failure before going on.
 2. **Deep sweep.** Run `bug-sweeper` in **finish** mode against `origin/main`. It checks both
    build profiles and the full matrix, runs `make analyze`, and tries to break every changed
-   function. Fix whatever it leaves open, then run it again. Repeat until it returns
-   `SWEEP: PASS`.
+   function. Fix whatever it leaves open, then run it again, until it returns `SWEEP: PASS`.
+   If two rounds in a row return FAIL with the same open items, stop and follow "When stuck".
+   Never open the PR on a FAIL.
 3. **Review.** `reviewer` reviews `git diff origin/main...HEAD`. Fix every **Critical**, then
    review again. Fix every **Should-fix**, or write down in the log why not. If any code
    changed after the sweep passed, repeat step 1 and run `bug-sweeper` again in step mode on
@@ -117,8 +127,9 @@ After **every working step**, and **at least every ~30 minutes**:
    next milestone and any owner checks. Commit and push.
 6. **PR.** Fill in `.github/pull_request_template.md`:
    - Title: `M<p>.<n>: <title>`.
-   - `Sweeper: PASS` and `Reviewer: PASS` go in only when they're true.
-     `.github/workflows/pr-policy.yml` auto-merges on both lines.
+   - The lines `Sweeper: PASS (docs/sweeps/M<p>.<n>.md)` and `Reviewer: PASS` go in, each on a
+     line of its own and exactly as written, only when they're true.
+     `.github/workflows/pr-policy.yml` auto-merges only when both lines match exactly.
    - Embed the screenshot with a commit-pinned URL:
      `![M<p>.<n>](https://github.com/gwbrickner/bongos/blob/<commit-sha>/docs/screenshots/M<p>.<n>.png?raw=true)`
    - Set `needs-owner: yes` if the roadmap marks the milestone that way, or if it touches a

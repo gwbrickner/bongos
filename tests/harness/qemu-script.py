@@ -244,6 +244,8 @@ def run_script(script_path, serial_sock_path, qmp_sock_path, log_path, shots_dir
                         seconds = float(line[len("sleep ") :])
                     except ValueError:
                         raise ScriptError(f"bad sleep duration: {line}")
+                    if not 0 <= seconds <= timeout:  # also rejects nan
+                        raise ScriptError(f"sleep must be between 0 and the {timeout}s timeout: {line}")
                     serial.drain_until_closed(time.monotonic() + seconds)
                 elif line == "quit":
                     qmp.quit()

@@ -8,6 +8,11 @@ on:
     branches: ['sweep/**']
   workflow_dispatch:
 
+# The skill pushes several times per sweep; only the newest push's run matters.
+concurrency:
+  group: milestone-sweep-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sweep:
     runs-on: ubuntu-24.04
@@ -33,9 +38,10 @@ jobs:
         run: mkdir -p sweep-out && cp -r build/logs sweep-out/debug-logs 2>/dev/null; cp build/analyze/report.txt sweep-out/analyze.txt 2>/dev/null; true
       # The build doesn't track flags, so switching profiles needs a clean (docs/BUG_HUNTING.md §2).
       - name: Release build + boot matrix
+        id: release
         run: make clean && make RELEASE=1 && make RELEASE=1 test
       - name: Save release logs
-        if: always()
+        if: always() && steps.release.outcome != 'skipped'
         run: cp -r build/logs sweep-out/release-logs 2>/dev/null; true
       - name: Scan serial logs for failure markers
         if: always()

@@ -11,7 +11,7 @@ usage: run-qemu.sh [options]
   --mem MB          RAM in MiB (default 512)
   --timeout S       seconds before HANG (default 120)
   --name NAME       log name (default <fw>-<cpus>cpu)
-  --debug           add -d int,cpu_reset logging to build/logs/NAME.qemu.log
+  --debug           add -d int,cpu_reset logging to build/logs/NAME.qemu.log (forces TCG)
   --interactive     show a window / serial on stdio, no timeout (for humans)
   --gdb             start paused with -s -S, serial to a log file, and return immediately;
                      writes its pid to build/run/NAME.pid so a caller can gdb it and kill it
@@ -45,6 +45,7 @@ while [ $# -gt 0 ]; do
         *) echo "unknown option $1"; usage; exit 2 ;;
     esac
 done
+[ "$SCRIPT_ONLY" = 1 ] && [ -z "$SCRIPT" ] && { echo "--script-only needs --script"; usage; exit 2; }
 [ -n "$NAME" ] || NAME="${FW}-${CPUS}cpu"
 mkdir -p build/logs build/run
 [ -f "$IMAGE" ] || { echo "RESULT $NAME: ERROR (no image at $IMAGE)"; exit 1; }
@@ -73,8 +74,9 @@ if [ "$FW" = "uefi" ]; then
     fi
 fi   # bios: QEMU's default SeaBIOS
 
+# --debug forces TCG: `-d int` logs nothing under KVM.
 ACCEL=(-accel tcg)
-[ -w /dev/kvm ] && ACCEL=(-accel kvm -accel tcg)
+[ -w /dev/kvm ] && [ "$DEBUG" != 1 ] && ACCEL=(-accel kvm -accel tcg)
 
 DBG=()
 [ "$DEBUG" = 1 ] && DBG=(-d int,cpu_reset -D "build/logs/$NAME.qemu.log")

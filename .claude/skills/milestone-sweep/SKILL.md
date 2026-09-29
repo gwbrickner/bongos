@@ -1,6 +1,7 @@
 ---
 name: milestone-sweep
 description: Full bongOS bug sweep across every implemented subsystem after a milestone. Only run when the user explicitly invokes /milestone-sweep.
+disable-model-invocation: true
 ---
 
 # Milestone sweep
@@ -16,18 +17,23 @@ deep work runs in its own fresh context. This complements the per-milestone `bug
 
 Reports go to `docs/sweeps/<milestone>-full/` (`<dir>` below).
 
+Every build or QEMU command gets a 600000 ms Bash timeout. Run only one QEMU job at a time.
+`make clean` deletes `build/logs/`, so each step below reads the logs it needs before the next
+clean.
+
 ## 1. Setup
 1. Read `docs/BUG_HUNTING.md` and `CLAUDE.md` (Build and test) in full.
 2. `git fetch origin main`, then create the branch `sweep/<milestone>` from `origin/main`.
 3. `mkdir -p <dir>`.
 
 ## 2. Baseline (stop if this fails)
-1. `make clean && make`, then `make format-check`, `make host-tests`, and `make test-full`.
-2. `make clean && make RELEASE=1 && make RELEASE=1 test`, then `make clean && make`.
+1. Release first: `make clean && make RELEASE=1 && make RELEASE=1 test`. Record the result
+   and the `KTEST DONE passed=... failed=...` line from `build/logs/uefi-1cpu.serial.log`.
+2. Then debug: `make clean && make`, then `make format-check`, `make host-tests`, and
+   `make test-full`. Record the results and each matrix row's `KTEST DONE` line.
 3. `make analyze`, then copy `build/analyze/report.txt` to `<dir>/static-analysis.txt`.
 4. Write `<dir>/baseline.md`: the build status for each profile, the ktest and host-test
-   pass/fail counts (count the `KTEST PASS` lines in `build/logs/*.serial.log`), and the
-   analyzer warning count for each file.
+   pass/fail counts, and the analyzer warning count for each file.
 
 If any build or existing test fails, **stop here**. Commit `baseline.md`, push, and report.
 Sweeping a broken build wastes the run.
@@ -51,14 +57,17 @@ Invoke `subsystem-hunter` with:
 - the report path `<dir>/<subsystem>.md`
 - the analyzer findings from `static-analysis.txt` that fall in its files
 
-Wait for it to return. Then commit anything it left uncommitted and push, before starting the
-next subsystem. If a hunter reports it couldn't finish, record that in the plan and move on.
+Wait for it to return. Then run `git status --porcelain`. The hunter should have committed
+everything. Treat any uncommitted change as a suspected leftover experiment: read the diff,
+revert it with `git checkout -- <file>` unless it's clearly its report, a test, or an
+intended fix, and commit what's kept by naming paths. Then push, before starting the next
+subsystem. If a hunter reports it couldn't finish, record that in the plan and move on.
 Retry at most once.
 
 ## 5. Cross-cutting pass
-After all the subsystems: `make clean && make`, then `make test-full`, then the release
-profile (`make clean && make RELEASE=1 && make RELEASE=1 test`), then `make clean && make`.
-Write the results to `<dir>/matrix.md`. Any new failure here gets logged as a bug but **not
+After all the subsystems, run the release profile first
+(`make clean && make RELEASE=1 && make RELEASE=1 test`), then `make clean && make && make test-full`.
+Scan each run's logs before the next clean. Write the results to `<dir>/matrix.md`. Any new failure here gets logged as a bug but **not
 fixed** in this run.
 
 ## 6. Summary

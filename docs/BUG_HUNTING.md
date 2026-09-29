@@ -25,9 +25,11 @@ fix this document.
    The message is `fix(<subsystem>): <summary>`.
 3. **Every fix ships with a regression test**: a `KTEST`, a host `TEST`, or a boot-matrix
    check. Show the test failing before the fix and passing after it.
-4. **Record every bug** with the §9 template, even ones fixed in five minutes. Found during a
-   milestone, it goes in `docs/sweeps/M<p>.<n>.md` or the milestone log. Found in a
-   milestone-sweep, it goes in the sweep report.
+4. **Record every bug**, even ones fixed in five minutes: a full §9 record, or a row in
+   bug-sweeper's findings table (the row must carry the same essentials: severity, file:line,
+   root cause, repro, fix/test). S1 and S2 bugs always get a full §9 record. A bug found
+   during a milestone goes in `docs/sweeps/M<p>.<n>.md` or the milestone log; one found in a
+   milestone-sweep goes in the sweep report.
 5. **Don't "fix" a bug by removing the symptom.** Adding a `sti`, a delay, a bigger stack, or
    a retry until the crash goes away is not finding the root cause.
 6. **Never weaken, skip, or delete a test** to get a pass (CLAUDE.md Hard rules).
@@ -60,7 +62,9 @@ usually undefined behavior, a missing `volatile`, or bad inline-asm constraints.
 | Release | `make RELEASE=1` | `-O2`, no UBSan, no `KERNEL_DEBUG`, stack protector still on |
 
 Both profiles also get `-ffreestanding -mno-red-zone -mgeneral-regs-only -mcmodel=kernel
--fno-omit-frame-pointer -Wall -Wextra -Werror` and DWARF debug info.
+-fno-omit-frame-pointer -Wall -Wextra -Werror`. **Kernel C code has no DWARF** (no `-g` in
+`KERNEL_CFLAGS`; only the NASM objects carry line info). Symbol names always resolve (ELF
+symtab plus KSYM), but source lines and variable types don't.
 
 **Always `make clean` before switching profiles.** The objects all live in `build/` and don't
 track flags, so without a clean you get a mix of debug and release objects. The full release
@@ -93,8 +97,11 @@ make clean && make            # leave a debug build behind
 | `0x6B6B6B6B6B6B6B6B` | Use after free (a pmm page or a slab object) |
 | `0xBBBBBBBB...` | Overran a slab object into its redzone |
 
-**Symbolizing an address by hand:** `llvm-addr2line -f -i -e build/kernel/kernel.elf <addr>`.
-Once KASLR lands (M2.6), subtract the `kaslr slide=` value printed at boot first.
+**Symbolizing an address by hand:** `llvm-addr2line -f -e build/kernel/kernel.elf <addr>` prints
+the function name. The file:line shows as `??:0` without DWARF, so to find the instruction,
+disassemble around it with `llvm-objdump -d --start-address=<addr-0x40> --stop-address=<addr+0x10>
+build/kernel/kernel.elf`. Once KASLR lands (M2.6), subtract the `kaslr slide=` value printed
+at boot first.
 
 #DF, NMI, and #MC already run on their own IST stacks (M2.1, `cpu-init.c`). Still to come:
 guard pages under each kernel stack (arriving with threads), and lock debugging (owner CPU
@@ -113,15 +120,18 @@ tests/harness/run-qemu.sh --help                       # every option
 tests/harness/run-qemu.sh --image build/bongos-ktest.img --fw uefi --cpus 1   # the ktest image, headless
 tests/harness/run-qemu.sh --image build/bongos-ktest.img --debug              # + -d int,cpu_reset -> build/logs/<name>.qemu.log
 tests/harness/run-qemu.sh --image build/bongos-ktest.img --mem 3072 --name big # a >4 GiB split (the NORMAL zone)
-make run / make debug / make gdb                       # interactive (for humans)
+make run / make debug / make gdb                       # humans only: interactive, never exit
 ```
 - `build/bongos-ktest.img` boots with `ktest=all` (`tests/harness/ktest-boot.cfg`), runs every
   ktest, and exits QEMU through `isa-debug-exit`. `build/bongos.img` is the normal image; it
   never runs ktests.
 - The harness always passes `-no-reboot`, so a triple fault ends the run (it shows as CRASH)
   instead of looping.
-- `-d int` logs every exception with the full register state. **It only works under TCG.** The
-  cloud container has no KVM, which suits this.
+- `-d int` logs every exception with the full register state. **It only works under TCG**, so
+  `--debug` forces TCG. Otherwise the harness uses KVM when `/dev/kvm` is writable (CI) and TCG
+  when it isn't (the cloud container).
+- Agents: builds and boots need a 600000 ms Bash timeout (`make test` takes about 2–3 minutes).
+  `make clean` deletes `build/logs/`, so read the logs first.
 - The HMP monitor socket is `build/run/<name>.monitor`. Serial goes to
   `build/logs/<name>.serial.log`.
 - To select only some ktests, put `ktest=<pattern>` in a boot.cfg cmdline (see
@@ -154,21 +164,25 @@ Connect to it with `nc -U build/run/<name>.monitor`.
 
 ## 5. GDB workflow
 
-`make gdb` starts QEMU paused with the gdbstub on `:1234`, then attaches gdb. To do it by hand:
+For humans, `make gdb` starts QEMU paused with the gdbstub on `:1234`, then attaches an
+interactive gdb. **Agents must use batch mode** (an interactive gdb never returns):
 ```sh
-tests/harness/run-qemu.sh --image build/bongos-ktest.img --gdb --name dbg
-gdb build/kernel/kernel.elf -ex "target remote :1234" -ex "hbreak kernelMain" -ex continue
-kill "$(cat build/run/dbg.pid)"          # when done
+tests/harness/run-qemu.sh --image build/bongos-ktest.img --gdb --name dbg   # returns at once
+timeout 120 gdb -batch build/kernel/kernel.elf -ex "target remote :1234" \
+    -ex "hbreak kernelMain" -ex continue -ex "info registers rip rsp cr3" -ex "bt" -ex "x/8gx \$rsp"
+kill "$(cat build/run/dbg.pid)"                                               # always clean up
 ```
-Check the real entry symbol with `nm build/kernel/kernel.elf | grep -i main`.
+The entry points are `kernelEntry` (asm) and `kernelMain` (C). Check other symbols with
+`nm build/kernel/kernel.elf | grep <name>`.
 
 Tips:
 - Use **`hbreak`** early in boot and around paging changes. Software breakpoints write `int3`
   into memory, and they break when the mappings change.
-- `watch -l someVar` sets a hardware watchpoint that catches the writer of corrupted memory.
-  It's the number one tool for S2 bugs.
-- `info registers rip rsp rbp cr2 cr3`, `x/20gx $rsp`, `bt` (frame pointers are on), and
-  `layout split`.
+- A hardware watchpoint catches the writer of corrupted memory. It's the number one tool for
+  S2 bugs. Without DWARF, gdb doesn't know C types, so watch an address:
+  `watch -l *(unsigned long *)0xffff...` (take the address from `nm` or a log line).
+- `info registers rip rsp rbp cr2 cr3`, `x/20gx $rsp`, `x/10i $pc`, and `bt` (frame pointers
+  are on; there are symbol names, but no source lines).
 
 ---
 
@@ -343,7 +357,8 @@ from the end:
 3. The common vectors: `v=00` #DE, `v=06` #UD, `v=0d` #GP, `v=0e` #PF.
 4. For a #PF, CR2 is the faulting address. The error code bits are: 0 = present, 1 = write,
    2 = user, 3 = reserved bit set, 4 = instruction fetch.
-5. Symbolize RIP (§3).
+5. Symbolize RIP (§3). The qemu log's RIP is exact even without DWARF, so disassemble around
+   it.
 
 ### Pattern recognition
 | Symptom | Usual suspect |

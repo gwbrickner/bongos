@@ -40,6 +40,7 @@ SCRIPT="build/run/$NAME.script"
 PPM="build/shots/$FW-screenshot-final.ppm"
 mkdir -p build/run build/shots "$(dirname "$OUT")"
 rm -f "$PPM"
+trap 'rm -f "$PPM"' EXIT   # even when interrupted: a leftover would break tests/gui/run.sh
 printf 'expect %s\nsleep %s\nscreendump screenshot-final\nquit\n' "$EXPECT" "$SETTLE" > "$SCRIPT"
 
 tests/harness/run-qemu.sh --image "$IMAGE" --fw "$FW" --cpus "$CPUS" --mem "$MEM" \
