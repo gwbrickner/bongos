@@ -1,6 +1,6 @@
 # Merge policy (D-045): PRs that touch sensitive areas (or say "needs-owner: yes") get the
 # needs-owner label and wait for the owner. Everything else auto-merges once CI is green,
-# as long as the PR body says both "Sweeper: PASS" and "Reviewer: PASS" (D-102).
+# as long as the PR body says both "Sweeper: PASS" and "Reviewer: PASS" (D-118).
 # Requires: repo setting "Allow auto-merge", branch protection on main requiring the "ci"
 # check, and (recommended) a BOT_TOKEN secret so merges trigger the release workflow.
 name: pr-policy

@@ -118,6 +118,7 @@ Everything goes through the harness. Don't hand-roll QEMU command lines.
 ```sh
 tests/harness/run-qemu.sh --help                       # every option
 tests/harness/run-qemu.sh --image build/bongos-ktest.img --fw uefi --cpus 1   # the ktest image, headless
+tests/harness/run-qemu.sh --image build/bongos-ktest.img --fw bios --cpus 1   # the same, through SeaBIOS + stage1/stage2
 tests/harness/run-qemu.sh --image build/bongos-ktest.img --debug              # + -d int,cpu_reset -> build/logs/<name>.qemu.log
 tests/harness/run-qemu.sh --image build/bongos-ktest.img --mem 3072 --name big # a >4 GiB split (the NORMAL zone)
 make run / make debug / make gdb                       # humans only: interactive, never exit
@@ -144,7 +145,7 @@ form `<fw> <cpus> [memMiB]`. Add rows as features land. Before a release, cover:
 
 | Variable | Values |
 |---|---|
-| Firmware | UEFI; BIOS (once the M2.5 BIOS loader lands) |
+| Firmware | UEFI (OVMF) and BIOS (SeaBIOS); both are in `matrix.conf` since M2.5 |
 | RAM | 64 MiB (once the pmm handles it), 512 MiB, 3072 MiB (splits across the 4 GiB hole), 8 GiB |
 | CPUs | 1; 2 and 4 (once M3.5 SMP lands) |
 | Profile | debug and release (§2) |
@@ -192,7 +193,7 @@ Sweep one subsystem at a time. Go through its checklist, write a test for anythi
 covered, then try to break it on purpose. The "Paths" line is the scope a sweep covers.
 
 ### 6.1 Boot, loader, and early init
-Paths: `boot/`, `kernel/arch/x86_64/entry.asm`, `early-map.c`, `kernel/core/main.c`,
+Paths: `boot/` (`uefi/`, `bios/` stage1+stage2, `common/`), `kernel/arch/x86_64/entry.asm`, `early-map.c`, `kernel/core/main.c`,
 `bootinfo.c`, `tools/mkimage/`
 - [ ] BootInfo is validated (magic, version, sizes) before use. Both loaders fill it the same
   way (ARCHITECTURE §5.3).

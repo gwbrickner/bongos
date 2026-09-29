@@ -29,9 +29,9 @@ The root has no copies of these files. Always use the `docs/` versions.
 | `make host-tests` | Host unit tests (`tests/host/`, ASan/UBSan) |
 | `make test` | The quick boot matrix (`tests/harness/matrix.conf`) plus the GUI screenshot tests and the countdown smoke test |
 | `make test-full` | The full matrix (`matrix-full.conf`), which includes a 3 GiB row |
-| `make gui-test` / `make update-refs` | GUI tests only / regenerate reference PNGs (regenerating counts as weakening a test, see Hard rules) |
+| `make gui-test` / `make update-refs` (`FW=bios` for BIOS) | GUI tests only / regenerate reference PNGs (regenerating counts as weakening a test, see Hard rules) |
 | `make analyze` | Clang static analyzer over the kernel. Report: `build/analyze/report.txt` |
-| `make screenshot SHOT=<path>.png` | Boots `build/bongos.img` and saves the final screen as a PNG |
+| `make screenshot SHOT=<path>.png` | Boots `build/bongos.img` and saves the final screen as a PNG (`FW=bios` for BIOS) |
 | `make debug` / `make gdb` / `make run` | **Humans only: interactive, never exit.** Agents use `tests/harness/run-qemu.sh ... --debug` (fault log, forces TCG) or `--gdb` + `gdb -batch` instead (BUG_HUNTING §4–5) |
 
 - Harness: `tests/harness/run-qemu.sh --help`. Serial logs go to `build/logs/<name>.serial.log`.
@@ -121,9 +121,11 @@ After **every working step**, and **at least every ~30 minutes**:
    review again. Fix every **Should-fix**, or write down in the log why not. If any code
    changed after the sweep passed, repeat step 1 and run `bug-sweeper` again in step mode on
    those changes.
-4. **Screenshot.** Run `make screenshot SHOT=docs/screenshots/M<p>.<n>.png`. Open the PNG with
-   Read and check that it shows what the milestone should (for example, the new boot output).
-   Commit it.
+4. **Screenshot.** Run `make screenshot SHOT=docs/screenshots/M<p>.<n>.png`. If the milestone
+   touches the BIOS path, also run
+   `make screenshot FW=bios SHOT=docs/screenshots/M<p>.<n>-bios.png`. Open each PNG with Read
+   and check that it shows what the milestone should (for example, the new boot output).
+   Commit them.
 5. **Paperwork.** Check the milestone's box in ROADMAP.md. Write the log's **Summary** (it
    becomes the release notes). Update STATUS.md: done milestones get one line each, then the
    next milestone and any owner checks. Commit and push.

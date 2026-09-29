@@ -3,7 +3,7 @@
 # analyzed; minus -Werror and dependency output). The report goes to build/analyze/report.txt.
 # Exit status: 1 if clang failed on any file (that file went unanalyzed). Warnings are leads, not
 # verdicts, so they only fail the target with ANALYZE_STRICT=1. Used by bug-sweeper,
-# subsystem-hunter, and the milestone-sweep workflow (D-100); triage per docs/BUG_HUNTING.md §7.5.
+# subsystem-hunter, and the milestone-sweep workflow (D-116); triage per docs/BUG_HUNTING.md §7.5.
 ANALYZE_DIR := $(BUILD)/analyze
 ANALYZE_CFLAGS := $(filter-out -Werror -MMD -MP,$(KERNEL_CFLAGS)) $(KERNEL_UBSAN_FLAGS) \
                   -Wno-unused-command-line-argument

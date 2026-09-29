@@ -1,5 +1,5 @@
 #!/bin/bash
-# Captures what a normal boot of build/bongos.img leaves on screen, as a PNG (D-099). The finish
+# Captures what a normal boot of build/bongos.img leaves on screen, as a PNG (D-115). The finish
 # protocol (CLAUDE.md) commits one per milestone as docs/screenshots/M<p>.<n>.png and embeds it
 # in the PR. Uses run-qemu.sh's --script mode with --script-only, since the release image never
 # writes isa-debug-exit; the PNG encoder is tools/imgdiff's own (`imgdiff convert`).

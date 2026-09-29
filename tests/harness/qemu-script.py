@@ -20,7 +20,7 @@ Script grammar (one step per line, blank lines and '#'-comments ignored):
                        ConIn merged with the PS/2/USB keyboard (ARCHITECTURE §5.5, D-068).
   sleep <seconds>     keeps teeing serial into the log for <seconds> (a float), e.g. to let the
                        framebuffer settle after the last expected line before a screendump.
-  quit                QMP `quit`: QEMU exits immediately. Used by --script-only runs (D-099's
+  quit                QMP `quit`: QEMU exits immediately. Used by --script-only runs (D-115's
                        tests/harness/screenshot.sh), which never reach isa-debug-exit.
 """
 import argparse

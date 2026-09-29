@@ -20,6 +20,16 @@
  * bitmask to a BootMemType, per D-060's table. No locks, boot-time or host-test only; pure. */
 uint32_t memMapEfiTypeToBootMem(uint32_t efiType, uint64_t attribute);
 
+/* E820 extended-attribute bit 1 (ACPI "System Address Map Interfaces"): "non-volatile" -- a
+ * type-1 (usable) range backed by non-volatile memory, treated as RESERVED rather than USABLE
+ * (D-107), matching memMapEfiTypeToBootMem's EfiConventionalMemory/EFI_MEMORY_SP handling above. */
+#define MEM_MAP_E820_ATTR_NON_VOLATILE 0x2u
+
+/* Maps one INT 15h E820h memory-type value (1-5, or any OEM/unrecognized value) plus its
+ * extended-attribute dword (only meaningful for type 1; ignored otherwise) to a BootMemType, per
+ * D-107's table. No locks, boot-time or host-test only; pure. */
+uint32_t memMapE820TypeToBootMem(uint32_t e820Type, uint32_t extAttr);
+
 typedef struct {
     uint64_t base;
     uint64_t length;

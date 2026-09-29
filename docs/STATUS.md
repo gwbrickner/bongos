@@ -3,20 +3,21 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-09-29 (the AI-facing docs were reworked; M2.5 is next)
+**Last updated:** 2026-09-29 (M2.5 merged; the AI-facing docs were reworked; M2.6 is next)
 
 ## Next step
-Start **M2.5 BIOS loader** (`needs-owner`). Its Needs, M1.4 and M2.1, are done.
-1. `git fetch origin main && git switch -c m2-5-bios-loader origin/main`
-2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.5.md`, then write its Plan from ROADMAP.md's
-   M2.5 steps and ARCHITECTURE §5.6 (the BIOS loader flow). Every step is **risky** (it's the
-   boot handoff), so consult `architect` before writing stage1.
-3. The scope, in short: a 440-byte NASM stage1 (INT 13h AH=42h reads of stage2, at an LBA and
-   length that mkimage patches in); stage2 (A20, E820, VBE mode pick, RSDP scan, 32-bit C with
-   real-mode INT 13h/10h thunks, reusing `boot/common`'s GPT/FAT32 readers and boot menu); load
-   the kernel and initrd, build the page tables and BootInfo (`bootMethod = BIOS`), and enter
-   long mode. `mkimage` installs stage1 and stage2. Add `bios 1` rows to
-   `tests/harness/matrix.conf` and `matrix-full.conf`, and add BIOS runs of the GUI tests.
+Start **M2.6 KASLR + kernel RNG** (`needs-owner`). Its Needs, M2.4 and M2.5, are done.
+1. `git fetch origin main && git switch -c m2-6-kaslr-rng origin/main`
+2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.6.md`, then write its Plan from ROADMAP.md's
+   M2.6 steps and ARCHITECTURE §5.3/§6.6. Every step is **risky** (the boot handoff, and
+   crypto), so consult `architect` before any code.
+3. The scope, in short: both loaders pick a 2 MiB-aligned slide from the random seed and apply
+   the `--emit-relocs` relocations (`R_X86_64_64`, `R_X86_64_32S`), honoring `kaslr=off`. The
+   kernel gets an entropy pool (RDSEED/RDRAND, the boot seed), a ChaCha20 CSPRNG, and
+   `randomGetBytes`. The symbolizer and panic output account for the slide. The ktests: two
+   boots give different `kernelVirtBase` (a harness check), an RNG sanity test, and the RFC 8439
+   vectors. Done when this passes under both firmwares, and `kaslr=off` gives the fixed base.
+4. The first commit also adds M2.4's Done-when ktests to `_check-ktest-pass` (see Open leads).
 
 ## Current milestone
 None in progress.
@@ -35,10 +36,10 @@ None in progress.
 | M2.2 | [#6](https://github.com/gwbrickner/bongos/pull/6) | pmm: Page array, buddy allocator (DMA32/NORMAL), page cache, double-free detection |
 | M2.3 | [#7](https://github.com/gwbrickner/bongos/pull/7) | Kernel page tables, W^X verifier, framebuffer WC, SMEP/SMAP/UMIP, loader reclaim, KVA |
 | M2.4 | [#8](https://github.com/gwbrickner/bongos/pull/8) | Slab caches, kmalloc (16–8192 bytes), vmalloc with guard pages, `PMM_BUG_OWNED_PAGE` |
+| M2.5 | [#11](https://github.com/gwbrickner/bongos/pull/11) | BIOS loader: stage1 MBR, stage2 with a real-mode thunk, E820/VBE, a GPT+FAT32 reader, the shared menu and handoff. One image boots both ways |
 
-Current tests: 40 ktests and 172 host tests. As of 2026-09-29 on main plus this docs work,
-`make test` passes in both the debug and release profiles, and `make test-full` passes in
-debug. The final boot screen is at `docs/screenshots/M2.4.png`.
+The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB rows in `make test-full`. The final
+boot screens are in `docs/screenshots/`.
 
 ## Blockers
 _(none)_
@@ -46,10 +47,11 @@ _(none)_
 ## Questions for owner
 - `BootInfo.bootDiskGuid` and `bootPartGuid` (D-056) have no milestone that fills them yet,
   so both stay zero. Suggestion: use the UEFI PartitionInfo protocol plus a BlockIo
-  GPT-header read, in M6.4 (which adds the kernel's own GPT scanner, per D-056).
+  GPT-header read (the BIOS loader already has a GPT reader, D-105), in M6.4 (which adds the
+  kernel's own GPT scanner, per D-056).
 
 ## Waiting on owner (hardware checks and other owner-only steps)
-- **Default the main session to Sonnet** (D-101). Adding `"model": "sonnet"` to
+- **Default the main session to Sonnet** (D-117). Adding `"model": "sonnet"` to
   `.claude/settings.json` is an owner-only change, because the agent isn't allowed to change
   its own settings. Until then, pick Sonnet when starting a session (`/model sonnet`).
 - **Re-run the cloud environment's setup script** (Environment settings → re-run setup), so
@@ -60,6 +62,10 @@ _(none)_
 - **M1.4 hardware check:** `dd` the image to a USB stick and boot it. Confirm the boot menu
   appears and that the arrow keys and Enter work. Report the resolution it logs and whether
   scrolling is smooth. Full steps are in `docs/logs/M1.4.md`, "Owner hardware check".
+- **M2.5 hardware check** (optional; never blocks): enable CSM, boot the same USB stick in
+  legacy/BIOS mode, and report whether the menu and kernel screen appear, and at what
+  resolution. If it doesn't boot, report the last thing visible. Full steps are in
+  `docs/logs/M2.5.md`, "Owner hardware check".
 
 ## Open leads (for the next `bug-sweeper` or `/milestone-sweep` to triage)
 - `make analyze` on main reports 5 warnings: `kernel/include/list.h:50` (a possible NULL
@@ -68,7 +74,9 @@ _(none)_
   been triaged yet.
 - M2.4's Done-when ktests (slab, kmalloc, vmalloc) aren't in `mk/test.mk`'s
   `_check-ktest-pass` required list, unlike M2.1–M2.3. CLAUDE.md now requires this. Add them
-  (and confirm each one fails under a mutation) in M2.5's first commit, or in a sweep.
+  (and confirm each one fails under a mutation) in M2.6's first commit, or in a sweep.
+- M2.5 deferred some items on purpose (D-114), including a PM-side diagnostic IDT in stage2
+  and dual teletype+serial logging before VBE is set up.
 
 ## Parallel lanes (informational; the main line updates this when lanes merge)
 | Milestone | Branch | State |

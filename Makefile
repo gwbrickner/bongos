@@ -14,6 +14,7 @@ include mk/host-tests.mk
 include mk/imgdiff.mk
 include mk/kernel.mk
 include mk/analyze.mk
+include mk/bios.mk
 include mk/image.mk
 include mk/qemu.mk
 include mk/test.mk

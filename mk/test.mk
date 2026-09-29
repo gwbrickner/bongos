@@ -11,7 +11,10 @@ test: image imgdiff
 	tests/harness/run-matrix.sh tests/harness/matrix.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix.conf
 	tests/gui/run.sh --fw uefi
+	tests/gui/run.sh --fw bios
 	tests/harness/run-qemu.sh --image $(IMAGE) --name countdown-smoke --timeout 30 \
+		--expect-serial "loader: timeout, booting default" --expect-serial "kernel: init done"
+	tests/harness/run-qemu.sh --fw bios --image $(IMAGE) --name countdown-smoke-bios --timeout 30 \
 		--expect-serial "loader: timeout, booting default" --expect-serial "kernel: init done"
 
 test-full: image
@@ -19,21 +22,24 @@ test-full: image
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix-full.conf
 
 # Re-runs the GUI tests alone (skips the ktest matrix and countdown smoke) -- useful while
-# iterating on a screenshot test without waiting on the rest of `make test`.
+# iterating on a screenshot test without waiting on the rest of `make test`. FW selects the
+# firmware (default uefi); `make gui-test FW=bios` runs the BIOS path instead.
+FW ?= uefi
 gui-test: image imgdiff
-	tests/gui/run.sh --fw uefi
+	tests/gui/run.sh --fw $(FW)
 
-# Boots the normal image (build/bongos.img, no ktests) and saves its final screen as a PNG (D-099).
+# Boots the normal image (build/bongos.img, no ktests) and saves its final screen as a PNG (D-115).
 # The finish protocol (CLAUDE.md) runs `make screenshot SHOT=docs/screenshots/M<p>.<n>.png`.
 SHOT ?= build/shots/final.png
 screenshot: image imgdiff
-	tests/harness/screenshot.sh --out '$(SHOT)'
+	tests/harness/screenshot.sh --fw $(FW) --out '$(SHOT)'
 
 # Captures fresh GUI test reference PNGs. The caller must view every regenerated PNG and record
 # why in the milestone log before committing (CLAUDE.md: regenerating a reference to turn a
-# failing test green counts as weakening it).
+# failing test green counts as weakening it). FW selects the firmware (default uefi); `make
+# update-refs FW=bios` captures tests/gui/ref/bios-*.png instead.
 update-refs: image imgdiff
-	tests/gui/run.sh --fw uefi --update-refs
+	tests/gui/run.sh --fw $(FW) --update-refs
 
 # A QEMU exit code of 33 (run-qemu.sh) only proves *some* ktest passed -- if bootinfo_test.c were
 # ever accidentally dropped, or bootinfo_valid renamed, `make test` would still report PASS on
