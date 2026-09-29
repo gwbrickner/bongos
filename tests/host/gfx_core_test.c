@@ -411,3 +411,89 @@ TEST(gfxRectHelpers) {
     ASSERT_EQ(u2.x0, 5);
     ASSERT_TRUE(gfxRectIsEmpty(gfxRectUnion(empty, empty)));
 }
+
+/* SRC with a global alpha below 255 blends pixel by pixel (no memmove); an overlapping move within
+ * one surface must still read every source pixel before it is overwritten, in every direction,
+ * horizontal-only moves included. Reference: the same blit from a separate copy. */
+TEST(gfxBlitOverlappingSelfBlendMatchesCopy) {
+    static const int32_t D[][2] = {{2, 0}, {-2, 0}, {0, 1}, {0, -1}, {3, 2}, {-3, -2}, {1, -1}};
+    for (size_t k = 0; k < sizeof(D) / sizeof(D[0]); k++) {
+        for (int op = 0; op < 2; op++) {
+            Fixture f, g;
+            ASSERT_TRUE(fixtureInit(&f, 9, 7, 0));
+            ASSERT_TRUE(fixtureInit(&g, 9, 7, 0));
+            rngSeed(0x5E1F + (uint32_t)k);
+            for (int32_t y = 0; y < 7; y++) {
+                for (int32_t x = 0; x < 9; x++) {
+                    uint32_t v = randPremul();
+                    f.c.surf.pixels[y * f.c.surf.stride + x] = v;
+                    g.c.surf.pixels[y * g.c.surf.stride + x] = v;
+                }
+            }
+            uint32_t copy[9 * 7];
+            for (int32_t y = 0; y < 7; y++) {
+                for (int32_t x = 0; x < 9; x++) {
+                    copy[y * 9 + x] = fixturePx(&f, x, y);
+                }
+            }
+            GfxSurface src = {copy, 9, 7, 9};
+            GfxOp o = op ? GFX_OP_SRC_OVER : GFX_OP_SRC;
+            uint8_t alpha = op ? 255 : 128; /* SRC_OVER at 255 is the same per-pixel path */
+            gfxBlit(&f.c, D[k][0], D[k][1], &f.c.surf, (GfxRect){1, 1, 8, 6}, o, alpha);
+            gfxBlit(&g.c, D[k][0], D[k][1], &src, (GfxRect){1, 1, 8, 6}, o, alpha);
+            for (int32_t y = 0; y < 7; y++) {
+                for (int32_t x = 0; x < 9; x++) {
+                    ASSERT_EQ(fixturePx(&f, x, y), fixturePx(&g, x, y));
+                }
+            }
+            ASSERT_TRUE(guardIntact(&f));
+            fixtureFree(&f);
+            fixtureFree(&g);
+        }
+    }
+}
+
+/* The exact values of both ops against an independent formulation of D-141's math: each product
+ * is round(a*b/255) half up, i.e. (2ab + 255) / 510. */
+static uint32_t refMul(uint32_t a, uint32_t b) {
+    return (2u * a * b + 255u) / 510u;
+}
+
+TEST(gfxBlendMatchesReferenceFormula) {
+    rngSeed(0xD141);
+    for (int i = 0; i < 300000; i++) {
+        uint32_t dst = randPremul(), src = randPremul();
+        uint32_t cov = (i & 7) == 0 ? 255u : (i & 7) == 1 ? 0u : (rngNext() & 0xFFu);
+        uint32_t s[4], d[4], over = 0, srcOp = 0;
+        for (int c = 0; c < 4; c++) {
+            s[c] = refMul((src >> (8 * c)) & 0xFFu, cov);
+            d[c] = (dst >> (8 * c)) & 0xFFu;
+        }
+        for (int c = 0; c < 4; c++) {
+            over |= (s[c] + refMul(d[c], 255u - s[3])) << (8 * c);
+            srcOp |= (s[c] + refMul(d[c], 255u - cov)) << (8 * c);
+        }
+        ASSERT_EQ(gfxBlendPixel(dst, src, cov, GFX_OP_SRC_OVER), over);
+        ASSERT_EQ(gfxBlendPixel(dst, src, cov, GFX_OP_SRC), srcOp);
+    }
+    /* the span helpers agree with the pixel function */
+    uint32_t a[64], b[64];
+    uint8_t cv[64];
+    for (int k = 0; k < 200; k++) {
+        uint32_t col = randPremul();
+        GfxOp op = (k & 1) ? GFX_OP_SRC : GFX_OP_SRC_OVER;
+        for (int i = 0; i < 64; i++) {
+            a[i] = b[i] = randPremul();
+            cv[i] = (uint8_t)((i & 3) == 0 ? 0 : (i & 3) == 1 ? 255 : rngNext());
+        }
+        gfxBlendSpanCov(a, cv, 64, col, op);
+        for (int i = 0; i < 64; i++) {
+            ASSERT_EQ(a[i], cv[i] == 0 ? b[i] : gfxBlendPixel(b[i], col, cv[i], op));
+        }
+        gfxBlendSpan(a, 64, col, op);
+        for (int i = 0; i < 64; i++) {
+            uint32_t prev = cv[i] == 0 ? b[i] : gfxBlendPixel(b[i], col, cv[i], op);
+            ASSERT_EQ(a[i], gfxBlendPixel(prev, col, 255u, op));
+        }
+    }
+}
