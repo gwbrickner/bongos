@@ -64,6 +64,33 @@ KTEST(bootinfo_rejects_bad) {
         KTEST_ASSERT(bootInfoCheckHeader(&bad, &why) != STATUS_OK);
     }
     {
+        /* A slide that is 2 MiB aligned but pushes the (2 MiB-rounded) image one step past the end
+         * of the kernel window; only the window check can be the reason for the rejection. */
+        uint64_t window = BOOTINFO_KERNEL_WINDOW_END - BOOTINFO_KERNEL_WINDOW_BASE;
+        uint64_t needed = ((live->kernelSize + 0x1FFFFFULL) & ~0x1FFFFFULL);
+        BootInfo bad = *live;
+        bad.kaslrSlide = window - needed + 0x200000ULL;
+        bad.kernelVirtBase = BOOTINFO_KERNEL_WINDOW_BASE + bad.kaslrSlide;
+        const char *badWhy = "";
+        Status st = bootInfoCheckHeader(&bad, &badWhy);
+        KTEST_ASSERT(st != STATUS_OK);
+        KTEST_ASSERT(cmdlineGlobMatch("*kernel window*", badWhy));
+
+        /* The largest slide that still fits is not a window violation (it is rejected here only
+         * because kernelVirtBase no longer matches the live image, a different message). */
+        bad.kaslrSlide = window - needed;
+        bad.kernelVirtBase = BOOTINFO_KERNEL_WINDOW_BASE + bad.kaslrSlide;
+        KTEST_ASSERT(bootInfoCheckHeader(&bad, &badWhy) != STATUS_OK);
+        KTEST_ASSERT(!cmdlineGlobMatch("*kernel window*", badWhy));
+
+        /* A kernelSize so large that rounding it up could wrap must be rejected too, never
+         * accepted through an overflowed `needed`. */
+        bad.kaslrSlide = 0;
+        bad.kernelSize = UINT64_MAX - 0x1000;
+        KTEST_ASSERT(bootInfoCheckHeader(&bad, &badWhy) != STATUS_OK);
+        KTEST_ASSERT(cmdlineGlobMatch("*kernel window*", badWhy));
+    }
+    {
         BootMemRegion regions[2] = {
             {0x200000, 0x1000, BOOT_MEM_USABLE, 0},
             {0x100000, 0x1000, BOOT_MEM_USABLE, 0},

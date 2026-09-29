@@ -167,3 +167,136 @@ TEST(ksymsCompressionHandlesRepetitiveNames) {
         free(syms[i].name);
     }
 }
+
+/* ksymDecodeLookupSlid (M2.6 KASLR): the blob holds link-time addresses, callers pass runtime
+ * addresses plus the slide. */
+static KsymsBlob slidBlob(ElfFuncSym syms[3]) {
+    syms[0] = makeSym(0xFFFFFFFF80000000ULL, "kernelEntry");
+    syms[1] = makeSym(0xFFFFFFFF80000100ULL, "panic");
+    syms[2] = makeSym(0xFFFFFFFF80001000ULL, "trapDispatch");
+    ElfFuncSymList list = {syms, 3};
+    return ksymsEncode(&list, 0xFFFFFFFF80000000ULL, 0xFFFFFFFF80002000ULL);
+}
+
+static void freeSlidSyms(ElfFuncSym syms[3]) {
+    for (int i = 0; i < 3; i++) {
+        free(syms[i].name);
+    }
+}
+
+TEST(ksymSlidZeroMatchesPlainLookup) {
+    ElfFuncSym syms[3];
+    KsymsBlob blob = slidBlob(syms);
+    char name[64], name0[64];
+    uint64_t symAddr = 0, symAddr0 = 0;
+    for (uint64_t a = 0xFFFFFFFF7FFFFFF0ULL; a < 0xFFFFFFFF80002010ULL; a += 0x37) {
+        Status plain = ksymDecodeLookup(blob.data, blob.size, a, name0, sizeof(name0), &symAddr0);
+        Status slid =
+            ksymDecodeLookupSlid(blob.data, blob.size, a, 0, name, sizeof(name), &symAddr);
+        ASSERT_EQ(slid, plain);
+        if (plain == STATUS_OK) {
+            ASSERT_STREQ(name, name0);
+            ASSERT_EQ(symAddr, symAddr0);
+        }
+    }
+    ksymsBlobFree(&blob);
+    freeSlidSyms(syms);
+}
+
+TEST(ksymSlidNonzeroSlideAddsSlideBackToSymbolAddress) {
+    ElfFuncSym syms[3];
+    KsymsBlob blob = slidBlob(syms);
+    const uint64_t slide = 0x1FE00000ULL; /* the largest slot the loader can pick */
+    char name[64];
+    uint64_t symAddr = 0;
+
+    /* Exact symbol starts and interior addresses, at the slid runtime address. */
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0xFFFFFFFF80000100ULL + slide, slide, name,
+                                   sizeof(name), &symAddr),
+              STATUS_OK);
+    ASSERT_STREQ(name, "panic");
+    ASSERT_EQ(symAddr, 0xFFFFFFFF80000100ULL + slide);
+
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0xFFFFFFFF80000123ULL + slide, slide, name,
+                                   sizeof(name), &symAddr),
+              STATUS_OK);
+    ASSERT_STREQ(name, "panic");
+    ASSERT_EQ(symAddr, 0xFFFFFFFF80000100ULL + slide);
+    ASSERT_EQ(0xFFFFFFFF80000123ULL + slide - symAddr, 0x23ULL); /* the printed offset */
+
+    /* The last byte before the next symbol still belongs to the previous one; the next symbol's
+     * first byte belongs to it. */
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0xFFFFFFFF80000FFFULL + slide, slide, name,
+                                   sizeof(name), &symAddr),
+              STATUS_OK);
+    ASSERT_STREQ(name, "panic");
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0xFFFFFFFF80001000ULL + slide, slide, name,
+                                   sizeof(name), &symAddr),
+              STATUS_OK);
+    ASSERT_STREQ(name, "trapDispatch");
+    ASSERT_EQ(symAddr, 0xFFFFFFFF80001000ULL + slide);
+
+    /* The link-time (unslid) address of a real symbol is a different, unmapped runtime address:
+     * with the slide subtracted it falls before textBase. */
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0xFFFFFFFF80000100ULL - 0x10, slide, name,
+                                   sizeof(name), &symAddr),
+              STATUS_ERR_NOT_FOUND);
+
+    ksymsBlobFree(&blob);
+    freeSlidSyms(syms);
+}
+
+TEST(ksymSlidAddressBelowSlideAndPastEndAreNotFound) {
+    ElfFuncSym syms[3];
+    KsymsBlob blob = slidBlob(syms);
+    const uint64_t slide = 0x200000ULL;
+    char name[64];
+    uint64_t symAddr = 0x5555;
+
+    /* addr < slide: the subtraction would wrap; must be NOT_FOUND, symAddr untouched. */
+    ASSERT_EQ(
+        ksymDecodeLookupSlid(blob.data, blob.size, slide - 1, slide, name, sizeof(name), &symAddr),
+        STATUS_ERR_NOT_FOUND);
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0, slide, name, sizeof(name), &symAddr),
+              STATUS_ERR_NOT_FOUND);
+    ASSERT_EQ(symAddr, 0x5555ULL);
+
+    /* addr == slide maps to link address 0: also before textBase. */
+    ASSERT_EQ(
+        ksymDecodeLookupSlid(blob.data, blob.size, slide, slide, name, sizeof(name), &symAddr),
+        STATUS_ERR_NOT_FOUND);
+
+    /* Last byte before textEnd resolves; textEnd itself and beyond do not. */
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0xFFFFFFFF80001FFFULL + slide, slide, name,
+                                   sizeof(name), &symAddr),
+              STATUS_OK);
+    ASSERT_STREQ(name, "trapDispatch");
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0xFFFFFFFF80002000ULL + slide, slide, name,
+                                   sizeof(name), &symAddr),
+              STATUS_ERR_NOT_FOUND);
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0xFFFFFFFFFFFFFFFFULL, slide, name,
+                                   sizeof(name), &symAddr),
+              STATUS_ERR_NOT_FOUND);
+
+    ksymsBlobFree(&blob);
+    freeSlidSyms(syms);
+}
+
+TEST(ksymSlidAllowsNullSymAddrAndRejectsBadBlob) {
+    ElfFuncSym syms[3];
+    KsymsBlob blob = slidBlob(syms);
+    char name[64];
+
+    ASSERT_EQ(ksymDecodeLookupSlid(blob.data, blob.size, 0xFFFFFFFF80000108ULL + 0x400000ULL,
+                                   0x400000ULL, name, sizeof(name), NULL),
+              STATUS_OK);
+    ASSERT_STREQ(name, "panic");
+
+    uint64_t symAddr = 0x77;
+    ASSERT_EQ(ksymDecodeLookupSlid(NULL, 0, 0xFFFFFFFF80000108ULL, 0, name, sizeof(name), &symAddr),
+              STATUS_ERR_NOT_FOUND);
+    ASSERT_EQ(symAddr, 0x77ULL);
+
+    ksymsBlobFree(&blob);
+    freeSlidSyms(syms);
+}

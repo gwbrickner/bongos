@@ -6,10 +6,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Prints a backtrace to klogRaw, one "  #N 0x<addr>\n" line per frame, up to 32 frames. If `pc`
- * is nonzero, it's printed first as frame #0 (the trap path's own faulting RIP, which has no
- * return-address slot of its own to walk to); frame numbering then continues from `fp`'s chain
- * starting at #1 (or #0 if `pc` was 0, matching plain panic()'s use with no separate PC).
+/* Prints a backtrace to klogRaw: first one "  kaslr slide 0x<slide> (link address = address -
+ * slide)\n" line (M2.6; never starts with "  #"), then one "  #N 0x<addr> name+0xoff\n" line per
+ * frame, up to 32 frames. Addresses are runtime addresses, symbolized with the slide subtracted
+ * (ksymDecodeLookupSlid). If `pc` is nonzero, it's printed first as frame #0 (the trap path's own
+ * faulting RIP, which has no return-address slot of its own to walk to); frame numbering then
+ * continues from `fp`'s chain starting at #1 (or #0 if `pc` was 0, matching plain panic()'s use
+ * with no separate PC).
  * Bounds-checks every frame pointer against the four statically-known kernel stacks (the boot
  * stack and the three IST stacks, ARCHITECTURE §7.1) -- a frame pointer outside all of them, or
  * not 8-aligned, or that doesn't strictly increase while it stays within the *same* stack (an

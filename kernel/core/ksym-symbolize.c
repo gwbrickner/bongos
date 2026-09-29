@@ -10,7 +10,8 @@ void ksymSymbolize(uint64_t addr, char *buf, size_t bufSize) {
     char name[128];
     uint64_t symAddr;
     size_t blobSize = (size_t)(ksymsEnd - ksymsStart);
-    Status st = ksymDecodeLookup(ksymsStart, blobSize, addr, name, sizeof(name), &symAddr);
+    Status st = ksymDecodeLookupSlid(ksymsStart, blobSize, addr, kernelSlide(), name, sizeof(name),
+                                     &symAddr);
     if (st != STATUS_OK) {
         ksnprintf(buf, bufSize, "?");
         return;

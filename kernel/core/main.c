@@ -6,6 +6,7 @@
 #include "klog.h"
 #include "ktest.h"
 #include "panic.h"
+#include "sections.h"
 #include "stack-protector.h"
 
 #include <arch/cpu-init.h>
@@ -132,6 +133,12 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
      * earlier already returned and checked the old fixed-constant guard, and nothing from here on
      * should run with a canary an attacker could predict from source (D-077). */
     stackGuardInit(bi);
+
+    /* M2.6: greppable by tests/harness and mk/test.mk. `virtBase` is the loader's report and the
+     * slide is recomputed from the linker symbol; bootInfoValidate() already required them to
+     * agree (kernelVirtBase - kaslrSlide == the link base). */
+    klogWrite(KLOG_INFO, "kaslr", "virtBase=0x%016llx slide=0x%016llx",
+              (unsigned long long)bi->kernelVirtBase, (unsigned long long)kernelSlide());
 
     bootInfoPagePhysValue = (uint64_t)(uintptr_t)bi - bi->hhdmBase;
     bootInfoCopy = *bi;

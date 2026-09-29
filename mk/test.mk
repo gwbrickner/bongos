@@ -73,6 +73,10 @@ SLAB_REQUIRED_KTESTS := kmalloc_stress kmalloc_alignment kmalloc_double_free sla
                         vmalloc_guard_page_faults vmalloc_map_free_no_leak \
                         vmalloc_interior_free_rejected vmalloc_not_vmalloc_page_rejected \
                         vmalloc_oom_rollback
+# M2.6 (KASLR + kernel RNG): only the ktests that exist so far; later steps append their own. Every
+# matrix log must also show the kernel's kaslr line (kernelMain), so a kernel that stops reporting
+# its slide cannot pass.
+M26_REQUIRED_KTESTS := ksym_slide_accounted
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus mem; do \
@@ -117,5 +121,15 @@ _check-ktest-pass:
 	            status=1; \
 	        fi; \
 	    done; \
+	    for t in $(M26_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M2.6 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^\[info\] kaslr: virtBase=0x[0-9a-f]{16} slide=0x[0-9a-f]{16}$$'; then \
+	        echo "make test: $$log does not contain the kernel's 'kaslr: virtBase=... slide=...' line (ROADMAP M2.6 Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
 	done < "$(MATRIX)"; \
 	exit $$status
