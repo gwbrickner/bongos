@@ -18,6 +18,28 @@ static inline uint64_t bootAlignDown(uint64_t x, uint64_t align) {
     return x & ~(align - 1);
 }
 
+/* A portable 64-bit-by-32-bit unsigned divide/remainder (D-065): i386 has no single instruction
+ * for a 64-bit divide, and this loader links no compiler-rt (`-nostdlib`), so the compiler's own
+ * 64-bit `/`/`%` -- unlike a 64-bit shift, which the backend can still inline -- would pull in
+ * `__udivdi3`/`__umoddi3`, undefined at link time here. Binary long division, one bit at a time:
+ * not fast, but every real caller (FAT sector/cluster arithmetic) only ever does this a handful
+ * of times at boot, where speed doesn't matter. */
+static inline uint64_t bootDivMod64(uint64_t dividend, uint32_t divisor, uint32_t *outRemainder) {
+    uint64_t quotient = 0;
+    uint64_t remainder = 0;
+    for (int bit = 63; bit >= 0; bit--) {
+        remainder = (remainder << 1) | ((dividend >> bit) & 1u);
+        if (remainder >= divisor) {
+            remainder -= divisor;
+            quotient |= ((uint64_t)1 << bit);
+        }
+    }
+    if (outRemainder != NULL) {
+        *outRemainder = (uint32_t)remainder;
+    }
+    return quotient;
+}
+
 /* The only place a physical address becomes a pointer (D-065): before ExitBootServices, UEFI
  * firmware runs with every physical address identity-mapped, so this is a plain cast -- but
  * writing it this way means a later loader (BIOS stage2's protected-mode phase, or a host test
@@ -27,10 +49,10 @@ static inline void *bootPhysToPtr(uint64_t phys) {
     return (void *)(uintptr_t)phys;
 }
 
-/* Freestanding-safe memcpy/memset: boot/common/ avoids libc names (D-065) since the UEFI target
- * has no libc and clang's implicit `memcpy`/`memset` calls are shimmed separately
- * (boot/uefi/libc-shim.c) for struct assignment/zero-init, not for explicit copies like this.
- * No locks, boot-time or host-test only. */
+/* Freestanding-safe memcpy/memset: boot/common/ avoids libc names (D-065) since neither loader
+ * target has a libc and clang's implicit `memcpy`/`memset` calls are shimmed separately
+ * (boot/common/hw/libc-shim.c) for struct assignment/zero-init, not for explicit copies like
+ * this. No locks, boot-time or host-test only. */
 void bootMemcpy(void *dst, const void *src, size_t n);
 void bootMemset(void *dst, uint8_t value, size_t n);
 

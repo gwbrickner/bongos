@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "branding.h"
+#include "biosboot.h"
 #include "boot-status.h"
 #include "bootcfg.h"
 #include "gpt.h"
@@ -43,6 +44,8 @@ typedef struct {
     const char *bootCfg;
     const char *kernel;
     const char *initrd;
+    const char *stage1;
+    const char *stage2;
     uint64_t sizeMib;
     uint64_t espMib;
     uint64_t biosBootMib;
@@ -51,13 +54,17 @@ typedef struct {
 static void usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s --output PATH --efi PATH [--boot-cfg PATH] [--kernel PATH] "
-            "[--initrd PATH] [--size-mib N] [--esp-mib N] [--bios-boot-mib N]\n"
+            "[--initrd PATH] [--stage1 PATH --stage2 PATH] [--size-mib N] [--esp-mib N] "
+            "[--bios-boot-mib N]\n"
             "  --output PATH        disk image to write (default 2 GiB, GPT: BIOS boot + ESP + "
             "root, ARCHITECTURE §5.1)\n"
             "  --efi PATH            BOOTX64.EFI to place at /EFI/BOOT/BOOTX64.EFI on the ESP\n"
             "  --boot-cfg/--kernel/--initrd PATH   placed at /" LOADER_DIR_NAME
             "/{boot.cfg,kernel.elf,"
-            "initrd.img} on the ESP (M1.3+; omit if they don't exist yet)\n",
+            "initrd.img} on the ESP (M1.3+; omit if they don't exist yet)\n"
+            "  --stage1/--stage2 PATH   BIOS stage1 (440 B)/stage2, installed into the "
+            "protective MBR and the BIOS boot partition (M2.5, docs/specs/bios-boot.md); both "
+            "or neither\n",
             argv0);
 }
 
@@ -97,6 +104,8 @@ static int parseOptions(int argc, char **argv, Options *opt) {
     opt->bootCfg = NULL;
     opt->kernel = NULL;
     opt->initrd = NULL;
+    opt->stage1 = NULL;
+    opt->stage2 = NULL;
     opt->sizeMib = 2048;
     opt->espMib = 256;
     opt->biosBootMib = 1;
@@ -112,6 +121,10 @@ static int parseOptions(int argc, char **argv, Options *opt) {
             opt->kernel = argv[++i];
         } else if (strcmp(argv[i], "--initrd") == 0 && i + 1 < argc) {
             opt->initrd = argv[++i];
+        } else if (strcmp(argv[i], "--stage1") == 0 && i + 1 < argc) {
+            opt->stage1 = argv[++i];
+        } else if (strcmp(argv[i], "--stage2") == 0 && i + 1 < argc) {
+            opt->stage2 = argv[++i];
         } else if (strcmp(argv[i], "--size-mib") == 0 && i + 1 < argc) {
             opt->sizeMib = parseUint(argv[++i], "--size-mib");
         } else if (strcmp(argv[i], "--esp-mib") == 0 && i + 1 < argc) {
@@ -128,6 +141,10 @@ static int parseOptions(int argc, char **argv, Options *opt) {
     }
     if (opt->output == NULL || opt->efi == NULL) {
         fprintf(stderr, "mkimage: --output and --efi are required\n");
+        return -1;
+    }
+    if ((opt->stage1 == NULL) != (opt->stage2 == NULL)) {
+        fprintf(stderr, "mkimage: --stage1 and --stage2 must be given together (or neither)\n");
         return -1;
     }
     if (requireMibFits(opt->sizeMib, "--size-mib") != 0 ||
@@ -350,6 +367,38 @@ static void cleanupTmpFiles(void) {
     }
 }
 
+/* Reads the whole file at `path` into a malloc'd buffer, filling `*outSize`. Exits the process on
+ * any I/O error. The caller frees the buffer. */
+static uint8_t *readWholeFile(const char *path, size_t *outSize) {
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+        fprintf(stderr, "mkimage: %s: %s\n", path, strerror(errno));
+        exit(1);
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fprintf(stderr, "mkimage: %s: %s\n", path, strerror(errno));
+        exit(1);
+    }
+    long size = ftell(f);
+    if (size < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "mkimage: %s: %s\n", path, strerror(errno));
+        exit(1);
+    }
+    uint8_t *buf = malloc((size_t)size > 0 ? (size_t)size : 1);
+    if (buf == NULL) {
+        fprintf(stderr, "mkimage: out of memory reading %s\n", path);
+        exit(1);
+    }
+    size_t got = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    if (got != (size_t)size) {
+        fprintf(stderr, "mkimage: %s: short read\n", path);
+        exit(1);
+    }
+    *outSize = (size_t)size;
+    return buf;
+}
+
 /* Runs the loader's own boot.cfg parser (boot/common/bootcfg.c) against `path` at build time
  * (D-067), so a malformed boot.cfg fails the build with a line number instead of shipping to a
  * USB stick and failing silently (or worse, half-parsing) in the loader. Exits the process on
@@ -504,9 +553,46 @@ int main(int argc, char **argv) {
     gptWriteLayout(image, totalSectors, &diskGuid, partitions, 3);
     memcpy(image + espStart * SECTOR_SIZE, espData, (size_t)(espSectors * SECTOR_SIZE));
     free(espData);
-    /* The BIOS boot and root partitions stay zeroed: BIOS stage1/stage2 land in M2.5, and root
-     * has no filesystem until bongfs (M7.6-M7.7) -- ARCHITECTURE §5.1 says the initrd stands in
-     * for root until then. */
+    /* The root partition stays zeroed: it has no filesystem until bongfs (M7.6-M7.7) --
+     * ARCHITECTURE §5.1 says the initrd stands in for root until then. */
+
+    uint32_t installedStage2Sectors = 0; /* also needed below, once the file is actually written */
+    if (opt.stage1 != NULL) {
+        size_t stage1Len = 0;
+        uint8_t *stage1Buf = readWholeFile(opt.stage1, &stage1Len);
+        if (stage1Len != BIOSBOOT_STAGE1_SIZE) {
+            fprintf(stderr, "mkimage: %s: stage1 must be exactly %u bytes, got %zu\n", opt.stage1,
+                    BIOSBOOT_STAGE1_SIZE, stage1Len);
+            return 1;
+        }
+        size_t stage2Len = 0;
+        uint8_t *stage2Buf = readWholeFile(opt.stage2, &stage2Len);
+        uint32_t stage2Sectors = mkimageValidateStage2(stage2Buf, stage2Len);
+        if (stage2Sectors == 0) {
+            fprintf(stderr, "mkimage: %s: invalid stage2 header (see docs/specs/bios-boot.md)\n",
+                    opt.stage2);
+            return 1;
+        }
+        if ((uint64_t)stage2Sectors > biosBootSectors) {
+            fprintf(stderr,
+                    "mkimage: stage2 (%u sectors) doesn't fit in the %llu MiB BIOS boot "
+                    "partition\n",
+                    stage2Sectors, (unsigned long long)opt.biosBootMib);
+            return 1;
+        }
+        if (mkimagePatchStage1(stage1Buf, biosBootStart, stage2Sectors) != 0) {
+            fprintf(stderr, "mkimage: %s: missing or invalid S1PB patch-block magic\n", opt.stage1);
+            return 1;
+        }
+        /* The protective MBR's partition entry (bytes 446-509) and 0x55AA signature (510-511)
+         * were already written by gptWriteLayout() above; stage1's own 440 bytes (0-439) are
+         * untouched by it, so this can't clobber either. */
+        memcpy(image, stage1Buf, BIOSBOOT_STAGE1_SIZE);
+        memcpy(image + biosBootStart * SECTOR_SIZE, stage2Buf, stage2Len);
+        free(stage1Buf);
+        free(stage2Buf);
+        installedStage2Sectors = stage2Sectors;
+    }
 
     unlink(outputTmpPath);
     /* O_EXCL (the path must not already exist) + O_NOFOLLOW closes the classic symlink race: if
@@ -531,6 +617,14 @@ int main(int argc, char **argv) {
                 (off_t)(espStart * SECTOR_SIZE));
     pwriteExact(fd, image + backupArrayLba * SECTOR_SIZE,
                 (size_t)(backupRegionSectors * SECTOR_SIZE), (off_t)(backupArrayLba * SECTOR_SIZE));
+    if (installedStage2Sectors > 0) {
+        /* stage1's own 440 bytes are inside primaryMetadataSectors (LBA 0), already written
+         * above -- only stage2, out in the BIOS boot partition, is otherwise left as a sparse
+         * hole like the rest of that partition. */
+        pwriteExact(fd, image + biosBootStart * SECTOR_SIZE,
+                    (size_t)installedStage2Sectors * SECTOR_SIZE,
+                    (off_t)(biosBootStart * SECTOR_SIZE));
+    }
     free(image);
 
     if (close(fd) != 0) {

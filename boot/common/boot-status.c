@@ -32,6 +32,16 @@ const char *bootStatusString(BootStatus s) {
             return "page-table mapping request not 4 KiB aligned";
         case BOOT_ERR_FB_UNSUPPORTED:
             return "unsupported framebuffer geometry";
+        case BOOT_ERR_IO:
+            return "block device read failed";
+        case BOOT_ERR_GPT:
+            return "invalid GPT header or partition array";
+        case BOOT_ERR_FAT:
+            return "invalid FAT32 volume/directory/file structure";
+        case BOOT_ERR_NOT_FOUND:
+            return "not found";
+        case BOOT_ERR_TOO_LARGE:
+            return "destination buffer too small";
         default:
             return "unknown boot status";
     }

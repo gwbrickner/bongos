@@ -22,7 +22,8 @@ IMGDIFF=build/tools/imgdiff/imgdiff
 
 IMAGE=build/bongos-menutest.img
 build/tools/mkimage/mkimage --output "$IMAGE" --efi build/boot-uefi/BOOTX64.EFI \
-    --kernel build/kernel/kernel.elf --boot-cfg tests/gui/menutest-boot.cfg || exit 1
+    --kernel build/kernel/kernel.elf --boot-cfg tests/gui/menutest-boot.cfg \
+    --stage1 build/boot-bios/stage1.bin --stage2 build/boot-bios/stage2.bin || exit 1
 
 mkdir -p build/shots
 status=0

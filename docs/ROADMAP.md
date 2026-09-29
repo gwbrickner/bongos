@@ -164,7 +164,7 @@ workflow is green on the PR.
 
 **Done when:** the ktests pass.
 
-### [ ] M2.5 BIOS loader `needs-owner`
+### [x] M2.5 BIOS loader `needs-owner`
 **Needs:** M1.4, M2.1
 1. stage1 (440 B NASM): relocate, INT 13h AH=42h reads of stage2 using the LBA/length that mkimage patched in. On error, print the error code.
 2. stage2:

@@ -2,7 +2,10 @@
  * reading boot.cfg, GOP mode selection and the boot menu (boot/uefi/gop.c, menu.c), reading
  * kernel.elf, the page-table build including the framebuffer HHDM mapping (boot/common/paging.c),
  * the BootInfo build, the ExitBootServices retry loop, and the final jump through
- * boot/uefi/trampoline.asm.
+ * boot/uefi/trampoline.asm. The page-table/BootInfo-build core and the CPU/MSR/RDTSC/RDSEED
+ * primitives are shared with BIOS stage2 (D-104/D-108: boot/common/hw/cpu.c,
+ * boot/common/boothandoff.c) -- this file gathers EFI-specific inputs (GetMemoryMap,
+ * EFI_RNG_PROTOCOL, EFI config tables, ExitBootServices) and calls into those.
  *
  * Simplifications versus the full M1.3 design (noted in the M1.3 milestone log, not blocking the
  * Done-when check): the page-table pool and the BootInfo memory-map array are fixed, generously
@@ -17,10 +20,12 @@
 #include "file.h"
 #include "gop.h"
 #include "include/efi/guids.h"
+#include "loader-cpu.h"
+#include "loader-serial.h"
 #include "menu.h"
-#include "serial.h"
 
 #include "bootcfg.h"
+#include "boothandoff.h"
 #include "bootmem.h"
 #include "elf64.h"
 #include "fbtext.h"
@@ -29,257 +34,38 @@
 
 #include <stdbool.h>
 
-/* boot/uefi/libc-shim.c defines this (D-065: this freestanding target has no libc header to
+/* boot/common/hw/libc-shim.c defines this (D-065: this freestanding target has no libc header to
  * declare it), matching this exact signature. */
 extern int memcmp(const void *a, const void *b, size_t n);
 
-#define HANDOFF_PT_POOL_PAGES    1024u /* 4 MiB: generous fixed bound, see file header comment */
-#define HANDOFF_BOOT_STACK_PAGES 16u   /* 64 KiB, ARCHITECTURE §5.4 */
-#define HANDOFF_MAX_ALLOCS       16u
-#define HANDOFF_MAX_INPUTS       512u
-#define HANDOFF_MEMMAP_CAP       4096u
-#define HANDOFF_MEMMAP_CAP_PAGES 24u /* ceil(4096 * sizeof(BootMemRegion) / 4096) */
-#define HANDOFF_PAGE_SIZE        4096ULL
+/* The page-table pool size, boot stack size, and BootInfo memory-map array capacity now live in
+ * boothandoff.h as BOOT_HANDOFF_PT_POOL_PAGES/BOOT_HANDOFF_BOOT_STACK_PAGES/
+ * BOOT_HANDOFF_MEMMAP_CAP/BOOT_HANDOFF_MEMMAP_CAP_PAGES/BOOT_HANDOFF_PAGE_SIZE (D-108), shared
+ * with BIOS stage2's own handoff.c so the two loaders' copies of these constants can't drift. */
+#define HANDOFF_MAX_INPUTS 512u
 
-_Static_assert(HANDOFF_MEMMAP_CAP_PAGES *HANDOFF_PAGE_SIZE >=
-                   (uint64_t)HANDOFF_MEMMAP_CAP * sizeof(BootMemRegion),
-               "HANDOFF_MEMMAP_CAP_PAGES is too small for HANDOFF_MEMMAP_CAP entries -- update "
-               "it (and this assert) together if either constant or BootMemRegion's size changes");
-
-typedef struct {
-    uint64_t base;
-    uint64_t pages;
-    uint32_t type; /* a BootMemType value */
-} LoaderAlloc;
-
-/* Every call site today is a fixed, compile-time-known sequence (kernel, boot stack, the handoff
- * block, the page-table pool, the trampoline page: 5 calls total against a cap of
- * HANDOFF_MAX_ALLOCS=16), so this can never actually trip -- but silently dropping an overlay
- * record here would be exactly the same class of bug as the memory-map-array truncation above
- * (an allocation quietly reappearing as USABLE memory), so fail loudly instead of assuming that
- * stays true forever. */
-static void handoffRecordAlloc(LoaderAlloc *allocs, uint32_t *count, uint64_t base, uint64_t pages,
-                               uint32_t type) {
-    if (*count >= HANDOFF_MAX_ALLOCS) {
-        loaderSerialWriteString(
-            "loader: allocation overlay count exceeds HANDOFF_MAX_ALLOCS; halting\n");
-        for (;;) {
-            __asm__ volatile("cli");
-            __asm__ volatile("hlt");
-        }
+static void handoffHalt(const char *msg) {
+    loaderSerialWriteString(msg);
+    for (;;) {
+        __asm__ volatile("cli");
+        __asm__ volatile("hlt");
     }
-    allocs[*count].base = base;
-    allocs[*count].pages = pages;
-    allocs[*count].type = type;
-    (*count)++;
 }
 
-/* IA32_PAT (MSR 0xC0000277 -- no, 0x277; see below), entry 2 (index (PAT<<2)|(PCD<<1)|PWT with
- * PAT bit 7 clear, PCD=1, PWT=0, exactly what PT_FLAGS_FRAMEBUFFER's 4K leaves select): the
- * D-068 framebuffer mapping is only actually UC-/UC if the firmware left this at its documented
- * power-on value (SDM Vol 3A "PAT Compatibility with Earlier IA-32 Processors": entry 2 = 0x07,
- * UC-). Reading it back rather than assuming it, since a UB firmware that reprogrammed entry 2 to
- * something cacheable (e.g. WB) would make this mapping lie about being safe to treat as MMIO. */
-#define IA32_PAT_MSR 0x277u
-static bool handoffPatEntry2IsUncacheable(void) {
-    uint32_t lo, hi;
-    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(IA32_PAT_MSR));
-    uint64_t pat = ((uint64_t)hi << 32) | lo;
-    uint8_t entry2 = (uint8_t)((pat >> 16) & 0xFFu);
-    return entry2 == 0x07u /* UC- */ || entry2 == 0x00u /* UC */;
-}
-
-/* Maps `fb`'s pixel range into the HHDM at `hhdmBase + fb->phys`, D-068: 4 KiB pages only (never
- * sharing a large page with real RAM), PT_FLAGS_FRAMEBUFFER (PCD=1/PWT=0 -> PAT index 2 -> UC-
- * under the firmware's power-on PAT, verified above rather than assumed; NX; global). This is the
- * one exception to D-059's "MMIO is never HHDM-mapped" rule. Checks the range doesn't run past
- * the HHDM window and doesn't already overlap a mapping from the earlier RAM/HHDM pass --
- * checking every page the range covers, not just the endpoints, since RAM could sit anywhere
- * inside the range, not only touching its boundary. On any problem, or on a mapping failure
- * (which `ptMapRange` never partially undoes, so a failure partway through could otherwise leave
- * some pages mapped with no BOOT_MEM_FRAMEBUFFER overlay -- checked-and-refused up front instead
- * of relying on a rollback), zeroes `*fb` (the "not provided" convention, D-064) and leaves it out
- * of the memory map instead of failing the whole boot -- a missing framebuffer is recoverable, but
- * a corrupt one silently overlapping RAM would not be. Adds a BOOT_MEM_FRAMEBUFFER overlay on
- * success. */
-static void handoffMapFramebuffer(PtBuilder *pt, LoaderAlloc *allocs, uint32_t *allocCount,
-                                  BootFramebuffer *fb) {
-    if (fb->phys == 0) {
-        return;
-    }
-    if (!handoffPatEntry2IsUncacheable()) {
-        loaderSerialWriteString(
-            "loader: framebuffer unusable for handoff: firmware's IA32_PAT entry 2 isn't UC/UC-\n");
-        bootMemset(fb, 0, sizeof(*fb));
-        return;
-    }
-    uint64_t fbBase = bootAlignDown(fb->phys, HANDOFF_PAGE_SIZE);
-    uint64_t fbEndUnaligned = fb->phys + (uint64_t)fb->pitch * (uint64_t)fb->height;
-    uint64_t fbEnd = bootAlignUp(fbEndUnaligned, HANDOFF_PAGE_SIZE);
-    if (fbEnd < fbEndUnaligned /* overflow */ || fbEnd <= fbBase) {
-        loaderSerialWriteString("loader: framebuffer unusable for handoff: invalid geometry\n");
-        bootMemset(fb, 0, sizeof(*fb));
-        return;
-    }
-    uint64_t fbSize = fbEnd - fbBase;
-    if (fbBase >= BOOTINFO_HHDM_SIZE || fbSize > BOOTINFO_HHDM_SIZE - fbBase) {
-        loaderSerialWriteString(
-            "loader: framebuffer unusable for handoff: beyond the HHDM window\n");
-        bootMemset(fb, 0, sizeof(*fb));
-        return;
-    }
-
-    uint64_t checkPa, checkFlags;
-    bool alreadyMapped = false;
-    for (uint64_t va = BOOTINFO_HHDM_BASE + fbBase; va < BOOTINFO_HHDM_BASE + fbEnd;
-         va += HANDOFF_PAGE_SIZE) {
-        if (ptLookup(pt, va, &checkPa, &checkFlags) == BOOT_OK) {
-            alreadyMapped = true;
-            break;
-        }
-    }
-    if (alreadyMapped) {
-        loaderSerialWriteString(
-            "loader: framebuffer unusable for handoff: overlaps an existing mapping\n");
-        bootMemset(fb, 0, sizeof(*fb));
-        return;
-    }
-
-    BootStatus bst =
-        ptMapRange(pt, BOOTINFO_HHDM_BASE + fbBase, fbBase, fbSize, PT_FLAGS_FRAMEBUFFER, false);
-    if (bst != BOOT_OK) {
-        /* ptMapRange() never partially undoes a failed range -- but every page in [fbBase, fbEnd)
-         * was just confirmed unmapped above, and a failure here can only be BOOT_ERR_NO_MEMORY
-         * (the page-table pool exhausted) since BOOT_ERR_PT_CONFLICT is now ruled out by the scan
-         * and BOOT_ERR_PT_UNALIGNED can't happen (fbBase/fbEnd are already page-aligned). Either
-         * way there is nothing to roll back: ptMapRange() only ever writes a fresh leaf into an
-         * already-confirmed-empty slot, never overwrites, so a pool exhaustion partway through
-         * leaves some pages mapped and the rest not -- exactly why `fb` is zeroed and no overlay
-         * is recorded rather than trusting a partial mapping. */
-        loaderSerialWriteString("loader: framebuffer mapping failed: ");
-        loaderSerialWriteString(bootStatusString(bst));
-        loaderSerialWriteString("\n");
-        bootMemset(fb, 0, sizeof(*fb));
-        return;
-    }
-    handoffRecordAlloc(allocs, allocCount, fbBase, fbSize / HANDOFF_PAGE_SIZE,
-                       BOOT_MEM_FRAMEBUFFER);
-}
-
-/* CPUID 0x80000001 EDX bit 20 (NX, required) and bit 26 (PDPE1GB, gates 1 GiB HHDM pages). */
-static bool handoffCpuCheck(bool *outHas1G) {
-    uint32_t eax, ebx, ecx, edx;
-    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0x80000001));
-    (void)eax;
-    (void)ebx;
-    (void)ecx;
-    *outHas1G = (edx & (1u << 26)) != 0;
-    return (edx & (1u << 20)) != 0;
-}
-
-/* CR4.LA57 (bit 12): if firmware left 5-level paging enabled, the CPU would read our 4-level PML4
- * as a PML5 and the trampoline's `mov cr3` would triple-fault with zero diagnostic output. This
- * loader only builds 4-level tables (ARCHITECTURE §6.3), so refuse to boot rather than guess. */
-static bool handoffLa57Enabled(void) {
-    uint64_t cr4;
-    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
-    return (cr4 & (1ull << 12)) != 0;
-}
-
-static void handoffSetEferNxe(void) {
-    uint32_t lo, hi;
-    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0xC0000080u));
-    lo |= (1u << 11);
-    __asm__ volatile("wrmsr" : : "c"(0xC0000080u), "a"(lo), "d"(hi));
-}
-
-static uint64_t handoffRdtsc(void) {
-    uint32_t lo, hi;
-    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((uint64_t)hi << 32) | lo;
-}
-
-static bool handoffRdseed64(uint64_t *out) {
-    uint8_t ok;
-    __asm__ volatile("rdseed %0\n\tsetc %1" : "=r"(*out), "=qm"(ok));
-    return ok != 0;
-}
-
-static bool handoffRdrand64(uint64_t *out) {
-    uint8_t ok;
-    __asm__ volatile("rdrand %0\n\tsetc %1" : "=r"(*out), "=qm"(ok));
-    return ok != 0;
-}
-
-/* CPUID.0:EAX is the highest supported *basic* leaf; querying leaf 7 without checking this first
- * is unsafe -- on Intel CPUs an out-of-range basic leaf request returns the highest supported
- * leaf's data instead of zeros, so a machine with a basic-leaf max below 7 would read garbage
- * into EBX and could spuriously believe RDSEED exists. */
-static uint32_t handoffMaxBasicLeaf(void) {
-    uint32_t eax, ebx, ecx, edx;
-    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0));
-    return eax;
-}
-
-/* ARCHITECTURE §1.3's minimum CPU doesn't guarantee either instruction: executing an unsupported
- * one takes #UD, and with no IDT installed yet that's an instant triple fault with no diagnostic.
- * CPUID.(EAX=7,ECX=0):EBX bit 18 = RDSEED (SDM Vol.2A, CPUID). */
-static bool handoffHasRdseed(void) {
-    if (handoffMaxBasicLeaf() < 7) {
-        return false;
-    }
-    uint32_t eax, ebx, ecx, edx;
-    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(7), "c"(0));
-    return (ebx & (1u << 18)) != 0;
-}
-
-/* CPUID.1:ECX bit 30 = RDRAND. */
-static bool handoffHasRdrand(void) {
-    uint32_t eax, ebx, ecx, edx;
-    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(1));
-    return (ecx & (1u << 30)) != 0;
-}
-
-/* EFI_RNG_PROTOCOL if present, else RDSEED (10 retries) if the CPU has it, else RDRAND (10
- * retries) if the CPU has it, else 0; then RDTSC (perturbed per qword) is XORed into every qword
- * regardless, per ARCHITECTURE §5.5 step 7. */
+/* EFI_RNG_PROTOCOL if present, else loaderCpuRandomFill()'s RDSEED/RDRAND-then-RDTSC fallback
+ * (ARCHITECTURE §5.5 step 7). */
 static void handoffGatherRandomSeed(EFI_SYSTEM_TABLE *st, uint64_t seed[8]) {
-    bool gotRng = false;
     EFI_RNG_PROTOCOL *rng = NULL;
     if (!EFI_ERROR(st->BootServices->LocateProtocol((EFI_GUID *)&gEfiRngProtocolGuid, NULL,
-                                                    (VOID **)&rng))) {
-        if (!EFI_ERROR(rng->GetRNG(rng, NULL, 64, (UINT8 *)seed))) {
-            gotRng = true;
-        }
+                                                    (VOID **)&rng)) &&
+        !EFI_ERROR(rng->GetRNG(rng, NULL, 64, (UINT8 *)seed))) {
+        return;
     }
-    if (!gotRng) {
-        bool hasRdseed = handoffHasRdseed();
-        bool hasRdrand = handoffHasRdrand();
-        if (!hasRdseed && !hasRdrand) {
-            loaderSerialWriteString(
-                "loader: no EFI_RNG_PROTOCOL, RDSEED, or RDRAND; seeding from TSC jitter only\n");
-        }
-        for (int i = 0; i < 8; i++) {
-            uint64_t v = 0;
-            bool ok = false;
-            if (hasRdseed) {
-                for (int retry = 0; retry < 10 && !ok; retry++) {
-                    ok = handoffRdseed64(&v);
-                }
-            }
-            if (!ok && hasRdrand) {
-                for (int retry = 0; retry < 10 && !ok; retry++) {
-                    ok = handoffRdrand64(&v);
-                }
-            }
-            seed[i] = ok ? v : 0;
-        }
+    if (!loaderCpuHasRdseed() && !loaderCpuHasRdrand()) {
+        loaderSerialWriteString(
+            "loader: no EFI_RNG_PROTOCOL, RDSEED, or RDRAND; seeding from TSC jitter only\n");
     }
-    uint64_t tsc = handoffRdtsc();
-    for (int i = 0; i < 8; i++) {
-        seed[i] ^= tsc;
-        tsc = tsc * 6364136223846793005ULL + 1; /* cheap avalanche between qwords */
-    }
+    loaderCpuRandomFill(seed);
 }
 
 static uint64_t handoffFindRsdp(EFI_SYSTEM_TABLE *st) {
@@ -369,11 +155,11 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     EFI_BOOT_SERVICES *bs = st->BootServices;
 
     bool has1G = false;
-    if (!handoffCpuCheck(&has1G)) {
+    if (!loaderCpuCheckLongModeFeatures(&has1G)) {
         loaderSerialWriteString("loader: CPU lacks NX; refusing to boot\n");
         return EFI_UNSUPPORTED;
     }
-    if (handoffLa57Enabled()) {
+    if (loaderCpuLa57Enabled()) {
         loaderSerialWriteString(
             "loader: CR4.LA57 (5-level paging) is enabled; this loader only builds 4-level page "
             "tables, refusing to boot\n");
@@ -447,7 +233,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         /* ARCHITECTURE §5.2: the menu runs on screen *and* serial whenever there's a timeout to
          * show one for -- never skipped outright just because no framebuffer came up. `fxPtr`
          * stays NULL (serial-only) unless a usable framebuffer geometry is actually available;
-         * loaderMenuRun()/drawRow()/drawCountdown() all tolerate a NULL fx (D-071). */
+         * loaderMenuRun()/the shared menu-ui drawing all tolerate a NULL fx (D-071). */
         BootFbText fx;
         BootFbText *fxPtr = NULL;
         if (fb.phys != 0) {
@@ -513,11 +299,11 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         return EFI_LOAD_ERROR;
     }
 
-    LoaderAlloc allocs[HANDOFF_MAX_ALLOCS];
-    uint32_t allocCount = 0;
+    BootAllocList allocs;
+    bootMemset(&allocs, 0, sizeof(allocs));
 
     EFI_PHYSICAL_ADDRESS kernelPhys = 0;
-    UINTN kernelPages = (UINTN)(elfImage.span / HANDOFF_PAGE_SIZE);
+    UINTN kernelPages = (UINTN)(elfImage.span / BOOT_HANDOFF_PAGE_SIZE);
     status = bs->AllocatePages(AllocateAnyPages, EfiLoaderData, kernelPages, &kernelPhys);
     if (EFI_ERROR(status)) {
         loaderSerialWriteString("loader: out of memory allocating the kernel image\n");
@@ -531,17 +317,23 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         loaderSerialWriteString("\n");
         return EFI_LOAD_ERROR;
     }
-    handoffRecordAlloc(allocs, &allocCount, (uint64_t)kernelPhys, kernelPages, BOOT_MEM_KERNEL);
+    if (bootAllocAdd(&allocs, (uint64_t)kernelPhys, kernelPages, BOOT_MEM_KERNEL) != BOOT_OK) {
+        loaderSerialWriteString("loader: too many allocation overlays\n");
+        return EFI_OUT_OF_RESOURCES;
+    }
 
     EFI_PHYSICAL_ADDRESS stackPhys = 0;
-    status =
-        bs->AllocatePages(AllocateAnyPages, EfiLoaderData, HANDOFF_BOOT_STACK_PAGES, &stackPhys);
+    status = bs->AllocatePages(AllocateAnyPages, EfiLoaderData, BOOT_HANDOFF_BOOT_STACK_PAGES,
+                               &stackPhys);
     if (EFI_ERROR(status)) {
         loaderSerialWriteString("loader: out of memory allocating the boot stack\n");
         return status;
     }
-    handoffRecordAlloc(allocs, &allocCount, (uint64_t)stackPhys, HANDOFF_BOOT_STACK_PAGES,
-                       BOOT_MEM_LOADER_RECLAIM);
+    if (bootAllocAdd(&allocs, (uint64_t)stackPhys, BOOT_HANDOFF_BOOT_STACK_PAGES,
+                     BOOT_MEM_LOADER_RECLAIM) != BOOT_OK) {
+        loaderSerialWriteString("loader: too many allocation overlays\n");
+        return EFI_OUT_OF_RESOURCES;
+    }
 
     uint64_t rsdpPhys = handoffFindRsdp(st);
     uint64_t randomSeed[8];
@@ -573,7 +365,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
                 return EFI_OUT_OF_RESOURCES;
             }
             preRunsInput[nRunsInput].base = d->PhysicalStart;
-            preRunsInput[nRunsInput].length = d->NumberOfPages * HANDOFF_PAGE_SIZE;
+            preRunsInput[nRunsInput].length = d->NumberOfPages * BOOT_HANDOFF_PAGE_SIZE;
             preRunsInput[nRunsInput].type = BOOT_MEM_USABLE; /* rank is irrelevant: one type in */
             nRunsInput++;
         }
@@ -591,126 +383,100 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     }
 
     EFI_PHYSICAL_ADDRESS handoffPhys = 0;
-    UINTN handoffPages = 2 + HANDOFF_MEMMAP_CAP_PAGES;
+    UINTN handoffPages = 2 + BOOT_HANDOFF_MEMMAP_CAP_PAGES;
     status = bs->AllocatePages(AllocateAnyPages, EfiLoaderData, handoffPages, &handoffPhys);
     if (EFI_ERROR(status)) {
         loaderSerialWriteString("loader: out of memory allocating the handoff block\n");
         return status;
     }
-    handoffRecordAlloc(allocs, &allocCount, (uint64_t)handoffPhys, handoffPages,
-                       BOOT_MEM_LOADER_RECLAIM);
+    if (bootAllocAdd(&allocs, (uint64_t)handoffPhys, handoffPages, BOOT_MEM_LOADER_RECLAIM) !=
+        BOOT_OK) {
+        loaderSerialWriteString("loader: too many allocation overlays\n");
+        return EFI_OUT_OF_RESOURCES;
+    }
     uint64_t bootInfoPhys = (uint64_t)handoffPhys;
-    uint64_t cmdlinePhys = bootInfoPhys + HANDOFF_PAGE_SIZE;
-    uint64_t memMapArrayPhys = cmdlinePhys + HANDOFF_PAGE_SIZE;
+    uint64_t cmdlinePhys = bootInfoPhys + BOOT_HANDOFF_PAGE_SIZE;
+    uint64_t memMapArrayPhys = cmdlinePhys + BOOT_HANDOFF_PAGE_SIZE;
 
     EFI_PHYSICAL_ADDRESS poolPhys = 0;
-    status = bs->AllocatePages(AllocateAnyPages, EfiLoaderData, HANDOFF_PT_POOL_PAGES, &poolPhys);
+    status =
+        bs->AllocatePages(AllocateAnyPages, EfiLoaderData, BOOT_HANDOFF_PT_POOL_PAGES, &poolPhys);
     if (EFI_ERROR(status)) {
         loaderSerialWriteString("loader: out of memory allocating the page-table pool\n");
         return status;
     }
-    handoffRecordAlloc(allocs, &allocCount, (uint64_t)poolPhys, HANDOFF_PT_POOL_PAGES,
-                       BOOT_MEM_LOADER_RECLAIM);
+    if (bootAllocAdd(&allocs, (uint64_t)poolPhys, BOOT_HANDOFF_PT_POOL_PAGES,
+                     BOOT_MEM_LOADER_RECLAIM) != BOOT_OK) {
+        loaderSerialWriteString("loader: too many allocation overlays\n");
+        return EFI_OUT_OF_RESOURCES;
+    }
 
-    uint64_t trampPhys = bootAlignDown((uint64_t)(uintptr_t)&loaderTrampoline, HANDOFF_PAGE_SIZE);
-    handoffRecordAlloc(allocs, &allocCount, trampPhys, 1, BOOT_MEM_LOADER_RECLAIM);
+    uint64_t trampPhys =
+        bootAlignDown((uint64_t)(uintptr_t)&loaderTrampoline, BOOT_HANDOFF_PAGE_SIZE);
+    if (bootAllocAdd(&allocs, trampPhys, 1, BOOT_MEM_LOADER_RECLAIM) != BOOT_OK) {
+        loaderSerialWriteString("loader: too many allocation overlays\n");
+        return EFI_OUT_OF_RESOURCES;
+    }
 
     PtBuilder pt;
-    bst = ptInit(&pt, (uint64_t)poolPhys, HANDOFF_PT_POOL_PAGES, has1G);
+    bst = ptInit(&pt, (uint64_t)poolPhys, BOOT_HANDOFF_PT_POOL_PAGES, has1G);
     if (bst != BOOT_OK) {
         loaderSerialWriteString("loader: page-table init failed\n");
         return EFI_OUT_OF_RESOURCES;
     }
-    for (uint32_t i = 0; i < nHhdmRuns; i++) {
-        uint64_t base = hhdmRuns[i].base;
-        uint64_t length = hhdmRuns[i].length;
-        if (base >= BOOTINFO_HHDM_SIZE) {
-            continue; /* clipped: beyond the 64 TiB HHDM window */
-        }
-        if (length > BOOTINFO_HHDM_SIZE - base) {
-            length = BOOTINFO_HHDM_SIZE - base;
-        }
-        bst = ptMapRange(&pt, BOOTINFO_HHDM_BASE + base, base, length, PT_FLAGS_HHDM, true);
-        if (bst != BOOT_OK) {
-            loaderSerialWriteString("loader: HHDM mapping failed: ");
-            loaderSerialWriteString(bootStatusString(bst));
-            loaderSerialWriteString("\n");
-            return EFI_OUT_OF_RESOURCES;
-        }
-    }
-    bst = ptMapElfImage(&pt, &elfImage, (uint64_t)kernelPhys, 0);
+
+    BootPtPlan plan = {
+        .hhdmRuns = hhdmRuns,
+        .hhdmRunCount = nHhdmRuns,
+        .elfImage = &elfImage,
+        .kernelPhys = (uint64_t)kernelPhys,
+        .trampPhys = trampPhys,
+        .patEntry2Uncacheable = loaderCpuPatEntry2Uncacheable(),
+    };
+    const char *fbNote = NULL;
+    bst = bootHandoffMapAll(&pt, &plan, &fb, &allocs, &fbNote);
     if (bst != BOOT_OK) {
-        loaderSerialWriteString("loader: kernel mapping failed: ");
+        loaderSerialWriteString("loader: page-table build failed: ");
         loaderSerialWriteString(bootStatusString(bst));
         loaderSerialWriteString("\n");
         return EFI_OUT_OF_RESOURCES;
     }
-    bst = ptMapRange(&pt, trampPhys, trampPhys, HANDOFF_PAGE_SIZE, PT_FLAGS_TRAMPOLINE, false);
-    if (bst != BOOT_OK) {
-        loaderSerialWriteString("loader: trampoline mapping failed\n");
-        return EFI_OUT_OF_RESOURCES;
+    if (fbNote != NULL) {
+        loaderSerialWriteString("loader: framebuffer unusable for handoff: ");
+        loaderSerialWriteString(fbNote);
+        loaderSerialWriteString("\n");
     }
-    handoffMapFramebuffer(&pt, allocs, &allocCount, &fb); /* D-068; zeroes fb on failure */
 
     /* Self-check (ARCHITECTURE §5.5 step 10): every mapping the trampoline and the kernel's first
      * instructions depend on actually resolves the way it should. */
     uint64_t entryVa = elfImage.entry;
     uint64_t stackTopVa = BOOTINFO_HHDM_BASE + (uint64_t)stackPhys +
-                          (uint64_t)HANDOFF_BOOT_STACK_PAGES * HANDOFF_PAGE_SIZE;
+                          (uint64_t)BOOT_HANDOFF_BOOT_STACK_PAGES * BOOT_HANDOFF_PAGE_SIZE;
     uint64_t bootInfoVa = BOOTINFO_HHDM_BASE + bootInfoPhys;
     uint64_t cmdlineVa = BOOTINFO_HHDM_BASE + cmdlinePhys;
     uint64_t memMapVa = BOOTINFO_HHDM_BASE + memMapArrayPhys;
-    uint64_t checkPa, checkFlags;
-    bool selfCheckOk = ptLookup(&pt, entryVa, &checkPa, &checkFlags) == BOOT_OK &&
-                       (checkFlags & PT_W) == 0 && (checkFlags & PT_NX) == 0 &&
-                       ptLookup(&pt, stackTopVa - 8, &checkPa, &checkFlags) == BOOT_OK &&
-                       (checkFlags & PT_W) != 0 && (checkFlags & PT_NX) != 0 &&
-                       ptLookup(&pt, bootInfoVa, &checkPa, &checkFlags) == BOOT_OK &&
-                       /* Spot-check the rest of the handoff block too, not just page 0
-                        * (BootInfo): the cmdline page and (the start of) the memory-map array
-                        * are just as load-bearing for the kernel's first instructions. */
-                       ptLookup(&pt, cmdlineVa, &checkPa, &checkFlags) == BOOT_OK &&
-                       ptLookup(&pt, memMapVa, &checkPa, &checkFlags) == BOOT_OK &&
-                       ptLookup(&pt, trampPhys, &checkPa, &checkFlags) == BOOT_OK &&
-                       (checkFlags & PT_NX) == 0;
-    if (selfCheckOk && fb.phys != 0) {
-        /* Check both ends of the mapped range, not just the first page: a partial-mapping bug
-         * could leave the tail pages missing PT_W/PT_PCD/PT_NX (or absent) while the head looks
-         * fine. checkPa == fbBase confirms the VA->PA translation itself, not just its flags. */
-        uint64_t fbBase = bootAlignDown(fb.phys, HANDOFF_PAGE_SIZE);
-        uint64_t fbEndUnaligned = fb.phys + (uint64_t)fb.pitch * (uint64_t)fb.height;
-        uint64_t fbEnd = bootAlignUp(fbEndUnaligned, HANDOFF_PAGE_SIZE);
-        uint64_t fbFirstVa = BOOTINFO_HHDM_BASE + fbBase;
-        uint64_t fbLastVa = BOOTINFO_HHDM_BASE + fbEnd - HANDOFF_PAGE_SIZE;
-        selfCheckOk =
-            ptLookup(&pt, fbFirstVa, &checkPa, &checkFlags) == BOOT_OK && checkPa == fbBase &&
-            (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0 && (checkFlags & PT_W) != 0 &&
-            ptLookup(&pt, fbLastVa, &checkPa, &checkFlags) == BOOT_OK &&
-            (checkFlags & PT_PCD) != 0 && (checkFlags & PT_NX) != 0 && (checkFlags & PT_W) != 0;
-    }
-    if (!selfCheckOk) {
+    if (!bootHandoffSelfCheck(&pt, entryVa, stackTopVa, bootInfoVa, cmdlineVa, memMapVa, trampPhys,
+                              &fb)) {
         loaderSerialWriteString("loader: page-table self-check failed\n");
         return EFI_DEVICE_ERROR;
     }
 
     BootInfo *bi = (BootInfo *)(uintptr_t)bootInfoPhys;
-    bootMemset(bi, 0, sizeof(*bi));
-    bi->magic = BOOTINFO_MAGIC;
-    bi->version = BOOTINFO_VERSION;
-    bi->size = sizeof(BootInfo);
-    bi->bootMethod = BOOT_METHOD_UEFI;
-    bi->fb = fb;
+    BootHandoffFields fields = {
+        .bootMethod = BOOT_METHOD_UEFI,
+        .fb = fb,
+        .rsdpPhys = rsdpPhys,
+        .kernelPhys = (uint64_t)kernelPhys,
+        .kernelVirtBase = elfImage.linkBase,
+        .kernelSize = elfImage.span,
+        .cmdlinePhys = cmdlinePhys,
+        .hhdmBase = BOOTINFO_HHDM_BASE,
+        .loaderTsc = loaderTsc,
+        .efiSystemTablePhys = (uint64_t)(uintptr_t)st,
+        .randomSeed = (const uint8_t *)randomSeed,
+    };
+    bootHandoffFillInfo(bi, &fields);
     bi->memMapPhys = memMapArrayPhys;
-    bi->rsdpPhys = rsdpPhys;
-    bi->kernelPhysBase = (uint64_t)kernelPhys;
-    bi->kernelVirtBase = elfImage.linkBase;
-    bi->kernelSize = elfImage.span;
-    bi->kaslrSlide = 0;
-    bi->cmdlinePhys = cmdlinePhys;
-    bi->hhdmBase = BOOTINFO_HHDM_BASE;
-    bi->loaderTsc = loaderTsc;
-    bi->efiSystemTablePhys = (uint64_t)(uintptr_t)st;
-    bootMemcpy(bi->randomSeed, randomSeed, sizeof(bi->randomSeed));
     /* Wipe the loader's stack-local copy now that it's in the BootInfo page: otherwise it lingers
      * in BootServicesData memory, which becomes plain USABLE after ExitBootServices and would be
      * recoverable by any later kernel code that walks USABLE memory. volatile so this store isn't
@@ -778,7 +544,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     }
 
     __asm__ volatile("cli");
-    handoffSetEferNxe();
+    loaderCpuSetEferNxe();
 
     /* We are past ExitBootServices: ConOut and every other Boot Service are gone, and there is no
      * retrying from scratch. A truncated array here would silently drop the overlays appended
@@ -786,41 +552,33 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
      * after the raw descriptors -- meaning the kernel image and page tables could show up as plain
      * USABLE memory to a later milestone's allocator. Check the total fits before writing anything,
      * and halt loudly (the only diagnostic left is raw serial) rather than let that happen. */
-    if ((uint64_t)nFinalDesc + allocCount > HANDOFF_MAX_INPUTS) {
-        loaderSerialWriteString(
-            "loader: final memory map + overlay count exceeds HANDOFF_MAX_INPUTS; halting\n");
-        for (;;) {
-            __asm__ volatile("cli");
-            __asm__ volatile("hlt");
-        }
+    if ((uint64_t)nFinalDesc + allocs.count > HANDOFF_MAX_INPUTS) {
+        handoffHalt("loader: final memory map + overlay count exceeds HANDOFF_MAX_INPUTS; "
+                    "halting\n");
     }
     uint32_t nFinalInputs = 0;
     for (UINTN i = 0; i < nFinalDesc; i++) {
         EFI_MEMORY_DESCRIPTOR *d =
             (EFI_MEMORY_DESCRIPTOR *)((uint8_t *)finalMapBuf + i * finalDescSize);
         finalInputs[nFinalInputs].base = d->PhysicalStart;
-        finalInputs[nFinalInputs].length = d->NumberOfPages * HANDOFF_PAGE_SIZE;
+        finalInputs[nFinalInputs].length = d->NumberOfPages * BOOT_HANDOFF_PAGE_SIZE;
         finalInputs[nFinalInputs].type = memMapEfiTypeToBootMem(d->Type, d->Attribute);
-        nFinalInputs++;
-    }
-    for (uint32_t i = 0; i < allocCount; i++) {
-        finalInputs[nFinalInputs].base = allocs[i].base;
-        finalInputs[nFinalInputs].length = allocs[i].pages * HANDOFF_PAGE_SIZE;
-        finalInputs[nFinalInputs].type = allocs[i].type;
         nFinalInputs++;
     }
 
     BootMemRegion *outRegions = (BootMemRegion *)(uintptr_t)memMapArrayPhys;
     uint32_t nOutRegions = 0;
-    mmst = memMapNormalize(finalInputs, nFinalInputs, outRegions, HANDOFF_MEMMAP_CAP, &nOutRegions,
-                           finalScratch);
+    /* `finalInputs` is passed as both `fwInputs` and `work` deliberately, not a copy-paste slip:
+     * bootHandoffFinalMap() only ever reads fwInputs[0..nFwInputs) before appending allocs past
+     * that point in work, and nFwInputs == nFinalInputs here, so the "copy fwInputs into work"
+     * step is a no-op (same memory, same range) and the append starts exactly where the reads
+     * stopped. Reusing the buffer avoids a second HANDOFF_MAX_INPUTS-sized static array for what
+     * would otherwise be an identical copy. */
+    mmst = bootHandoffFinalMap(finalInputs, nFinalInputs, &allocs, finalInputs, HANDOFF_MAX_INPUTS,
+                               finalScratch, outRegions, BOOT_HANDOFF_MEMMAP_CAP, &nOutRegions);
     if (mmst != BOOT_OK) {
         /* Nothing left to log this to but COM1 -- ConOut and every other Boot Service are gone. */
-        loaderSerialWriteString("loader: final memory map normalize failed\n");
-        for (;;) {
-            __asm__ volatile("cli");
-            __asm__ volatile("hlt");
-        }
+        handoffHalt("loader: final memory map normalize failed\n");
     }
     bi->memMapCount = nOutRegions;
 

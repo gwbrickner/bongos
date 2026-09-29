@@ -4,7 +4,7 @@
 #include "branding.h"
 #include "handoff.h"
 #include "include/efi/efi.h"
-#include "serial.h"
+#include "loader-serial.h"
 
 #define LOADER_BANNER_TEXT BRANDING_NAME " loader"
 /* Printed only over raw COM1, never through ConOut: OVMF's ConOut is itself mirrored to the

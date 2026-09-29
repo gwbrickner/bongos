@@ -67,7 +67,9 @@ x86_64 with NX, SSE2, APIC, and CMPXCHG16B. An invariant TSC is required on real
 ```
 boot/
   common/          shared loader code: boot.cfg parser, ELF loader, page-table builder,
-                   BootInfo builder, GPT + FAT32 readers (compiled for both loaders)
+                   BootInfo builder, GPT + FAT32 readers (compiled for both loaders);
+                   common/hw/ is the subset that touches real hardware (serial, cpuid/PAT/
+                   random-fill helpers, the shared menu UI) rather than being purely host-testable
   uefi/            UEFI loader (PE32+); own UEFI headers in boot/uefi/include/efi/
   bios/            stage1 (MBR, NASM), stage2 (NASM real-mode thunks + 32-bit C)
 kernel/
@@ -184,6 +186,9 @@ release builds too; `KERNEL_DEBUG` is only for checks with a real per-operation 
 ## 5. Boot
 
 ### 5.1 Disk image (`tools/mkimage` -> `build/bongos.img`, default 2 GiB, `dd`-able to USB)
+Byte-level on-disk layout for stage1/stage2 (the patch block, the stage2 header, and exactly
+what mkimage patches) is in `docs/specs/bios-boot.md` (D-099); the table below is the summary.
+
 GPT disk:
 | # | Partition | Contents |
 |---|---|---|
@@ -304,6 +309,21 @@ value means "not provided" for `fb.phys`, `initrdPhys`/`initrdSize`, `rsdpPhys`,
 - **GDT/IDT:** the firmware's own, left in place (now unmapped under the loader's page tables).
   The kernel installs its own first thing.
 
+**BIOS addendum (D-111, corrected by D-114):** the loader is stage2, not firmware, so "the
+firmware's own, left in place" means stage2's own GDT. Unlike UEFI's (which the firmware owns and
+which stays wherever the firmware put it), stage2's GDT lives in the `.trampoline` page (D-102),
+which *is* identity-mapped -- the same "an identity mapping of the loader's trampoline page only;
+the kernel removes it" mapping mentioned above, not an unmapped one. There is no PM-side
+diagnostic IDT (D-102's description of one was aspirational and never built; see D-114) -- IDTR is
+simply never loaded in protected mode, so it still holds whatever it held on entry to PM (the
+live real-mode IVT: base 0, limit 0x3FF), which the CPU reads as IDT gate descriptors once
+something actually faults. That almost certainly ends in a triple fault (a bogus gate descriptor
+producing #GP, whose own handler is equally bogus, producing #DF, and so on), but isn't
+guaranteed to, so a stray fault here produces no diagnostic rather than a guaranteed one. Both
+legacy 8259 PICs are fully masked (`IMR = 0xFF`) before the jump into long mode --
+BIOS wires IRQ0-7 to interrupt vectors 8-15, which collide with the kernel's own exception vectors
+(§7.2), so nothing may be left able to fire one before the kernel installs its own IDT.
+
 ### 5.5 UEFI loader flow (D-068)
 1. Get the LoadedImage and SimpleFileSystem protocols, then read and parse `/bong/boot.cfg`
    (§5.2).
@@ -332,28 +352,47 @@ value means "not provided" for `fb.phys`, `initrdPhys`/`initrdSize`, `rsdpPhys`,
 **GOP mode selection:** use the GOP on `ConsoleOutHandle`, falling back to the first
 `LocateHandleBuffer(ByProtocol, GOP)` result with a linear framebuffer (`FrameBufferBase != 0`,
 not `PixelBltOnly`). Query every mode; accept 32-bit-pixel formats only (RGBX, BGRX, or a
-BitMask whose R/G/B fields are each non-zero, contiguous, and together span bits 24-31). `auto`
-picks the largest `width*height` with width <=3840 and height <=2160 (ties: wider, then lower
-mode number); `WIDTHxHEIGHT` picks an exact match or falls back to `auto` with a log line. Set
-the mode only if it differs from the current one, then re-read `Mode->Info` and
-`FrameBufferBase` (both can change on `SetMode`).
+BitMask whose R/G/B fields are each non-zero, contiguous, **each at most 8 bits wide** (D-109 --
+this loader's `BootFramebuffer` fields are 8-bit shift/size pairs, so a wider channel, e.g. a
+10-bit-per-channel mode, can never be represented and must be rejected up front rather than
+picked and then produce garbage), and together span bits 24-31). `auto` picks the largest
+`width*height` with width <=3840 and height <=2160 (ties: wider, then lower mode number);
+`WIDTHxHEIGHT` picks an exact match or falls back to `auto` with a log line. Set the mode only if
+it differs from the current one, then re-read `Mode->Info` and `FrameBufferBase` (both can
+change on `SetMode`). This selection rule is shared verbatim with the BIOS loader's VBE mode
+pick (`boot/common/bootvideo.c`) -- only how each firmware *enumerates* modes differs.
 
 ### 5.6 BIOS loader flow
-- **stage1 (MBR):**
+Exact byte layouts (patch block, stage2 header, memory map, GDT, the real-mode thunk ABI, the
+long-mode trampoline sequence) are in `docs/specs/bios-boot.md`. This section is the ordered
+flow; D-103 supersedes an earlier draft of this section's step order (E820/VBE/RSDP can't
+actually happen before protected mode, since the VBE pick needs `boot.cfg`'s `resolution`, and
+that needs GPT+FAT32+the boot.cfg parser first).
+
+- **stage1 (MBR, D-100):**
   1. Relocate to 0x0600.
   2. Read stage2 using INT 13h AH=42h (LBA extensions), from the location mkimage patched in.
   3. Jump to it.
-- **stage2:**
-  1. Enable A20: fast A20 port, INT 15h AX=2401, then the 8042 as a fallback.
-  2. Get the E820 memory map.
-  3. Pick a VBE mode (INT 10h 4F00/4F01/4F02) with a linear framebuffer, using the same rule
-     as UEFI.
-  4. Find the RSDP (EBDA first KiB, then 0xE0000 to 0xFFFFF).
-  5. Enter 32-bit protected mode. Use real-mode thunks for INT 13h reads to parse GPT, find
-     the ESP, and read FAT32 files (shared `boot/common` readers).
-  6. Load the kernel and initrd above 1 MiB.
-  7. Build the page tables and BootInfo (shared code).
-  8. Enter long mode and jump.
+- **stage2, 16-bit real-mode part (NASM only, D-101/D-102):**
+  1. Set up the real-mode stack; save the boot drive and the patch-block pointer.
+  2. Enable A20: fast A20 port, INT 15h AX=2401, then the 8042 as a fallback (each verified by
+     the classic wrap-around test).
+  3. Enter 32-bit protected mode (load the GDT, set CR0.PE, far jump); zero `.bss`; call into C.
+     From here on, every BIOS call (INT 13h/10h/15h/16h) goes through the real-mode thunk
+     (`rmInt`/`rmIdle`, D-102) -- the 32-bit C code below never drops to real mode itself.
+- **stage2, 32-bit C part, in order (D-103, mirrors `handoffRun`'s own step order):**
+  1. Serial init and a banner; a CPUID feature check (long mode + NX required).
+  2. E820 memory map -> the shared normalizer -> the [1 MiB, 4 GiB) loader heap (D-107).
+  3. EDD disk parameters -> a `BootBlockDev` (D-105) backed by thunked INT 13h reads.
+  4. GPT -> find the ESP (D-105); mount FAT32 (D-106); read and parse `boot.cfg`.
+  5. Pick and set a VBE mode using the global `resolution` (same selection rule as UEFI's GOP,
+     D-109); show the menu if `timeout > 0`; resolve the entry, re-picking VBE if its own
+     `resolution` differs.
+  6. Load `kernel.elf` above 1 MiB (initrd is not yet loaded by either loader -- M5.5, D-067).
+  7. Scan for the RSDP (EBDA first KiB, then 0xE0000 to 0xFFFFF); gather a random seed.
+  8. Build the page tables and BootInfo using the same shared builder UEFI calls (`boothandoff.c`,
+     D-108) -- not a second hand-copied implementation.
+  9. Mask both legacy PICs; enter long mode (D-111) and jump.
 
 ### 5.7 Secure Boot (late milestone)
 - `BOOTX64.EFI` is Authenticode-signed on the host with `sbsign`, using the user's own db key

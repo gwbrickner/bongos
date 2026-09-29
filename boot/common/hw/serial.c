@@ -1,6 +1,7 @@
-/* Raw COM1 (16550-compatible UART) output for the UEFI loader. See serial.h. */
-#include "serial.h"
+/* Raw COM1 (16550-compatible UART) output, shared by both loaders. See loader-serial.h. */
+#include "loader-serial.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #define COM1_PORT 0x3F8
@@ -71,6 +72,17 @@ void loaderSerialWriteString(const char *s) {
         }
         serialWriteByte(*s);
     }
+}
+
+bool loaderSerialReadByte(uint8_t *out) {
+    if (!uartPresent) {
+        return false;
+    }
+    if (!(inb(COM1_PORT + 5) & 0x01)) { /* LSR bit 0: data ready */
+        return false;
+    }
+    *out = inb(COM1_PORT);
+    return true;
 }
 
 void loaderSerialWriteUint(uint32_t v) {

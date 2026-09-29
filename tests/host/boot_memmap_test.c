@@ -20,6 +20,19 @@ TEST(memMapEfiTypeMapsKnownTypes) {
     ASSERT_EQ(memMapEfiTypeToBootMem(99, 0), (uint32_t)BOOT_MEM_RESERVED); /* unknown/OEM */
 }
 
+TEST(memMapE820TypeMapsKnownTypes) {
+    ASSERT_EQ(memMapE820TypeToBootMem(1, 0), (uint32_t)BOOT_MEM_USABLE);
+    ASSERT_EQ(memMapE820TypeToBootMem(1, MEM_MAP_E820_ATTR_NON_VOLATILE),
+              (uint32_t)BOOT_MEM_RESERVED);
+    ASSERT_EQ(memMapE820TypeToBootMem(2, 0), (uint32_t)BOOT_MEM_RESERVED);
+    ASSERT_EQ(memMapE820TypeToBootMem(3, 0), (uint32_t)BOOT_MEM_ACPI_RECLAIM);
+    ASSERT_EQ(memMapE820TypeToBootMem(4, 0), (uint32_t)BOOT_MEM_ACPI_NVS);
+    ASSERT_EQ(memMapE820TypeToBootMem(5, 0), (uint32_t)BOOT_MEM_BAD);
+    ASSERT_EQ(memMapE820TypeToBootMem(6, 0), (uint32_t)BOOT_MEM_RESERVED);
+    ASSERT_EQ(memMapE820TypeToBootMem(7, 0), (uint32_t)BOOT_MEM_RESERVED);
+    ASSERT_EQ(memMapE820TypeToBootMem(99, 0), (uint32_t)BOOT_MEM_RESERVED); /* unknown/OEM */
+}
+
 TEST(memMapNormalizeSortsAndCoalesces) {
     MemMapInput in[3] = {
         {0x2000, 0x1000, BOOT_MEM_USABLE},

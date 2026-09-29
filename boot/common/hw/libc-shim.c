@@ -1,8 +1,9 @@
-/* Freestanding memcpy/memset/memmove/memcmp for the UEFI target (D-065). clang emits implicit
+/* Freestanding memcpy/memset/memmove/memcmp, shared by both loaders (D-065). clang emits implicit
  * calls to these (struct assignment, aggregate zero-init/comparison) even under -ffreestanding on
- * this target, so something must define them or the loader fails to link; --sysroot-free targets
- * like x86_64-unknown-windows have no libc to pull them from. Not built by the host-test binary
- * (mk/host-tests.mk doesn't list this file), since the host's own libc already provides these. */
+ * these targets, so something must define them or the loader fails to link; --sysroot-free
+ * targets like x86_64-unknown-windows and i386-unknown-elf have no libc to pull them from. Not
+ * built by the host-test binary (mk/host-tests.mk doesn't glob boot/common/hw/), since the host's
+ * own libc already provides these. */
 #include <stddef.h>
 #include <stdint.h>
 

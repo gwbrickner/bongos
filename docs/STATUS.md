@@ -1,10 +1,47 @@
 # bongOS status
 _Main-line status. Parallel-lane sessions don't edit this file; they track progress in their own milestone log._
 
-**Last updated:** 2026-09-27 (M2.4 Slab, kmalloc, vmalloc done; M2.5 is next)
+**Last updated:** 2026-09-29 (M2.5 BIOS loader done: two `reviewer` rounds PASS with no Critical
+findings, every Should-fix item fixed or explicitly deferred via D-114, `make host-tests`/`make
+test`/`make test-full` all green across both firmwares and both memory sizes, ROADMAP.md's M2.5
+box checked, [PR #11](https://github.com/gwbrickner/bongos/pull/11) open against `main`. Next
+milestone to start: M2.6 KASLR + kernel RNG)
 
 ## Current milestone
-None in progress. **M2.4 Slab, kmalloc, vmalloc** is done -- see `docs/logs/M2.4.md` for the full
+No milestone branch currently in progress -- M2.5 just finished (see below); M2.6 is next (see
+"Next step").
+
+**M2.5 BIOS loader** is done -- see `docs/logs/M2.5.md` for the full writeup and its Summary
+section for the release notes. ROADMAP.md's M2.5 box is checked. Design consulted with the
+`architect` subagent first (D-099 through D-112, plus `docs/specs/bios-boot.md`'s byte-level
+layouts), giving a 13-step implementation order, all done. bongOS now boots on legacy BIOS/CSM
+machines as well as UEFI: a 440-byte NASM stage1 MBR, a stage2 (A20, a real-mode<->PM switch, a
+real-mode thunk letting 32-bit C call back into BIOS interrupts, E820, a from-scratch GPT+FAT32
+reader with VFAT long-name support, VBE mode pick through the same shared selection rule UEFI's
+GOP path uses, the same interactive boot menu byte-for-byte/pixel-for-pixel, RSDP scan, kernel
+ELF load, and a long-mode trampoline into the same shared page-table/BootInfo builder UEFI uses),
+and `mkimage` installing both loaders into one GPT image that boots either way. Implementation
+found and fixed several real bugs only via booting under real QEMU (not host tests alone): a
+thunk register-marshaling bug that clobbered its own frame pointer and jumped into the BIOS ROM's
+reset vector; a second thunk bug where ES/DS loads silently zeroed EAX on every real BIOS call;
+an i386-portability bug (a 64-bit division needing unavailable compiler-rt); `BootVideoMode`'s
+reserved mask never being populated from VBE's fields (0/93 modes accepted until fixed). Reviewed
+twice: the first `reviewer` pass found no Critical findings but 15 Should-fix items across the
+whole diff (three real thunk-correctness bugs, a hard-coded PM stack address replaced with a
+proper linker-script `.stack` section, BIOS-input-validation gaps, and FAT32/LFN-parsing
+hardening against malformed volumes, all fixed, plus 6 new host tests); a second re-review of
+those fixes found them sound and confirmed VERDICT: PASS, plus 4 more Should-fix items (a weak
+regression test rewritten to actually exercise its guard, a real VBE 3.0 linear-framebuffer
+correctness gap fixed rather than deferred, and doc/spec drift corrected). Three narrow items (a
+PM-side diagnostic IDT and dual teletype+serial pre-VBE logging, both described in earlier
+decisions but never actually built) are recorded as deliberate deferrals in D-114. `make
+host-tests` 247/247 (up from 172 at the milestone's start); `make test`/`make test-full` pass
+clean with no boot errors across both firmwares and both memory sizes, including exact BIOS GUI
+screenshot matches; `make format-check` clean. [PR #11](https://github.com/gwbrickner/bongos/pull/11)
+open against `main`, `needs-owner: yes` (touches the boot
+ABI, on-disk format parsing, and real-mode interrupt handling).
+
+**M2.4 Slab, kmalloc, vmalloc** is done -- see `docs/logs/M2.4.md` for the full
 writeup and its Summary section for the release notes. ROADMAP.md's M2.4 box is checked. Design
 consulted with the `architect` subagent first (D-092 through D-098, several deliberately
 simplified during implementation for a tractable, host-testable design -- see each entry). A real
@@ -73,14 +110,15 @@ backtrace is actually symbolized, and a missing contract comment on `trapDispatc
 `main`, was `needs-owner: yes` (D-045/§25 -- interrupts, security-sensitive stack-protector/UBSan
 runtimes, and a boot-ABI change to the kernel ELF's PT_LOAD count, D-073).
 
-**Next milestone: M2.5 BIOS loader** (`needs-owner`, ROADMAP.md). Needs M1.4 and M2.1, both long
-done -- picked over the higher-numbered M2.6/M3.1 (M2.6 needs M2.4+M2.5; M3.1 needs M2.4) per the
-session protocol's "lowest-numbered unchecked milestone whose Needs are done" rule. Steps: a
-440-byte NASM stage1 (INT 13h AH=42h reads of stage2 using mkimage-patched LBA/length) and a
-stage2 (A20, E820, VBE mode pick, RSDP scan, 32-bit C with real-mode INT 13h/INT 10h thunks, the
-GPT/FAT32 readers and boot menu reused from `boot/common`); loads the kernel+initrd, builds page
-tables + BootInfo (`bootMethod = BIOS`), enters long mode; `mkimage` installs stage1/stage2; the
-boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot tests.
+**Next milestone: M2.6 KASLR + kernel RNG** (`needs-owner`, ROADMAP.md). Needs M2.4 and M2.5, both
+now done -- the lowest-numbered unchecked milestone whose Needs are satisfied (M3.1 only needs
+M2.4 but is higher-numbered). Steps: both loaders pick a 2 MiB-aligned slide inside the kernel
+window from the random seed and apply the kernel ELF's `--emit-relocs` relocations
+(`R_X86_64_64`, `R_X86_64_32S`), honoring `kaslr=off`; the kernel gains a real entropy pool
+(RDSEED/RDRAND, the boot seed, interrupt timing later), a ChaCha20 CSPRNG, and `randomGetBytes`;
+the symbolizer and panic output account for the slide. Done when: two boots produce different
+`kernelVirtBase` (a new harness check) under both firmwares, the RNG passes a basic statistical
+sanity test, ChaCha20 matches the RFC 8439 test vectors, and `kaslr=off` gives the fixed base.
 
 ## Phase
 1: Acapulco Gold
@@ -198,15 +236,48 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
   tests alone. Two `reviewer` rounds found no Critical findings; 7 Should-fix items were fixed
   (see `docs/logs/M2.4.md`). 40 ktests (12 new) and 172 `make host-tests` cases pass; `make test`/
   `make test-full` pass clean with no boot errors; `make format-check` clean.
+- M2.5 ([PR #11](https://github.com/gwbrickner/bongos/pull/11) open, `needs-owner: yes`): bongOS boots on legacy BIOS/CSM machines, not just UEFI.
+  A 440-byte NASM stage1 MBR (D-100) reads a new stage2: A20 enable, a real-mode<->protected-mode
+  switch, a real-mode thunk (`rmInt`/`rmIdle`, D-102) letting 32-bit C call back into real BIOS
+  interrupts, and a full C environment reusing almost all of the UEFI loader's shared code --
+  E820, a from-scratch GPT+FAT32 reader (new, VFAT long-name support), VBE mode pick through the
+  same selection rule the UEFI GOP path uses (D-109), the same interactive boot menu
+  (pixel-identical, byte-identical log lines, D-110), RSDP scan, kernel ELF load, and a long-mode
+  trampoline (D-111) into the exact same shared page-table/BootInfo builder UEFI uses
+  (`bootMethod = BIOS`, D-108). `mkimage` installs both stage1 and stage2 into one GPT image that
+  boots either way. Designed with the `architect` subagent (D-099..D-112); implementation found
+  and fixed several real bugs only via booting under real QEMU (a thunk register-marshaling bug
+  that clobbered its own frame pointer and jumped into the BIOS ROM reset vector; a second thunk
+  bug silently zeroing EAX on every real BIOS call; an i386-portability division bug;
+  `BootVideoMode.reservedMask` never being populated, rejecting every VBE mode until fixed). Two
+  `reviewer` rounds: the first found no Critical findings but 15 Should-fix items (three
+  thunk-correctness bugs, a hard-coded PM stack address replaced with a proper linker-script
+  `.stack` section, BIOS-input-validation hardening, FAT32/LFN-parsing hardening against
+  malformed volumes with 6 new host tests, all fixed); the second re-review confirmed those fixes
+  and found 4 more (a weak regression test rewritten to actually exercise its guard, a real VBE
+  3.0 linear-framebuffer correctness gap fixed rather than deferred, doc/spec drift corrected),
+  all fixed. Three narrow items (a PM-side diagnostic IDT and dual teletype+serial pre-VBE
+  logging, both described in earlier decisions but never actually built) recorded as deliberate
+  deferrals in D-114 rather than silently dropped. `make host-tests` 247/247 (up from 172 at the
+  milestone's start); `make test`/`make test-full` pass clean with no boot errors across both
+  firmwares and both memory sizes, including exact BIOS GUI screenshot matches; `make
+  format-check` clean -- see `docs/logs/M2.5.md`.
 
 ## Next step
-M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8) open against `main`,
-`needs-owner: yes`, waiting on the owner's review.
-A fresh session (or this one, continuing) then starts **M2.5 BIOS loader** following the normal
-session protocol -- create a branch, copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.5.md`, and
-implement per ROADMAP.md's M2.5 step list (see this file's "Next milestone" section above for the
-summary). PRs #6 (M2.2) and #7 (M2.3) remain open against `main`,
-both `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.4/M2.5's own progress.
+M2.5 is fully done: both `reviewer` rounds PASS (no Critical findings, every Should-fix item
+fixed or explicitly deferred via D-114), `make host-tests`/`make test`/`make test-full` all
+green, ROADMAP.md's M2.5 box checked, this file and `docs/logs/M2.5.md`'s Summary updated. Opening
+the PR against `main` (`needs-owner: yes`) is the last action of this session.
+
+**Next milestone to start: M2.6 KASLR + kernel RNG** (see "Current milestone" above for the
+step list) -- create branch `m2-6-kaslr-rng`, copy `docs/logs/TEMPLATE.md` to
+`docs/logs/M2.6.md`, and consult the `architect` subagent first (KASLR relocation application and
+the kernel RNG are both explicitly listed in CLAUDE.md's "consult before implementing" list --
+syscall-ABI-adjacent boot handoff work and crypto).
+
+M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8), #7 (M2.3), and #6 (M2.2) remain
+open against `main`, all `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.5's
+own progress.
 
 ## Blockers
 _(none)_
@@ -236,6 +307,14 @@ _(none)_
   boot menu appears and arrow keys/Enter work, then report the resolution logged and whether
   scrolling looks noticeably slow (expected until M2.3 remaps the framebuffer WC, D-068). Full
   instructions in `docs/logs/M1.4.md`'s "Owner hardware check" section.
+- M2.5's owner hardware check (ROADMAP M2.5, **optional**, never blocks merging): if the board's
+  CSM and GPU allow legacy boot, enable CSM, `dd` the same image to a USB stick, and boot it in
+  legacy/BIOS mode specifically (not UEFI). Report whether it comes up at all (some GPUs don't
+  expose a usable framebuffer to a legacy INT 10h/VBE call the way they do to UEFI GOP), and if
+  so whether the menu/kernel screen and logged resolution look right. If it doesn't boot, report
+  the last thing visible on screen or over serial. The BIOS path is already fully verified under
+  QEMU/SeaBIOS regardless of this check's outcome. Full instructions in `docs/logs/M2.5.md`'s
+  "Owner hardware check" section.
 
 ## Parallel lanes (informational; updated by the main line when lanes merge)
 | Milestone | Branch | State |
