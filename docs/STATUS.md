@@ -9,104 +9,37 @@ firmwares, both memory sizes); a second `reviewer` re-review of the fix batch al
 checklist -- ROADMAP box, Summary, this file's own milestone section, the PR -- is left)
 
 ## Current milestone
-**M2.5 BIOS loader** is in progress on branch `m2-5-bios-loader` -- see `docs/logs/M2.5.md` for
-the full plan and running log. Design consulted with the `architect` subagent first (D-099
-through D-112, plus `docs/specs/bios-boot.md`'s byte-level layouts), giving a 13-step
-implementation order. Steps 1-7 are done and each individually verified against real QEMU (no
-regressions on the UEFI path throughout):
-1-4. Refactored shared loader code out of the UEFI-only path so BIOS stage2 can reuse it instead
-   of a second hand-copied implementation: `boot/common/hw/` (serial, libc-shim, cpu), the shared
-   menu-UI drawing/logging, the shared video-mode-selection rule (`bootvideo.c`), and the shared
-   page-table/BootInfo-build core (`boothandoff.c`).
-5. Every pure, host-testable BIOS-side module with no hardware coupling: `bootgpt.c` (a
-   from-scratch GPT reader), `bootfat.c` (a from-scratch FAT32 reader with VFAT long-name
-   support), `bootcrc32.c`, `bootheap.c`, `bootacpi.c` (RSDP scan), `bootkey.c` (serial arrow-key
-   parsing), `memMapE820TypeToBootMem`, and `tools/mkimage/biosboot.c` (the stage1
-   patch-block writer/stage2-header validator) with `--stage1`/`--stage2` mkimage flags. 233 host
-   tests total (up from 172 at the start of this milestone).
-6. A real `boot/bios/stage1.asm` (440-byte NASM MBR, D-100) and `boot/bios/stage2/entry.asm` --
-   **boots successfully under real QEMU with SeaBIOS**, verified repeatedly including the
-   multi-chunk disk-read path (a synthetic 130-sector fake stage2 read back via a QMP
-   physical-memory dump, byte-exact). `mk/image.mk`'s `image` target now always installs a real
-   BIOS bootloader instead of leaving that partition an empty hole.
-7. A20 enable, the GDT, the protected-mode switch, a full 32-bit C environment for stage2
-   (i386-cross-compiled `boot/common/hw/*.c`, linked via a new `stage2.ld`, D-104), and the
-   real-mode thunk (`rmInt`/`rmIdle`, D-102) -- **stage2 can now make real BIOS calls from C**,
-   proven with INT 12h. A real bug was found and fixed only by booting under real QEMU plus GDB
-   (not by reasoning about the asm alone): the thunk's register-marshaling loads the caller's
-   requested `RmRegs.ebp` into the live EBP register, clobbering `rmInt`'s own frame pointer; the
-   epilogue's `mov esp, ebp` then used that clobbered value and jumped into the BIOS ROM's reset
-   vector on return. Fixed by removing the now-redundant, now-wrong instruction (see the log's
-   step-7-final entry for the full bisection story). This is the milestone's highest-risk work,
-   now behind it.
+No milestone branch currently in progress -- M2.5 just finished (see below); M2.6 is next (see
+"Next step").
 
-8. E820 (INT 15h AX=E820h, via the thunk) -> `memMapNormalize()` -> `bootHeapInit()`
-   (`boot/bios/stage2/e820.c`, `main.c`'s `memMapSelfTest()`), logging every normalized region and
-   the resulting heap capacity over serial. Found and fixed a second real thunk bug along the way
-   (`rm.asm`'s ES/DS segment loads ran *after* the caller's EAX load and reused `ax`, silently
-   zeroing EAX right before the BIOS call whenever ES/DS were 0 -- the common case -- which made
-   every INT 15h call with real input, not just E820, look "unsupported"; INT 12h's self-test
-   never caught it since it passes no input registers). `qemu-tester`-confirmed: `make host-tests`
-   233/233, `make test` (UEFI matrix + GUI) all pass, `make format-check` clean, and 3 repeated
-   BIOS boots at each of 512 MiB/3072 MiB all PASS and byte-identical (zero flakiness) -- 9 E820
-   regions/510 MiB heap at 512 MiB, 10 regions/2046 MiB heap at 3072 MiB (correctly excluding the
-   >=4 GiB range).
-9. Disk: `diskProbe()` (`boot/bios/stage2/disk.c`) builds a `BootBlockDev` over thunked INT 13h
-   (AH=41h EDD check, AH=48h drive params, AH=42h extended read through a bounce buffer);
-   `main.c`'s `diskSelfTest()` finds the ESP via the already-written `bootGptFindPartition()`,
-   mounts FAT32, reads+parses `/bong/boot.cfg`, and logs the result -- proving GPT->FAT->boot.cfg
-   end to end. Found and fixed a real i386-portability bug in already-written `bootfat.c` (two
-   64-bit/32-bit divisions needing `__udivdi3`, undefined here since this loader links no
-   compiler-rt -- added a portable `bootDivMod64()` helper instead) and brought a repo-wide
-   `make format-check` failure (116 violations, all in this milestone's own earlier-step files)
-   back to clean. `qemu-tester`-confirmed: `make host-tests` 239/239, `make format-check` exits 0,
-   `make test` (UEFI + GUI) an *exact* screenshot match, and 3 repeated BIOS boots at each of
-   512 MiB/3072 MiB all PASS and byte-identical -- the full disk/GPT/FAT/boot.cfg chain works at
-   both memory sizes (`disk has 4194304 sectors`, ESP at LBA 0x1000-0x80fff, `/bong/boot.cfg is
-   502 bytes`, `3 entries, timeout 3s, default entry 0`, `default kernel = /bong/kernel.elf`).
-10. VBE: `vbeSetMode()` (`boot/bios/stage2/vbe.c`) enumerates modes via the thunk (INT 10h
-    AX=4F00h/4F01h) and sets one (AX=4F02h) through the same shared `bootvideo.c` accept/pick
-    rule UEFI's GOP path uses. Found and fixed a real bug: `BootVideoMode.reservedMask` was never
-    populated from VBE's Rsvd fields, so every mode's combined mask topped out at bit 23 instead
-    of 24-31 and `bootVideoAccept()` rejected all of them (0/93 modes accepted); fixed by reading
-    the reserved-mask fields like every other channel (20/93 now accepted, auto-picks 2560x1600,
-    matching what UEFI's own GOP picks under the same QEMU config). `qemu-tester`-confirmed:
-    `make host-tests` 239/239, `make format-check` exits 0, `make test` (UEFI + GUI) all pass, 5
-    BIOS boots (3 at 512 MiB, 2 at 3072 MiB) all PASS and MD5-identical within each memory size,
-    both ending `loader: VBE mode 2560x1600 pitch 10240 phys 0x00000000fd000000`.
-11. Kernel load, RSDP scan, random seed, the shared handoff (`boothandoff.c`), and the long-mode
-    trampoline (`boot/bios/stage2/trampoline.asm`, new, D-111) -- **the first full BIOS boot to
-    the kernel.** Consulted the `architect` subagent first (paging/boot-handoff work); it found
-    five real gaps in the plan before any code was written (the GDT needed to move into the new
-    page-aligned `.trampoline` section rather than staying in `.text16`; HHDM runs must be built
-    from the raw, filtered E820 map, not the already-normalized one; `bootHandoffFinalMap()`'s
-    real signature; a missing long-mode CPUID check that would have made the trampoline's own
-    `wrmsr` `#GP`; `.bss` was never actually zeroed). `boot/bios/stage2/handoff.c` (new) is the
-    real flow: E820/heap, disk/GPT/FAT32, boot.cfg, VBE, the kernel ELF, the boot stack, RSDP,
-    random seed, the page tables/BootInfo (via the already-shared `boothandoff.c`), and the jump.
-    `main.c` thinned to just the banner, mirroring UEFI's own thin entry point. A real assembler
-    bug (not a runtime one) was found and fixed at the first build attempt: `gdtr`'s limit can't
-    be computed as `gdtEnd - gdt` once the GDT lives in a different object file (symbol-minus-
-    symbol across files has no ELF relocation) -- hard-coded the limit instead, since the GDT's
-    size is a fixed architectural constant. **`make test` (the real target) passed clean on the
-    first real QEMU attempt after that fix**: `MATRIX: PASS` (both `uefi-1cpu` and the new
-    `bios-1cpu`), `GUI: PASS`, `countdown-smoke: PASS` -- and a direct KTEST/isa-debug-exit run
-    showed `KTEST DONE passed=40 failed=0` including `bootinfo_valid` and `loader_reclaimed`,
-    repeated 3x at 512 MiB and 1x at 3072 MiB, all byte-identical. Added `bios 1` to
-    `tests/harness/matrix.conf` and `bios 1`/`bios 1 3072` to `matrix-full.conf`.
-12. The BIOS menu's input loop (`boot/bios/stage2/menu.c`, new, D-110): `rmIdle()` +
-    `bootkey.c`'s serial ANSI-escape parser + INT 16h local keyboard input + a BDA-tick-counter
-    countdown, driving the same shared `bootmenu.c` state machine and menu-drawing code UEFI's
-    menu uses. `tests/gui/run.sh --fw bios` (its `mkimage` call never had `--stage1`/`--stage2`
-    before this) passes all 4 scripted scenarios; captured `tests/gui/ref/bios-{menu,kernel}.png`
-    and confirmed them **pixel-identical** to the existing UEFI references via `imgdiff compare`
-    (exit 0) -- D-110's shared-drawing promise, now verified rather than asserted. `mk/test.mk`'s
-    `test` target now runs the BIOS GUI tests and a BIOS countdown-smoke too; `make test` passed
-    twice end to end (`MATRIX`/`GUI` x2/both countdown-smokes all PASS).
-
-Remaining (step 13, in `docs/logs/M2.5.md`'s Plan section): docs polish, a `reviewer` pass, fix
-findings, check ROADMAP.md's M2.5 box, write the Summary, open the PR. See `docs/logs/M2.5.md`'s
-"Next step" for the precise resumption point.
+**M2.5 BIOS loader** is done -- see `docs/logs/M2.5.md` for the full writeup and its Summary
+section for the release notes. ROADMAP.md's M2.5 box is checked. Design consulted with the
+`architect` subagent first (D-099 through D-112, plus `docs/specs/bios-boot.md`'s byte-level
+layouts), giving a 13-step implementation order, all done. bongOS now boots on legacy BIOS/CSM
+machines as well as UEFI: a 440-byte NASM stage1 MBR, a stage2 (A20, a real-mode<->PM switch, a
+real-mode thunk letting 32-bit C call back into BIOS interrupts, E820, a from-scratch GPT+FAT32
+reader with VFAT long-name support, VBE mode pick through the same shared selection rule UEFI's
+GOP path uses, the same interactive boot menu byte-for-byte/pixel-for-pixel, RSDP scan, kernel
+ELF load, and a long-mode trampoline into the same shared page-table/BootInfo builder UEFI uses),
+and `mkimage` installing both loaders into one GPT image that boots either way. Implementation
+found and fixed several real bugs only via booting under real QEMU (not host tests alone): a
+thunk register-marshaling bug that clobbered its own frame pointer and jumped into the BIOS ROM's
+reset vector; a second thunk bug where ES/DS loads silently zeroed EAX on every real BIOS call;
+an i386-portability bug (a 64-bit division needing unavailable compiler-rt); `BootVideoMode`'s
+reserved mask never being populated from VBE's fields (0/93 modes accepted until fixed). Reviewed
+twice: the first `reviewer` pass found no Critical findings but 15 Should-fix items across the
+whole diff (three real thunk-correctness bugs, a hard-coded PM stack address replaced with a
+proper linker-script `.stack` section, BIOS-input-validation gaps, and FAT32/LFN-parsing
+hardening against malformed volumes, all fixed, plus 6 new host tests); a second re-review of
+those fixes found them sound and confirmed VERDICT: PASS, plus 4 more Should-fix items (a weak
+regression test rewritten to actually exercise its guard, a real VBE 3.0 linear-framebuffer
+correctness gap fixed rather than deferred, and doc/spec drift corrected). Three narrow items (a
+PM-side diagnostic IDT and dual teletype+serial pre-VBE logging, both described in earlier
+decisions but never actually built) are recorded as deliberate deferrals in D-114. `make
+host-tests` 247/247 (up from 172 at the milestone's start); `make test`/`make test-full` pass
+clean with no boot errors across both firmwares and both memory sizes, including exact BIOS GUI
+screenshot matches; `make format-check` clean. PR pending (`needs-owner: yes` -- touches the boot
+ABI, on-disk format parsing, and real-mode interrupt handling).
 
 **M2.4 Slab, kmalloc, vmalloc** is done -- see `docs/logs/M2.4.md` for the full
 writeup and its Summary section for the release notes. ROADMAP.md's M2.4 box is checked. Design
@@ -177,14 +110,15 @@ backtrace is actually symbolized, and a missing contract comment on `trapDispatc
 `main`, was `needs-owner: yes` (D-045/§25 -- interrupts, security-sensitive stack-protector/UBSan
 runtimes, and a boot-ABI change to the kernel ELF's PT_LOAD count, D-073).
 
-**Next milestone: M2.5 BIOS loader** (`needs-owner`, ROADMAP.md). Needs M1.4 and M2.1, both long
-done -- picked over the higher-numbered M2.6/M3.1 (M2.6 needs M2.4+M2.5; M3.1 needs M2.4) per the
-session protocol's "lowest-numbered unchecked milestone whose Needs are done" rule. Steps: a
-440-byte NASM stage1 (INT 13h AH=42h reads of stage2 using mkimage-patched LBA/length) and a
-stage2 (A20, E820, VBE mode pick, RSDP scan, 32-bit C with real-mode INT 13h/INT 10h thunks, the
-GPT/FAT32 readers and boot menu reused from `boot/common`); loads the kernel+initrd, builds page
-tables + BootInfo (`bootMethod = BIOS`), enters long mode; `mkimage` installs stage1/stage2; the
-boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot tests.
+**Next milestone: M2.6 KASLR + kernel RNG** (`needs-owner`, ROADMAP.md). Needs M2.4 and M2.5, both
+now done -- the lowest-numbered unchecked milestone whose Needs are satisfied (M3.1 only needs
+M2.4 but is higher-numbered). Steps: both loaders pick a 2 MiB-aligned slide inside the kernel
+window from the random seed and apply the kernel ELF's `--emit-relocs` relocations
+(`R_X86_64_64`, `R_X86_64_32S`), honoring `kaslr=off`; the kernel gains a real entropy pool
+(RDSEED/RDRAND, the boot seed, interrupt timing later), a ChaCha20 CSPRNG, and `randomGetBytes`;
+the symbolizer and panic output account for the slide. Done when: two boots produce different
+`kernelVirtBase` (a new harness check) under both firmwares, the RNG passes a basic statistical
+sanity test, ChaCha20 matches the RFC 8439 test vectors, and `kaslr=off` gives the fixed base.
 
 ## Phase
 1: Acapulco Gold
@@ -302,25 +236,44 @@ boot matrix gains BIOS (SeaBIOS) rows alongside UEFI, including the screenshot t
   tests alone. Two `reviewer` rounds found no Critical findings; 7 Should-fix items were fixed
   (see `docs/logs/M2.4.md`). 40 ktests (12 new) and 172 `make host-tests` cases pass; `make test`/
   `make test-full` pass clean with no boot errors; `make format-check` clean.
+- M2.5 (PR pending, `needs-owner: yes`): bongOS boots on legacy BIOS/CSM machines, not just UEFI.
+  A 440-byte NASM stage1 MBR (D-100) reads a new stage2: A20 enable, a real-mode<->protected-mode
+  switch, a real-mode thunk (`rmInt`/`rmIdle`, D-102) letting 32-bit C call back into real BIOS
+  interrupts, and a full C environment reusing almost all of the UEFI loader's shared code --
+  E820, a from-scratch GPT+FAT32 reader (new, VFAT long-name support), VBE mode pick through the
+  same selection rule the UEFI GOP path uses (D-109), the same interactive boot menu
+  (pixel-identical, byte-identical log lines, D-110), RSDP scan, kernel ELF load, and a long-mode
+  trampoline (D-111) into the exact same shared page-table/BootInfo builder UEFI uses
+  (`bootMethod = BIOS`, D-108). `mkimage` installs both stage1 and stage2 into one GPT image that
+  boots either way. Designed with the `architect` subagent (D-099..D-112); implementation found
+  and fixed several real bugs only via booting under real QEMU (a thunk register-marshaling bug
+  that clobbered its own frame pointer and jumped into the BIOS ROM reset vector; a second thunk
+  bug silently zeroing EAX on every real BIOS call; an i386-portability division bug;
+  `BootVideoMode.reservedMask` never being populated, rejecting every VBE mode until fixed). Two
+  `reviewer` rounds: the first found no Critical findings but 15 Should-fix items (three
+  thunk-correctness bugs, a hard-coded PM stack address replaced with a proper linker-script
+  `.stack` section, BIOS-input-validation hardening, FAT32/LFN-parsing hardening against
+  malformed volumes with 6 new host tests, all fixed); the second re-review confirmed those fixes
+  and found 4 more (a weak regression test rewritten to actually exercise its guard, a real VBE
+  3.0 linear-framebuffer correctness gap fixed rather than deferred, doc/spec drift corrected),
+  all fixed. Three narrow items (a PM-side diagnostic IDT and dual teletype+serial pre-VBE
+  logging, both described in earlier decisions but never actually built) recorded as deliberate
+  deferrals in D-114 rather than silently dropped. `make host-tests` 247/247 (up from 172 at the
+  milestone's start); `make test`/`make test-full` pass clean with no boot errors across both
+  firmwares and both memory sizes, including exact BIOS GUI screenshot matches; `make
+  format-check` clean -- see `docs/logs/M2.5.md`.
 
 ## Next step
-**M2.5 BIOS loader** is in progress (branch `m2-5-bios-loader`, log `docs/logs/M2.5.md`). All 12
-implementation steps are done; step 13 (the finishing checklist) is underway:
-- `reviewer` subagent pass: **done**, VERDICT PASS (no Critical findings). 15 Should-fix items:
-  12 fixed directly (see `docs/logs/M2.5.md`'s step-13 entry for the full list -- highlights:
-  `rm.asm`'s three thunk-correctness fixes re-verified live against QEMU, a real `.stack` linker
-  section replacing the hard-coded PM stack address, `bootfat.c` hardening against 3 distinct
-  malformed-volume/malformed-LFN risks with new deterministic regression tests, all 5 UEFI
-  `bootAllocAdd()` call sites now checked), 3 deferred with reasons on record (D-114: no PM-side
-  diagnostic IDT, no dual teletype/serial logging pre-VBE, `vbe.c` not reading VBE 3.0 linear
-  fields -- none block this milestone's Done-when checks or touch an ABI/format/the boot handoff).
-  Several nits fixed too (see the log).
-- **Next:** rebuild + retest everything together (`make host-tests`, `make format-check`,
-  `make image`, `make test`, a direct QEMU KTEST boot) to confirm the fix batch is clean, then
-  check ROADMAP.md's M2.5 box, write the log's Summary (release notes), update STATUS.md for the
-  next milestone, `git fetch` (the base ref used for review was `88189f9`, not stale
-  `origin/main`) and open the PR (`needs-owner: yes`, per D-099/D-109/D-111's owner-review flags,
-  using `.github/pull_request_template.md`).
+M2.5 is fully done: both `reviewer` rounds PASS (no Critical findings, every Should-fix item
+fixed or explicitly deferred via D-114), `make host-tests`/`make test`/`make test-full` all
+green, ROADMAP.md's M2.5 box checked, this file and `docs/logs/M2.5.md`'s Summary updated. Opening
+the PR against `main` (`needs-owner: yes`) is the last action of this session.
+
+**Next milestone to start: M2.6 KASLR + kernel RNG** (see "Current milestone" above for the
+step list) -- create branch `m2-6-kaslr-rng`, copy `docs/logs/TEMPLATE.md` to
+`docs/logs/M2.6.md`, and consult the `architect` subagent first (KASLR relocation application and
+the kernel RNG are both explicitly listed in CLAUDE.md's "consult before implementing" list --
+syscall-ABI-adjacent boot handoff work and crypto).
 
 M2.4 is done; [PR #8](https://github.com/gwbrickner/bongos/pull/8), #7 (M2.3), and #6 (M2.2) remain
 open against `main`, all `needs-owner: yes`, waiting on the owner's review -- unrelated to M2.5's
@@ -354,6 +307,14 @@ _(none)_
   boot menu appears and arrow keys/Enter work, then report the resolution logged and whether
   scrolling looks noticeably slow (expected until M2.3 remaps the framebuffer WC, D-068). Full
   instructions in `docs/logs/M1.4.md`'s "Owner hardware check" section.
+- M2.5's owner hardware check (ROADMAP M2.5, **optional**, never blocks merging): if the board's
+  CSM and GPU allow legacy boot, enable CSM, `dd` the same image to a USB stick, and boot it in
+  legacy/BIOS mode specifically (not UEFI). Report whether it comes up at all (some GPUs don't
+  expose a usable framebuffer to a legacy INT 10h/VBE call the way they do to UEFI GOP), and if
+  so whether the menu/kernel screen and logged resolution look right. If it doesn't boot, report
+  the last thing visible on screen or over serial. The BIOS path is already fully verified under
+  QEMU/SeaBIOS regardless of this check's outcome. Full instructions in `docs/logs/M2.5.md`'s
+  "Owner hardware check" section.
 
 ## Parallel lanes (informational; updated by the main line when lanes merge)
 | Milestone | Branch | State |
