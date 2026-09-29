@@ -47,37 +47,17 @@ static int64_t segYAtX(int64_t xa, int64_t ya, int64_t xb, int64_t yb, int64_t x
     return ya + ((x - xa) * (yb - ya)) / (xb - xa);
 }
 
-/* Adds one row-local piece: from (xa,ya) to (xb,yb), ya < yb both within [0,256], x relative to
- * the band's left edge in 24.8; `w` = band width in cells; `dir` = +-1. */
+/* Adds one row-local piece: from (xa,ya) to (xb,yb), both y within [0,256], x relative to the
+ * band's left edge in 24.8; `w` = band width in cells; `dir` = +-1.
+ *
+ * Every crossing y (at a cell boundary, at x = 0 and at x = W) is evaluated on the one segment
+ * (xa,ya)-(xb,yb) as given, never on a re-anchored sub-segment: a translation of x by a whole
+ * number of cells (a different band origin, i.e. a different clip) then leaves every crossing
+ * unchanged, so a fill under a clip is bit-identical to the unclipped fill inside it. */
 static void addRowPiece(int32_t *cover, int32_t *area, int32_t w, int64_t xa, int64_t ya,
                         int64_t xb, int64_t yb, int32_t dir) {
     const int64_t W = (int64_t)w * 256;
-    /* Portion left of the band: all of its coverage lands on cell 0's left boundary (cover only,
-     * x fraction 0 contributes no area). */
-    if (xa <= 0 && xb <= 0) {
-        cover[0] += dir * (int32_t)(yb - ya);
-        return;
-    }
-    if (xa >= W && xb >= W) {
-        return; /* right of the band: affects no visible cell */
-    }
-    /* Split at x = 0 and x = W (in whichever order the segment crosses them). */
-    if (xa < 0 || xb < 0) {
-        int64_t yc = segYAtX(xa, ya, xb, yb, 0);
-        addRowPiece(cover, area, w, xa, ya, 0, yc, dir);
-        addRowPiece(cover, area, w, 0, yc, xb, yb, dir);
-        return;
-    }
-    if (xa > W || xb > W) {
-        int64_t yc = segYAtX(xa, ya, xb, yb, W);
-        if (xa > W) {
-            addRowPiece(cover, area, w, W, yc, xb, yb, dir);
-        } else {
-            addRowPiece(cover, area, w, xa, ya, W, yc, dir);
-        }
-        return;
-    }
-    /* Now both x are in [0, W]. Walk left to right; the y extent of each piece is |dy|. */
+    /* Walk left to right; the y extent of each piece is |dy|. */
     if (xa > xb) {
         int64_t t = xa;
         xa = xb;
@@ -86,27 +66,34 @@ static void addRowPiece(int32_t *cover, int32_t *area, int32_t w, int64_t xa, in
         ya = yb;
         yb = t;
     }
+    /* Wholly left of the band: all of its coverage lands on cell 0's left boundary (cover only,
+     * x fraction 0 contributes no area). */
+    if (xb <= 0) {
+        cover[0] += dir * (int32_t)(yb >= ya ? yb - ya : ya - yb);
+        return;
+    }
+    if (xa >= W) {
+        return; /* wholly right of the band: affects no visible cell */
+    }
     if (xa == xb) {
-        int64_t c = xa >> 8; /* xa >= 0 here */
-        if (c >= w) {
-            return; /* exactly on the band's right boundary */
-        }
-        int32_t dy = (int32_t)(yb - ya < 0 ? ya - yb : yb - ya);
+        int64_t c = xa >> 8; /* 0 < xa < W here */
+        int32_t dy = (int32_t)(yb >= ya ? yb - ya : ya - yb);
         cover[c] += dir * dy;
         area[c] += dir * dy * (int32_t)((xa & 255) * 2);
         return;
     }
-    int64_t c0 = xa >> 8;
-    int64_t c1 = (xb - 1) >> 8; /* the cell holding the points just left of xb */
-    if (c0 >= w) {
-        return;
+    /* The part left of x = 0 (if any) is cover on cell 0; the part right of x = W is dropped. */
+    int64_t lo = xa, hi = xb < W ? xb : W;
+    if (xa < 0) {
+        int64_t yc = segYAtX(xa, ya, xb, yb, 0);
+        cover[0] += dir * (int32_t)(yc >= ya ? yc - ya : ya - yc);
+        lo = 0;
     }
-    if (c1 >= w) {
-        c1 = w - 1;
-    }
+    int64_t c0 = lo >> 8;       /* lo >= 0 */
+    int64_t c1 = (hi - 1) >> 8; /* the cell holding the points just left of hi; hi > lo */
     for (int64_t c = c0; c <= c1; c++) {
-        int64_t xl = xa > c * 256 ? xa : c * 256;
-        int64_t xr = xb < (c + 1) * 256 ? xb : (c + 1) * 256;
+        int64_t xl = lo > c * 256 ? lo : c * 256;
+        int64_t xr = hi < (c + 1) * 256 ? hi : (c + 1) * 256;
         int64_t yl = segYAtX(xa, ya, xb, yb, xl);
         int64_t yr = segYAtX(xa, ya, xb, yb, xr);
         int32_t dy = (int32_t)(yr >= yl ? yr - yl : yl - yr);
