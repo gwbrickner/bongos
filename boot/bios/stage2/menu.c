@@ -92,8 +92,8 @@ uint32_t loaderMenuRun(const char *text, uint64_t textLen, const BootCfg *cfg, B
             /* discard */
         }
         uint8_t drainScan, drainAscii;
-        for (uint32_t i = 0;
-             i < MENU_DRAIN_MAX_ITERATIONS && biosKeyReady(&drainScan, &drainAscii); i++) {
+        for (uint32_t i = 0; i < MENU_DRAIN_MAX_ITERATIONS && biosKeyReady(&drainScan, &drainAscii);
+             i++) {
             biosKeyRead(&drainScan, &drainAscii);
         }
     }

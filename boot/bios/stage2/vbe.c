@@ -14,9 +14,10 @@
 #define VBE_OK_AX         0x004Fu /* AL=4Fh (function supported) + AH=00h (call succeeded) */
 #define VBE_MODE_LIST_MAX 256u /* bounds the mode-list walk regardless of what the BIOS reports */
 #define VBE_LFB_BIT       0x4000u /* Set Mode bit 14: use the linear framebuffer */
-#define VBE_VERSION_3_0   0x0300u /* VbeVersion at/above which the LinBytesPerScanLine and
-                                     Lin{Red,Green,Blue,Rsvd}{MaskSize,FieldPosition} fields
-                                     (D-114) are valid to read */
+#define VBE_VERSION_3_0                                                                            \
+    0x0300u /* VbeVersion at/above which the LinBytesPerScanLine and                               \
+               Lin{Red,Green,Blue,Rsvd}{MaskSize,FieldPosition} fields                             \
+               (D-114) are valid to read */
 
 /* VBE far pointers (VbeInfoBlock's VideoModePtr) pack a real-mode segment:offset into one u32,
  * offset in the low word -- the same layout rm.asm reads directly out of the IVT. Always resolves
