@@ -235,7 +235,7 @@ TEST(fontGlyfMalformedGlyphsGiveTheDocumentedStatus) {
         }
         n++;
     }
-    ASSERT_EQ(n, 33);
+    ASSERT_EQ(n, 34);
     /* an empty glyph and a composite of one load with no points */
     ASSERT_EQ(gfxFontGlyphOutline(f, 19, NULL, &g), STATUS_OK);
     ASSERT_EQ(g.nPoints, 0u);

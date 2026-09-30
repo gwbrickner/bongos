@@ -677,6 +677,11 @@ def make_bad(orc):
     add(simple_glyph([[(0, 0, 1), (32767, 0, 1), (32767, 32767, 1), (0, 32767, 1)]]), "OK", 31)
     # ends [0,1,2]: every contour has one point (skipped by the path builder, but loaded)
     add(simple_glyph([[(0, 0, 1)], [(10, 0, 1)], [(10, 10, 0)]]), "OK", 32)
+    # 33: 3000 tiny triangles: loads fine (9000 points, 3000 contours) but flattens to 9000 edges,
+    # over the rasterizer's 8192-edge limit, so rendering it must fail with UNSUPPORTED
+    tris = [[(15 * (i % 60), 15 * (i // 60), 1), (15 * (i % 60) + 10, 15 * (i // 60) + 3, 1),
+             (15 * (i % 60) + 3, 15 * (i // 60) + 10, 1)] for i in range(3000)]
+    add(simple_glyph(tris), "OK", 33)
     ng = len(G)
     loca, glyf = loca_glyf(G, True)
     tables = {
