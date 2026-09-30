@@ -29,7 +29,9 @@ void sha256Init(Sha256Ctx *ctx);
 void sha256Update(Sha256Ctx *ctx, const void *data, size_t len);
 
 /* Pads, finishes, writes the 32-byte big-endian digest to `out`, and wipes `ctx` (start over with
- * sha256Init to reuse it). No locks, may not sleep, IRQ-safe, cannot fail. */
+ * sha256Init to reuse it). `out` must not overlap `ctx` (the wipe runs after the digest is
+ * written, so e.g. `out` == ctx->buf would come back all zero). No locks, may not sleep,
+ * IRQ-safe, cannot fail. */
 void sha256Final(Sha256Ctx *ctx, uint8_t out[SHA256_DIGEST_SIZE]);
 
 #endif
