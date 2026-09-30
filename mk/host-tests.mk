@@ -32,13 +32,15 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # is exactly what makes it host-testable in both modes without -DKERNEL_DEBUG.
 # -DHOSTED switches kernel/include/page.h's Page-array base to `hostPageArrayBase`
 # (kernel_buddy_test.c), since host tests have no real HHDM/page-array VA region to point into.
+# boot/common/hw/loader-kaslr.c: the loaders' KASLR pick/relocate/fall-back step (M2.6); its only
+# hardware dependency is the loaderSerial* log calls, which boot_elfreloc_test.c stubs out.
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c tools/mkimage/biosboot.c \
                         boot/uefi/guids.c \
                         $(wildcard boot/common/*.c) $(CONSOLE_FONT_C) \
                         $(filter-out tools/imgdiff/main.c,$(wildcard tools/imgdiff/*.c)) \
                         kernel/drivers/fbcon/fbcon.c kernel/core/ksym.c tools/ksyms/ksyms-encode.c \
                         kernel/mm/pmm-map.c kernel/mm/buddy.c kernel/mm/kva.c \
-                        kernel/mm/slab-core.c kernel/mm/slab-debug.c
+                        kernel/mm/slab-core.c kernel/mm/slab-debug.c boot/common/hw/loader-kaslr.c
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/biosboot.h \
                         $(wildcard boot/uefi/include/efi/*.h) \
                         $(wildcard boot/common/include/*.h) $(wildcard tools/imgdiff/*.h) \

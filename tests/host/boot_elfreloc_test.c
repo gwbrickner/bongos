@@ -854,3 +854,146 @@ TEST(relocCorruptedTablesNeverCrash) {
         (void)elfRelocate(&img, fx.file, FILE_SIZE, fx.dest, SLIDE, NULL);
     }
 }
+
+/* ---- loaderKaslrApply (boot/common/hw/loader-kaslr.c, M2.6 step 3) -------------------------
+ * The loaders' shared pick / relocate / fall-back step. Its serial output goes through these
+ * stubs (the real boot/common/hw/serial.c does port I/O and is not host-built), so the tests can
+ * pin the exact log lines tests/harness/kaslr-check.sh and mk/test.mk parse. */
+#include "bootkaslr.h"
+#include "loader-kaslr.h"
+#include "loader-serial.h"
+
+#include <stdio.h>
+
+static char kaslrLog[512];
+static size_t kaslrLogLen;
+
+static void kaslrLogAppend(const char *s) {
+    size_t n = strlen(s);
+    if (kaslrLogLen + n < sizeof(kaslrLog)) {
+        memcpy(kaslrLog + kaslrLogLen, s, n + 1);
+        kaslrLogLen += n;
+    }
+}
+void loaderSerialWriteString(const char *s) {
+    kaslrLogAppend(s);
+}
+void loaderSerialWriteUint(uint32_t v) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%u", v);
+    kaslrLogAppend(buf);
+}
+void loaderSerialWriteHex64(uint64_t v) {
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)v);
+    kaslrLogAppend(buf);
+}
+
+/* A seed whose slide (for the fixture's 8 KiB span, 256 slots) is not 0, and that slide. */
+static uint64_t kaslrNonzeroSeed(uint8_t seed[64]) {
+    memset(seed, 0, 64);
+    for (uint32_t i = 0; i < 256; i++) {
+        seed[0] = (uint8_t)i;
+        uint64_t slide = 0;
+        if (bootKaslrPickSlide(seed, 0x2000, &slide) == BOOT_OK && slide != 0) {
+            return slide;
+        }
+    }
+    return 0;
+}
+
+/* Parses and elfLoads the fixture, snapshots the unslid image into f->before, resets the log. */
+static void kaslrPrepare(Fx *f) {
+    ASSERT_EQ(elfParse(f->file, FILE_SIZE, &f->img), BOOT_OK);
+    ASSERT_EQ(f->img.span, 0x2000ULL);
+    ASSERT_EQ(elfLoad(&f->img, f->file, f->dest), BOOT_OK);
+    memcpy(f->before, f->dest, sizeof(f->dest));
+    kaslrLog[0] = '\0';
+    kaslrLogLen = 0;
+}
+
+TEST(loaderKaslrOffNeverTouchesDestAndLogsTheLinkBase) {
+    setupWith(&fx);
+    kaslrPrepare(&fx);
+    memset(fx.dest, 0x5A, sizeof(fx.dest)); /* not what elfLoad wrote: must stay exactly this */
+    uint8_t seed[64];
+    ASSERT_TRUE(kaslrNonzeroSeed(seed) != 0);
+    uint64_t slide = 0x1234;
+    ASSERT_EQ(loaderKaslrApply(&fx.img, fx.file, FILE_SIZE, fx.dest, seed, false, &slide), BOOT_OK);
+    ASSERT_EQ(slide, 0ULL);
+    for (size_t i = 0; i < sizeof(fx.dest); i++) {
+        ASSERT_EQ(fx.dest[i], 0x5A);
+    }
+    ASSERT_STREQ(kaslrLog, "loader: kaslr: off (boot.cfg); base=0xffffffff80000000\n");
+}
+
+TEST(loaderKaslrOnSlidesTheImageAndLogsTheSlide) {
+    setupWith(&fx);
+    pokeData64(&fx, DATA_VA + 8, KBASE + 0x40);
+    addReloc(&fx, 1, DATA_VA + 8, R_64, Y_TEXT, 0x40);
+    kaslrPrepare(&fx);
+    uint8_t seed[64];
+    uint64_t want = kaslrNonzeroSeed(seed);
+    ASSERT_TRUE(want != 0);
+    uint64_t slide = 0x1234;
+    ASSERT_EQ(loaderKaslrApply(&fx.img, fx.file, FILE_SIZE, fx.dest, seed, true, &slide), BOOT_OK);
+    ASSERT_EQ(slide, want);
+    ASSERT_EQ(destText32(&fx, EXEC_LOC), 0x80000040u + (uint32_t)want);
+    ASSERT_EQ(destData64(&fx, DATA_VA + 8), KBASE + 0x40 + want);
+    char line[128];
+    snprintf(line, sizeof(line), "loader: kaslr: slide=0x%016llx base=0x%016llx relocs=2\n",
+             (unsigned long long)want, (unsigned long long)(KBASE + want));
+    ASSERT_STREQ(kaslrLog, line);
+}
+
+/* A duplicated entry is only caught in pass 2, after the text 32S and the first copy of the data
+ * 64 were already slid: the fallback must hand back the unslid image elfLoad produces, not the
+ * half-slid one, and report slide 0. */
+TEST(loaderKaslrPass2FailureReloadsAnUnslidImage) {
+    setupWith(&fx);
+    pokeData64(&fx, DATA_VA + 8, KBASE + 0x40);
+    addReloc(&fx, 1, DATA_VA + 8, R_64, Y_TEXT, 0x40);
+    addReloc(&fx, 1, DATA_VA + 8, R_64, Y_TEXT, 0x40);
+    kaslrPrepare(&fx);
+    uint8_t seed[64];
+    ASSERT_TRUE(kaslrNonzeroSeed(seed) != 0);
+    uint64_t slide = 0x1234;
+    ASSERT_EQ(loaderKaslrApply(&fx.img, fx.file, FILE_SIZE, fx.dest, seed, true, &slide), BOOT_OK);
+    ASSERT_EQ(slide, 0ULL);
+    ASSERT_TRUE(destUnchanged(&fx));
+    char line[160];
+    snprintf(line, sizeof(line), "loader: kaslr: disabled: %s; base=0xffffffff80000000\n",
+             bootStatusString(BOOT_ERR_ELF_RELOC));
+    ASSERT_STREQ(kaslrLog, line);
+}
+
+/* A table rejected in pass 1 (unsupported type) also boots unslid, with the same log line. */
+TEST(loaderKaslrPass1FailureFallsBackUnslid) {
+    setupWith(&fx);
+    addReloc(&fx, 1, DATA_VA + 8, R_GOT, Y_TEXT, 0);
+    kaslrPrepare(&fx);
+    uint8_t seed[64];
+    ASSERT_TRUE(kaslrNonzeroSeed(seed) != 0);
+    uint64_t slide = 0x1234;
+    ASSERT_EQ(loaderKaslrApply(&fx.img, fx.file, FILE_SIZE, fx.dest, seed, true, &slide), BOOT_OK);
+    ASSERT_EQ(slide, 0ULL);
+    ASSERT_TRUE(destUnchanged(&fx));
+    ASSERT_TRUE(strncmp(kaslrLog, "loader: kaslr: disabled: ", 25) == 0);
+}
+
+/* If the fall-back re-load itself fails, that error comes back (the caller must refuse to boot)
+ * and the slide is still reported as 0. */
+TEST(loaderKaslrFailedReloadIsReturned) {
+    setupWith(&fx);
+    addReloc(&fx, 1, DATA_VA + 8, R_GOT, Y_TEXT, 0); /* elfRelocate refuses the table */
+    kaslrPrepare(&fx);
+    ElfImage bad = fx.img;
+    bad.segs[1].filesz = 0x10000; /* past the span: the re-load (elfLoad) refuses it */
+    uint8_t seed[64];
+    ASSERT_TRUE(kaslrNonzeroSeed(seed) != 0);
+    uint64_t slide = 0x1234;
+    BootStatus st = loaderKaslrApply(&bad, fx.file, FILE_SIZE, fx.dest, seed, true, &slide);
+    ASSERT_TRUE(st != BOOT_OK);
+    ASSERT_EQ(st, elfLoad(&bad, fx.file, fx.dest));
+    ASSERT_EQ(slide, 0ULL);
+}
