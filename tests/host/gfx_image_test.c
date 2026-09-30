@@ -185,6 +185,12 @@ TEST(gfxImageSniffAndSurface) {
     ASSERT_TRUE(img.pixels == NULL);
     ASSERT_EQ(gfxImageDecode(junk, 0, NULL, NULL, &img), STATUS_ERR_UNSUPPORTED);
     ASSERT_EQ(gfxPngDecode(junk, sizeof(junk), NULL, NULL, &img), STATUS_ERR_INVALID);
+    /* all 8 signature bytes and both "BM" bytes count: a near miss is not dispatched */
+    uint8_t nearPng[16] = {137, 80, 78, 71, 13, 10, 26, 11};
+    ASSERT_EQ(gfxImageDecode(nearPng, sizeof(nearPng), NULL, NULL, &img), STATUS_ERR_UNSUPPORTED);
+    uint8_t nearBmp[64] = {'B', 'X'};
+    ASSERT_EQ(gfxImageDecode(nearBmp, sizeof(nearBmp), NULL, NULL, &img), STATUS_ERR_UNSUPPORTED);
+    ASSERT_EQ(gfxImageDecode(nearBmp, 1, NULL, NULL, &img), STATUS_ERR_UNSUPPORTED);
     const Fixture *x = findFixture(&fs, "png_t6_d8_9x9");
     ASSERT_TRUE(x != NULL);
     ASSERT_EQ(gfxImageDecode(x->data, x->dataLen, NULL, NULL, &img), STATUS_OK);
@@ -640,6 +646,224 @@ TEST(gfxPngLimitsRejectBeforeAllocating) {
     free(ok.b);
 }
 
+/* ---- each PNG rule on its own ------------------------------------------------------------ */
+/* Every file below is decodable except for the one rule it breaks, and most come with a control
+ * that differs only in that rule and must decode, so each case can fail only through its own
+ * guard. (Several earlier cases were also rejected for a second reason: a "bad CRC" that corrupted
+ * the zlib data, a duplicate IHDR in a file with no IDAT, a short stream whose missing bytes read
+ * as ASan's malloc pattern, an invalid filter type; removing the guard went unnoticed.) */
+
+/* Zero-fills every allocation, so a decoder that used bytes it never wrote would see valid-looking
+ * data (filter 0, sample 0) and succeed, instead of tripping over ASan's malloc fill pattern. */
+static void *zeroAlloc(void *ctx, size_t n) {
+    void *p = caAlloc(ctx, n);
+    if (p != NULL) {
+        memset(p, 0, n);
+    }
+    return p;
+}
+
+/* A 1x1 8-bit gray image's zlib stream (pixel value 0x80). */
+static size_t gray1x1Zlib(uint8_t *z, size_t cap) {
+    static const uint8_t raw[2] = {0, 0x80};
+    size_t zl = 0;
+    if (compressZlibDeflate(raw, 2, 0, z, cap, &zl) != STATUS_OK) {
+        return 0;
+    }
+    return zl;
+}
+
+/* Decodes and returns the status; on success copies up to `n` pixels to `px`. */
+static Status decodePixels(Buf *b, uint32_t *px, size_t n) {
+    CountAlloc s = {-1, 0, 0, 0, 0};
+    GfxImage im;
+    Status r = decodeBuf(b, NULL, &s, &im);
+    if (r == STATUS_OK) {
+        size_t have = (size_t)im.width * im.height;
+        memcpy(px, im.pixels, (have < n ? have : n) * sizeof(uint32_t));
+    }
+    gfxImageFree(&im);
+    free(b->b);
+    *b = (Buf){0};
+    return s.live == 0 ? r : -100;
+}
+
+TEST(gfxPngEachRuleAlone) {
+    Buf b;
+    uint8_t z[64];
+    size_t zl = gray1x1Zlib(z, sizeof(z));
+    ASSERT_TRUE(zl > 0);
+
+    /* IDATs must be consecutive: the whole stream in the first IDAT, an empty IDAT after an
+     * ancillary chunk. The same chunks with the empty IDAT first decode. */
+    for (int split = 0; split < 2; split++) {
+        b = (Buf){0};
+        pngSig(&b);
+        pngIhdr(&b, 1, 1, 8, 0, 0, 0, 0);
+        pngChunk(&b, "IDAT", z, zl);
+        if (split) {
+            pngChunk(&b, "tEXt", "k\0v", 3);
+            pngChunk(&b, "IDAT", NULL, 0);
+        } else {
+            pngChunk(&b, "IDAT", NULL, 0);
+            pngChunk(&b, "tEXt", "k\0v", 3);
+        }
+        pngChunk(&b, "IEND", NULL, 0);
+        EXPECT_PNG(b, split ? STATUS_ERR_INVALID : STATUS_OK);
+    }
+
+    /* A CRC error alone (one bit of the stored CRC itself) in each kind of chunk. */
+    for (int which = -1; which < 4; which++) {
+        b = (Buf){0};
+        pngSig(&b);
+        size_t crcAt[4];
+        pngIhdr(&b, 1, 1, 8, 0, 0, 0, 0);
+        crcAt[0] = b.n - 4;
+        pngChunk(&b, "tEXt", "k\0v", 3);
+        crcAt[1] = b.n - 4;
+        pngChunk(&b, "IDAT", z, zl);
+        crcAt[2] = b.n - 4;
+        pngChunk(&b, "IEND", NULL, 0);
+        crcAt[3] = b.n - 4;
+        if (which >= 0) {
+            b.b[crcAt[which] + 3] ^= 0x01;
+        }
+        EXPECT_PNG(b, which >= 0 ? STATUS_ERR_INVALID : STATUS_OK);
+    }
+
+    /* IHDR: first, once, exactly 13 bytes (each in an otherwise complete file). */
+    b = (Buf){0};
+    pngSig(&b);
+    pngChunk(&b, "tEXt", "k\0v", 3);
+    pngIhdr(&b, 1, 1, 8, 0, 0, 0, 0);
+    pngChunk(&b, "IDAT", z, zl);
+    pngChunk(&b, "IEND", NULL, 0);
+    EXPECT_PNG(b, STATUS_ERR_INVALID);
+    b = (Buf){0};
+    pngSig(&b);
+    pngIhdr(&b, 1, 1, 8, 0, 0, 0, 0);
+    pngIhdr(&b, 1, 1, 8, 0, 0, 0, 0);
+    pngChunk(&b, "IDAT", z, zl);
+    pngChunk(&b, "IEND", NULL, 0);
+    EXPECT_PNG(b, STATUS_ERR_INVALID);
+    b = (Buf){0};
+    pngSig(&b);
+    pngChunk(&b, "IHDR", "\0\0\0\1\0\0\0\1\10\0\0\0\0\0", 14);
+    pngChunk(&b, "IDAT", z, zl);
+    pngChunk(&b, "IEND", NULL, 0);
+    EXPECT_PNG(b, STATUS_ERR_INVALID);
+
+    /* Interlace method 2 with exactly the bytes an Adam7 decode of 2x2 RGBA8 needs (passes 1, 6
+     * and 7: 5 + 5 + 9 = 19); method 1 with the same data decodes. */
+    uint8_t adam[19] = {0};
+    for (int il = 1; il <= 2; il++) {
+        b = (Buf){0};
+        pngSig(&b);
+        pngIhdr(&b, 2, 2, 8, 6, 0, 0, il);
+        pngIdat(&b, adam, sizeof(adam));
+        pngChunk(&b, "IEND", NULL, 0);
+        EXPECT_PNG(b, il == 1 ? STATUS_OK : STATUS_ERR_INVALID);
+    }
+
+    /* PLTE on a truecolor image (a suggested palette): 1..256 entries, not 0 and not 257. */
+    static uint8_t pal[771];
+    uint8_t rgb[4] = {0, 1, 2, 3};
+    size_t pl[4] = {3, 768, 0, 771};
+    for (int i = 0; i < 4; i++) {
+        b = (Buf){0};
+        pngSig(&b);
+        pngIhdr(&b, 1, 1, 8, 2, 0, 0, 0);
+        pngChunk(&b, "PLTE", pal, pl[i]);
+        pngIdat(&b, rgb, 4);
+        pngChunk(&b, "IEND", NULL, 0);
+        EXPECT_PNG(b, i < 2 ? STATUS_OK : STATUS_ERR_INVALID);
+    }
+
+    /* tRNS (even an empty one) must come after PLTE on a palette image. */
+    uint8_t idx[2] = {0, 0};
+    for (int before = 0; before < 2; before++) {
+        b = (Buf){0};
+        pngSig(&b);
+        pngIhdr(&b, 1, 1, 8, 3, 0, 0, 0);
+        if (before) {
+            pngChunk(&b, "tRNS", NULL, 0);
+        }
+        pngChunk(&b, "PLTE", pal, 3);
+        if (!before) {
+            pngChunk(&b, "tRNS", NULL, 0);
+        }
+        pngIdat(&b, idx, 2);
+        pngChunk(&b, "IEND", NULL, 0);
+        EXPECT_PNG(b, before ? STATUS_ERR_INVALID : STATUS_OK);
+    }
+
+    /* Too little image data, decoded through a zero-filling allocator: 4x4 gray needs 20 bytes;
+     * 15 (three whole filter-0 rows) must not decode, with the fourth row read as zeros. */
+    {
+        uint8_t few[15] = {0};
+        b = (Buf){0};
+        pngSig(&b);
+        pngIhdr(&b, 4, 4, 8, 0, 0, 0, 0);
+        pngIdat(&b, few, sizeof(few));
+        pngChunk(&b, "IEND", NULL, 0);
+        CountAlloc s = {-1, 0, 0, 0, 0};
+        GfxAllocator za = {zeroAlloc, caFree, &s};
+        GfxImage im;
+        ASSERT_EQ(gfxPngDecode(b.b, b.n, NULL, &za, &im), STATUS_ERR_INVALID);
+        ASSERT_TRUE(im.pixels == NULL);
+        ASSERT_EQ(s.live, 0);
+        free(b.b);
+    }
+}
+
+/* tRNS for gray and truecolor below 16 bits: only the low `depth` bits of each 16-bit value count
+ * (the spec: decoders mask the other bits to 0). At 16 bits all bits count. */
+TEST(gfxPngTransparencyMasksHighBits) {
+    Buf b;
+    uint32_t px[2];
+    /* 4-bit gray, pixels 5 and 6; tRNS 0xFFF5 means 5 */
+    uint8_t g4[2] = {0, 0x56};
+    b = (Buf){0};
+    pngSig(&b);
+    pngIhdr(&b, 2, 1, 4, 0, 0, 0, 0);
+    pngChunk(&b, "tRNS", "\xFF\xF5", 2);
+    pngIdat(&b, g4, 2);
+    pngChunk(&b, "IEND", NULL, 0);
+    ASSERT_EQ(decodePixels(&b, px, 2), STATUS_OK);
+    ASSERT_EQ(px[0], 0u);
+    ASSERT_EQ(px[1], 0xFF666666u);
+    /* 8-bit RGB (0x10,0x20,0x30); tRNS (0x0110, 0xFF20, 0x8030) means (0x10,0x20,0x30) */
+    uint8_t rgb[4] = {0, 0x10, 0x20, 0x30};
+    b = (Buf){0};
+    pngSig(&b);
+    pngIhdr(&b, 1, 1, 8, 2, 0, 0, 0);
+    pngChunk(&b, "tRNS", "\x01\x10\xFF\x20\x80\x30", 6);
+    pngIdat(&b, rgb, 4);
+    pngChunk(&b, "IEND", NULL, 0);
+    ASSERT_EQ(decodePixels(&b, px, 1), STATUS_OK);
+    ASSERT_EQ(px[0], 0u);
+    /* ... but a different blue is opaque */
+    rgb[3] = 0x31;
+    b = (Buf){0};
+    pngSig(&b);
+    pngIhdr(&b, 1, 1, 8, 2, 0, 0, 0);
+    pngChunk(&b, "tRNS", "\x01\x10\xFF\x20\x80\x30", 6);
+    pngIdat(&b, rgb, 4);
+    pngChunk(&b, "IEND", NULL, 0);
+    ASSERT_EQ(decodePixels(&b, px, 1), STATUS_OK);
+    ASSERT_EQ(px[0], 0xFF102031u);
+    /* 16-bit gray: 0x0105 is not 0x0005 */
+    uint8_t g16[3] = {0, 0x00, 0x05};
+    b = (Buf){0};
+    pngSig(&b);
+    pngIhdr(&b, 1, 1, 16, 0, 0, 0, 0);
+    pngChunk(&b, "tRNS", "\x01\x05", 2);
+    pngIdat(&b, g16, 3);
+    pngChunk(&b, "IEND", NULL, 0);
+    ASSERT_EQ(decodePixels(&b, px, 1), STATUS_OK);
+    ASSERT_EQ(px[0] >> 24, 0xFFu);
+}
+
 /* ---- BMP crafted cases ---------------------------------------------------------------- */
 
 static void put32le(uint8_t *p, uint32_t v) {
@@ -801,6 +1025,143 @@ TEST(gfxBmpMalformedHeaders) {
     freeFixtures(&fs);
 }
 
+/* A BMP built from parts: a `dib`-byte header, the masks after a 40-byte header when `comp` is
+ * BITFIELDS (3 masks) or ALPHABITFIELDS (4), `nPal` palette entries, then all-zero pixel rows.
+ * offBits is where the pixels naturally start plus `offDelta`; a positive delta appends that many
+ * bytes so the pixel array still fits. Returns a malloc'd, exactly sized file. */
+static uint8_t *bmpBuild(size_t *outLen, int32_t w, int32_t h, uint32_t bpp, uint32_t comp,
+                         uint32_t dib, const uint32_t masks[4], uint32_t clrUsed, uint32_t nPal,
+                         int32_t offDelta) {
+    size_t nMasks = (dib == 40 && comp == 3) ? 3 : (dib == 40 && comp == 6) ? 4 : 0;
+    size_t natural = 14 + dib + nMasks * 4 + (size_t)nPal * 4;
+    size_t stride = (((size_t)w * bpp + 31) / 32) * 4;
+    size_t rows = (size_t)(h < 0 ? -h : h);
+    size_t len = natural + stride * rows + (offDelta > 0 ? (size_t)offDelta : 0);
+    uint8_t *f = calloc(len, 1);
+    if (f == NULL) {
+        return NULL;
+    }
+    f[0] = 'B';
+    f[1] = 'M';
+    put32le(f + 2, (uint32_t)len);
+    put32le(f + 10, (uint32_t)((int64_t)natural + offDelta));
+    uint8_t *hd = f + 14;
+    put32le(hd, dib);
+    put32le(hd + 4, (uint32_t)w);
+    put32le(hd + 8, (uint32_t)h);
+    hd[12] = 1;
+    hd[14] = (uint8_t)bpp;
+    put32le(hd + 16, comp);
+    put32le(hd + 32, clrUsed);
+    if (dib >= 52) {
+        put32le(hd + 40, masks[0]);
+        put32le(hd + 44, masks[1]);
+        put32le(hd + 48, masks[2]);
+    }
+    if (dib >= 56) {
+        put32le(hd + 52, masks[3]);
+    }
+    for (size_t i = 0; i < nMasks; i++) {
+        put32le(f + 14 + dib + i * 4, masks[i]);
+    }
+    for (uint32_t i = 0; i < nPal; i++) {
+        uint8_t *e = f + 14 + dib + nMasks * 4 + (size_t)i * 4;
+        e[0] = (uint8_t)(i * 7);
+        e[1] = (uint8_t)(i * 11);
+        e[2] = (uint8_t)(i * 13);
+    }
+    *outLen = len;
+    return f;
+}
+
+static Status bmpBuildDecode(int32_t w, int32_t h, uint32_t bpp, uint32_t comp, uint32_t dib,
+                             uint32_t m0, uint32_t m1, uint32_t m2, uint32_t m3, uint32_t clrUsed,
+                             uint32_t nPal, int32_t offDelta) {
+    uint32_t masks[4] = {m0, m1, m2, m3};
+    size_t len = 0;
+    uint8_t *f = bmpBuild(&len, w, h, bpp, comp, dib, masks, clrUsed, nPal, offDelta);
+    if (f == NULL) {
+        return -200;
+    }
+    CountAlloc s = {-1, 0, 0, 0, 0};
+    GfxImage im;
+    Status r = bmpDecode(f, len, NULL, &s, &im);
+    free(f);
+    return s.live == 0 ? r : -100;
+}
+
+/* Each BMP rule on its own: every file differs from a decodable control only in that rule. */
+TEST(gfxBmpEachRuleAlone) {
+    /* the pixel array may not start inside the masks that follow a 40-byte header */
+    ASSERT_EQ(bmpBuildDecode(2, 2, 32, 3, 40, 0xFF0000u, 0xFF00u, 0xFFu, 0, 0, 0, 0), STATUS_OK);
+    ASSERT_EQ(bmpBuildDecode(2, 2, 32, 3, 40, 0xFF0000u, 0xFF00u, 0xFFu, 0, 0, 0, -8),
+              STATUS_ERR_INVALID);
+    ASSERT_EQ(bmpBuildDecode(2, 2, 32, 6, 40, 0xFF0000u, 0xFF00u, 0xFFu, 0xFF000000u, 0, 0, -4),
+              STATUS_ERR_INVALID);
+    /* an alpha mask may not overlap a color mask */
+    ASSERT_EQ(bmpBuildDecode(2, 2, 32, 6, 40, 0xFF0000u, 0xFF00u, 0xFFu, 0xFF000000u, 0, 0, 0),
+              STATUS_OK);
+    ASSERT_EQ(bmpBuildDecode(2, 2, 32, 6, 40, 0xFF0000u, 0xFF00u, 0xFFu, 0xFF800000u, 0, 0, 0),
+              STATUS_ERR_INVALID);
+    ASSERT_EQ(bmpBuildDecode(2, 2, 32, 3, 124, 0xFF0000u, 0xFF00u, 0xFFu, 0x000001FFu, 0, 0, 0),
+              STATUS_ERR_INVALID);
+    /* 16-bit masks stay within 16 bits, the alpha mask of a V4/V5 header included */
+    ASSERT_EQ(bmpBuildDecode(3, 2, 16, 3, 40, 0xF800u, 0x7E0u, 0x1Fu, 0, 0, 0, 0), STATUS_OK);
+    ASSERT_EQ(bmpBuildDecode(3, 2, 16, 3, 40, 0x1F800u, 0x7E0u, 0x1Fu, 0, 0, 0, 0),
+              STATUS_ERR_INVALID);
+    ASSERT_EQ(bmpBuildDecode(3, 2, 16, 3, 124, 0x7C00u, 0x3E0u, 0x1Fu, 0x8000u, 0, 0, 0),
+              STATUS_OK);
+    ASSERT_EQ(bmpBuildDecode(3, 2, 16, 3, 124, 0x7C00u, 0x3E0u, 0x1Fu, 0x10000u, 0, 0, 0),
+              STATUS_ERR_INVALID);
+    /* bit fields only for 16 and 32 bits per pixel (here 24, with well-formed masks) */
+    ASSERT_EQ(bmpBuildDecode(3, 2, 24, 0, 40, 0, 0, 0, 0, 0, 0, 0), STATUS_OK);
+    ASSERT_EQ(bmpBuildDecode(3, 2, 24, 3, 40, 0xFF0000u, 0xFF00u, 0xFFu, 0, 0, 0, 0),
+              STATUS_ERR_INVALID);
+    /* clrUsed at most 2^bpp (all entries present, every index in range) */
+    ASSERT_EQ(bmpBuildDecode(9, 2, 1, 0, 40, 0, 0, 0, 0, 2, 2, 0), STATUS_OK);
+    ASSERT_EQ(bmpBuildDecode(9, 2, 1, 0, 40, 0, 0, 0, 0, 3, 3, 0), STATUS_ERR_INVALID);
+    ASSERT_EQ(bmpBuildDecode(9, 2, 4, 0, 40, 0, 0, 0, 0, 17, 17, 0), STATUS_ERR_INVALID);
+    /* the palette may not overlap the pixel array */
+    ASSERT_EQ(bmpBuildDecode(5, 3, 8, 0, 40, 0, 0, 0, 0, 4, 4, 0), STATUS_OK);
+    ASSERT_EQ(bmpBuildDecode(5, 3, 8, 0, 40, 0, 0, 0, 0, 4, 4, -4), STATUS_ERR_INVALID);
+    ASSERT_EQ(bmpBuildDecode(5, 3, 8, 0, 124, 0, 0, 0, 0, 4, 4, -1), STATUS_ERR_INVALID);
+    ASSERT_EQ(bmpBuildDecode(5, 3, 8, 0, 124, 0, 0, 0, 0, 4, 4, 3), STATUS_OK); /* a gap is fine */
+}
+
+/* maxTotalBytes bounds the peak of everything live at once, exactly: a budget equal to the peak
+ * the allocator saw decodes, one byte less is UNSUPPORTED (and nothing leaks either way). */
+TEST(gfxDecodeBudgetIsTheExactPeak) {
+    FixtureSet fs;
+    ASSERT_TRUE(loadFixtures(&fs));
+    static const char *const names[] = {"png_t6_d8_33x7_i", "png_t3_d4_9x9_i_trns",
+                                        "png_t0_d16_9x9", "bmp_b24_9x9", "bmp_p4_c11_33x7"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        const Fixture *x = findFixture(&fs, names[i]);
+        ASSERT_TRUE(x != NULL);
+        CA_INIT(ca, -1);
+        GfxImage img;
+        ASSERT_EQ(gfxImageDecode(x->data, x->dataLen, NULL, &ca, &img), STATUS_OK);
+        gfxImageFree(&img);
+        size_t peak = caState.peakBytes;
+        ASSERT_TRUE(peak > 0 && caState.live == 0);
+        for (int less = 0; less <= 1; less++) {
+            CA_INIT(cb, -1);
+            GfxDecodeLimits lim = {GFX_DECODE_DEFAULT_MAX_DIM, GFX_DECODE_DEFAULT_MAX_DIM,
+                                   GFX_DECODE_DEFAULT_MAX_PIXELS, (uint64_t)peak - (uint64_t)less};
+            Status st = gfxImageDecode(x->data, x->dataLen, &lim, &cb, &img);
+            if (st != (less ? STATUS_ERR_UNSUPPORTED : STATUS_OK)) {
+                fprintf(stderr, "  %s: budget %zu%s -> %d\n", names[i], peak, less ? " - 1" : "",
+                        (int)st);
+            }
+            ASSERT_EQ(st, less ? STATUS_ERR_UNSUPPORTED : STATUS_OK);
+            ASSERT_TRUE(cbState.peakBytes <= peak);
+            gfxImageFree(&img);
+            ASSERT_EQ(cbState.live, 0);
+        }
+    }
+    freeFixtures(&fs);
+}
+
 /* ---- truncation, mutation fuzz, allocation failure ------------------------------------ */
 
 static const char *const SAMPLE_NAMES[] = {
@@ -819,7 +1180,13 @@ TEST(gfxDecodeTruncationEveryOffset) {
         for (size_t cut = 0; cut < x->dataLen; cut++) {
             CA_INIT(ca, -1);
             GfxImage img;
-            Status st = gfxImageDecode(x->data, cut, NULL, &ca, &img);
+            /* an exact-size heap copy, so ASan sees any read past `cut` (the fixture itself sits
+             * inside one big buffer, where an over-read goes unnoticed) */
+            uint8_t *copy = malloc(cut != 0 ? cut : 1);
+            ASSERT_TRUE(copy != NULL);
+            memcpy(copy, x->data, cut);
+            Status st = gfxImageDecode(copy, cut, NULL, &ca, &img);
+            free(copy);
             if (st == STATUS_OK) {
                 fprintf(stderr, "  %s decoded from %zu of %u bytes\n", x->name, cut, x->dataLen);
             }
