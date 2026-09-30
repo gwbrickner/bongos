@@ -1391,3 +1391,35 @@ TEST(gfxPngEmptyImageDataIsInvalidWithAnyAllocator) {
         free(b.b);
     }
 }
+
+/* With every limit at its maximum, IHDR sizes whose inflated size overflows 64 bits are
+ * UNSUPPORTED before anything big is allocated. The dimensions are chosen so the overflowing sum
+ * wraps to under 64 KiB: a decoder that let it wrap would allocate that, inflate the 2-byte IDAT
+ * and fail as INVALID instead. Non-interlaced 16-bit RGBA overflows in one pass's rows * rowBytes
+ * product (the passBytes saturation); the Adam7 case has every pass below 2^64 but their sum above
+ * it (the rawTotal check). */
+TEST(gfxPngInflatedSizeOverflowIsUnsupported) {
+    static const struct {
+        uint32_t w, h;
+        int interlace;
+    } cases[] = {
+        {0x40002d41u, 0x7fffa57eu, 0}, /* h * (8w + 1) = 2^64 + 64878 */
+        {0x4003dd67u, 0x7ff845a9u, 1}, /* sum of the 7 passes = 2^64 + 58007 */
+    };
+    const GfxDecodeLimits huge = {UINT32_MAX, UINT32_MAX, UINT64_MAX, UINT64_MAX};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        Buf b = {0};
+        uint8_t zero[2] = {0};
+        pngSig(&b);
+        pngIhdr(&b, cases[i].w, cases[i].h, 16, 6, 0, 0, cases[i].interlace);
+        pngIdat(&b, zero, 2);
+        pngChunk(&b, "IEND", NULL, 0);
+        CountAlloc st = {-1, 0, 0, 0, 0};
+        GfxImage im;
+        ASSERT_EQ(decodeBuf(&b, &huge, &st, &im), STATUS_ERR_UNSUPPORTED);
+        ASSERT_TRUE(st.peakBytes < 1u << 14); /* only the header state and the IDAT copy */
+        ASSERT_EQ(st.live, 0);
+        ASSERT_TRUE(im.pixels == NULL);
+        free(b.b);
+    }
+}

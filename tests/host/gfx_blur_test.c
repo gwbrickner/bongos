@@ -380,3 +380,199 @@ TEST(gfxShadowOutsideClipDoesNoWork) {
     }
     cvFree(&cv);
 }
+
+/* The off-clip early-out at each of the four clip edges, under several canvas origins and with and
+ * without a pushed clip: a mask that exactly touches the clip from outside (its exclusive end on
+ * the clip's start, or its start on the clip's exclusive end) must not allocate; one pixel further
+ * in must (a failing allocator tells the two apart). The mask is the shape's integer pixel bounds
+ * plus 2 and a margin of 3r+1 on each side (D-145). Clips are chosen inside the surface, so the
+ * canvas-coordinate clip is exactly the rect pushed (or the surface shifted by the origin). */
+TEST(gfxShadowClipEarlyOutIsExactAtEveryEdge) {
+    static const struct {
+        int32_t orgX, orgY;
+        bool push;
+    } setups[] = {{0, 0, false}, {0, 0, true}, {-7, 5, true}, {13, -5, true}, {-20, 9, false}};
+    GfxAllocator none = {nullAlloc, noFree, NULL};
+    const int32_t w = 6, h = 5, r = 2, offX = 3, offY = -4;
+    const int32_t margin = 3 * r + 1, mw = w + 2 + 2 * margin, mh = h + 2 + 2 * margin;
+    for (size_t si = 0; si < sizeof(setups) / sizeof(setups[0]); si++) {
+        Cv cv;
+        ASSERT_TRUE(cvInit(&cv, 64, 48, 0xFFFFFFFFu));
+        gfxCanvasSetOrigin(&cv.c, setups[si].orgX, setups[si].orgY);
+        GfxRect clip = {-setups[si].orgX, -setups[si].orgY, 64 - setups[si].orgX,
+                        48 - setups[si].orgY};
+        if (setups[si].push) {
+            clip = (GfxRect){10, 8, 30, 25};
+            ASSERT_EQ(gfxCanvasPushClip(&cv.c, clip), STATUS_OK);
+        }
+        /* mask origin -> shape position: x = mx0 + margin - offX */
+        for (int side = 0; side < 4; side++) {
+            for (int inside = 0; inside < 2; inside++) {
+                int32_t mx0 = 0, my0 = 0;
+                switch (side) {
+                    case 0: /* left: mask end on clip.x0 */
+                        mx0 = clip.x0 - mw + inside;
+                        my0 = clip.y0 + 2;
+                        break;
+                    case 1: /* right: mask start on clip.x1 */
+                        mx0 = clip.x1 - inside;
+                        my0 = clip.y0 + 2;
+                        break;
+                    case 2: /* top */
+                        mx0 = clip.x0 + 2;
+                        my0 = clip.y0 - mh + inside;
+                        break;
+                    default: /* bottom */
+                        mx0 = clip.x0 + 2;
+                        my0 = clip.y1 - inside;
+                        break;
+                }
+                float x = (float)(mx0 + margin - offX), y = (float)(my0 + margin - offY);
+                Status st = gfxDrawShadow(&cv.c, x, y, (float)w, (float)h, 1.0f, (uint32_t)r, offX,
+                                          offY, 0xFF000000u, &none);
+                ASSERT_EQ(st, inside ? STATUS_ERR_NO_MEMORY : STATUS_OK);
+            }
+        }
+        for (int32_t i = 0; i < 64 * 48; i++) {
+            ASSERT_EQ(cv.px[i], (uint32_t)0xFFFFFFFFu);
+        }
+        cvFree(&cv);
+    }
+}
+
+typedef struct {
+    size_t allocs, live;
+} CountingAlloc;
+
+static void *countAlloc(void *ctx, size_t n) {
+    CountingAlloc *ca = ctx;
+    void *p = malloc(n != 0 ? n : 1);
+    if (p != NULL) {
+        ca->allocs++;
+        ca->live++;
+    }
+    return p;
+}
+
+static void countFree(void *ctx, void *p, size_t n) {
+    CountingAlloc *ca = ctx;
+    (void)n;
+    if (p != NULL) {
+        ca->live--;
+    }
+    free(p);
+}
+
+/* The early-out must never change what is drawn: random shadows (fractional and negative
+ * positions, offsets, a random origin, a random pushed clip that may stick out of the surface or be
+ * empty) drawn on canvas A must equal, inside A's clip, the same shadow drawn on an unclipped
+ * canvas B with no origin (the origin folded into the position; all values are exact in float),
+ * and leave everything outside A's clip untouched. Both outcomes (skipped and drawn) must occur. */
+TEST(gfxShadowClipEarlyOutNeverChangesTheImage) {
+    rngSeed(0x5AD0u);
+    int skipped = 0, drawn = 0;
+    CountingAlloc ca = {0};
+    GfxAllocator counting = {countAlloc, countFree, &ca};
+    for (int iter = 0; iter < 3000; iter++) {
+        Cv a, b;
+        ASSERT_TRUE(cvInit(&a, 48, 40, 0xFFE0C0A0u));
+        ASSERT_TRUE(cvInit(&b, 48, 40, 0xFFE0C0A0u));
+        int32_t orgX = (int32_t)(rngNext() % 61) - 30, orgY = (int32_t)(rngNext() % 61) - 30;
+        gfxCanvasSetOrigin(&a.c, orgX, orgY);
+        /* positions are drawn around the surface, then moved into canvas coordinates */
+        GfxRect pc = {(int32_t)(rngNext() % 60) - 10 - orgX, (int32_t)(rngNext() % 50) - 10 - orgY,
+                      0, 0};
+        pc.x1 = pc.x0 + (int32_t)(rngNext() % 40) - 3;
+        pc.y1 = pc.y0 + (int32_t)(rngNext() % 40) - 3;
+        ASSERT_EQ(gfxCanvasPushClip(&a.c, pc), STATUS_OK);
+        /* the effective clip in surface coordinates, computed independently */
+        GfxRect sc = {pc.x0 + orgX, pc.y0 + orgY, pc.x1 + orgX, pc.y1 + orgY};
+        sc.x0 = sc.x0 < 0 ? 0 : sc.x0;
+        sc.y0 = sc.y0 < 0 ? 0 : sc.y0;
+        sc.x1 = sc.x1 > 48 ? 48 : sc.x1;
+        sc.y1 = sc.y1 > 40 ? 40 : sc.y1;
+        float x = (float)((int32_t)(rngNext() % 320) - 120) / 4.0f - (float)orgX;
+        float y = (float)((int32_t)(rngNext() % 280) - 100) / 4.0f - (float)orgY;
+        float w = (float)(1 + rngNext() % 80) / 4.0f, h = (float)(1 + rngNext() % 80) / 4.0f;
+        uint32_t r = rngNext() % 5;
+        int32_t offX = (int32_t)(rngNext() % 21) - 10, offY = (int32_t)(rngNext() % 21) - 10;
+        size_t before = ca.allocs;
+        ASSERT_EQ(gfxDrawShadow(&a.c, x, y, w, h, 2.0f, r, offX, offY, 0xC0102030u, &counting),
+                  STATUS_OK);
+        bool skip = ca.allocs == before;
+        ASSERT_EQ(gfxDrawShadow(&b.c, x + (float)orgX, y + (float)orgY, w, h, 2.0f, r, offX, offY,
+                                0xC0102030u, NULL),
+                  STATUS_OK);
+        bool anyInClip = false;
+        for (int32_t py = 0; py < 40; py++) {
+            for (int32_t px = 0; px < 48; px++) {
+                bool in = px >= sc.x0 && px < sc.x1 && py >= sc.y0 && py < sc.y1;
+                uint32_t av = a.px[py * 48 + px], bv = b.px[py * 48 + px];
+                ASSERT_EQ(av, in ? bv : (uint32_t)0xFFE0C0A0u);
+                anyInClip |= in && bv != 0xFFE0C0A0u;
+            }
+        }
+        if (skip) {
+            ASSERT_TRUE(!anyInClip); /* only ever skips a shadow that would draw nothing */
+            skipped++;
+        } else {
+            drawn += anyInClip;
+        }
+        cvFree(&a);
+        cvFree(&b);
+    }
+    ASSERT_EQ(ca.live, (size_t)0);
+    ASSERT_TRUE(skipped > 300 && drawn > 300);
+}
+
+/* Origins at the ends of the int32 range, where the canvas-coordinate clip saturates: a shadow is
+ * still drawn exactly where the same shadow lands with origin 0, and one that cannot reach the
+ * surface is skipped without allocating. */
+TEST(gfxShadowClipEarlyOutAtExtremeOrigins) {
+    GfxAllocator none = {nullAlloc, noFree, NULL};
+    Cv ref;
+    ASSERT_TRUE(cvInit(&ref, 40, 40, 0xFFFFFFFFu));
+    ASSERT_EQ(gfxDrawShadow(&ref.c, 12.0f, 12.0f, 10.0f, 10.0f, 2.0f, 2, 0, 0, 0xFF000000u, NULL),
+              STATUS_OK);
+
+    /* origin INT32_MAX: the surface is at canvas [-INT32_MAX, -INT32_MAX + 40) */
+    Cv a;
+    ASSERT_TRUE(cvInit(&a, 40, 40, 0xFFFFFFFFu));
+    gfxCanvasSetOrigin(&a.c, INT32_MAX, INT32_MAX);
+    ASSERT_EQ(gfxDrawShadow(&a.c, 2.0f, 2.0f, 10.0f, 10.0f, 2.0f, 2, -INT32_MAX + 10,
+                            -INT32_MAX + 10, 0xFF000000u, &none),
+              STATUS_ERR_NO_MEMORY); /* reaches the surface: needs its mask */
+    ASSERT_EQ(gfxDrawShadow(&a.c, 2.0f, 2.0f, 10.0f, 10.0f, 2.0f, 2, -INT32_MAX + 10,
+                            -INT32_MAX + 10, 0xFF000000u, NULL),
+              STATUS_OK);
+    ASSERT_EQ(memcmp(a.px, ref.px, 40 * 40 * sizeof(uint32_t)), 0);
+
+    /* origin INT32_MIN + 36: the surface is at canvas [INT32_MAX - 35, INT32_MAX + 5), so the
+     * clip's right and bottom edges saturate to INT32_MAX; the mask [INT32_MAX - 30,
+     * INT32_MAX - 4) still fits in int32 and must be drawn */
+    Cv b;
+    ASSERT_TRUE(cvInit(&b, 40, 40, 0xFFFFFFFFu));
+    gfxCanvasSetOrigin(&b.c, INT32_MIN + 36, INT32_MIN + 36);
+    ASSERT_EQ(gfxDrawShadow(&b.c, 2.0f, 2.0f, 10.0f, 10.0f, 2.0f, 2, INT32_MAX - 25, INT32_MAX - 25,
+                            0xFF000000u, &none),
+              STATUS_ERR_NO_MEMORY);
+    ASSERT_EQ(gfxDrawShadow(&b.c, 2.0f, 2.0f, 10.0f, 10.0f, 2.0f, 2, INT32_MAX - 25, INT32_MAX - 25,
+                            0xFF000000u, NULL),
+              STATUS_OK);
+    ASSERT_EQ(memcmp(b.px, ref.px, 40 * 40 * sizeof(uint32_t)), 0);
+
+    /* origin INT32_MIN: the whole surface lies past canvas INT32_MAX; nothing can reach it */
+    Cv c;
+    ASSERT_TRUE(cvInit(&c, 40, 40, 0xFFFFFFFFu));
+    gfxCanvasSetOrigin(&c.c, INT32_MIN, INT32_MIN);
+    ASSERT_EQ(gfxDrawShadow(&c.c, 2.0f, 2.0f, 10.0f, 10.0f, 2.0f, 2, INT32_MAX - 40, INT32_MAX - 40,
+                            0xFF000000u, &none),
+              STATUS_OK);
+    for (int32_t i = 0; i < 40 * 40; i++) {
+        ASSERT_EQ(c.px[i], (uint32_t)0xFFFFFFFFu);
+    }
+    cvFree(&ref);
+    cvFree(&a);
+    cvFree(&b);
+    cvFree(&c);
+}

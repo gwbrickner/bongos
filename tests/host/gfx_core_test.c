@@ -612,3 +612,25 @@ TEST(gfxCanvasInitFailureLeavesCanvasDestroyable) {
     gfxCanvasDestroy(&c); /* must not free garbage */
     ASSERT_EQ(c.clipDepth, (uint32_t)0);
 }
+
+/* Both of gfxCanvasInit's validation steps (the surface shape, then the stride range) leave a
+ * garbage-filled canvas destroyable, with the allocator that was passed in. */
+TEST(gfxCanvasInitEveryFailureLeavesCanvasDestroyable) {
+    static uint32_t px[16];
+    const GfxSurface bad[] = {
+        {px, 0, 4, 4},                 /* zero width */
+        {px, 4, 4, 3},                 /* stride < width */
+        {px, 4, 1, INT32_MAX / 2 + 1}, /* stride past INT32_MAX / 2 (second check) */
+        {px, GFX_SURFACE_MAX_DIM + 1, 1, GFX_SURFACE_MAX_DIM + 1},
+    };
+    static const GfxAllocator mine = {NULL, NULL, NULL};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        GfxCanvas c;
+        memset(&c, 0xA5, sizeof(c));
+        ASSERT_EQ(gfxCanvasInit(&c, bad[i], &mine), STATUS_ERR_INVALID);
+        ASSERT_TRUE(c.scratch == NULL);
+        ASSERT_EQ(c.scratchSize, (size_t)0);
+        ASSERT_TRUE(c.alloc == &mine);
+        gfxCanvasDestroy(&c); /* no scratch: never calls the (NULL) free hook */
+    }
+}
