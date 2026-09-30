@@ -1,5 +1,6 @@
 /* libs/gfx blur and drop shadows (M12.2, D-145). A8 masks only: shadows are a blurred coverage
- * mask tinted at draw time, so ARGB blur is not needed. Integer-only. */
+ * mask tinted at draw time, so ARGB blur is not needed. The blur itself is integer-only; only
+ * gfxDrawShadow's sub-pixel placement of the shape uses float. */
 #ifndef LIBS_GFX_BLUR_H
 #define LIBS_GFX_BLUR_H
 
@@ -27,7 +28,8 @@ Status gfxBlurBox(GfxMask *m, uint32_t radius, uint32_t passes, GfxBlurEdge edge
  * coordinates (origin and clip apply). w <= 0 or h <= 0 draws nothing. Allocates a temporary mask
  * of (w + 2*margin) x (h + 2*margin) bytes with `a` (NULL = the canvas allocator). Failure modes:
  * INVALID (non-finite geometry, blurRadius > 255), UNSUPPORTED (a mask over 16384 in either
- * dimension), NO_MEMORY. Nothing is drawn on failure. */
+ * dimension), NO_MEMORY. Nothing is drawn on failure. A shadow wholly outside the clip returns OK
+ * without allocating. */
 Status gfxDrawShadow(GfxCanvas *c, float x, float y, float w, float h, float cornerR,
                      uint32_t blurRadius, int32_t offX, int32_t offY, GfxColor col,
                      const GfxAllocator *a);

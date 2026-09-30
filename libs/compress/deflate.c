@@ -5,8 +5,6 @@
 
 #include <stdbool.h>
 
-#include <string.h>
-
 typedef struct {
     uint8_t *out;
     size_t cap;

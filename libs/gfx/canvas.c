@@ -59,6 +59,9 @@ static GfxRect toSurface(const GfxCanvas *c, GfxRect r) {
 }
 
 Status gfxCanvasInit(GfxCanvas *c, GfxSurface s, const GfxAllocator *a) {
+    /* Even on failure *c is left in a state gfxCanvasDestroy accepts (no scratch, an allocator). */
+    memset(c, 0, sizeof(*c));
+    c->alloc = a != NULL ? a : gfxAllocatorDefault();
     if (s.pixels == NULL || s.width <= 0 || s.height <= 0 || s.width > GFX_SURFACE_MAX_DIM ||
         s.height > GFX_SURFACE_MAX_DIM || s.stride < s.width) {
         return STATUS_ERR_INVALID;
@@ -67,11 +70,9 @@ Status gfxCanvasInit(GfxCanvas *c, GfxSurface s, const GfxAllocator *a) {
         s.stride > INT32_MAX / 2) {
         return STATUS_ERR_INVALID;
     }
-    memset(c, 0, sizeof(*c));
     c->surf = s;
     c->clip[0] = (GfxRect){0, 0, s.width, s.height};
     c->clipDepth = 1;
-    c->alloc = a != NULL ? a : gfxAllocatorDefault();
     return STATUS_OK;
 }
 

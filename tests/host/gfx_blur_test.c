@@ -359,3 +359,24 @@ TEST(gfxGoldenShadowCard) {
     ASSERT_TRUE(goldenCheck("gfx_shadow_card", &cv.c.surf));
     cvFree(&cv);
 }
+
+/* A shadow that lies wholly outside the clip returns OK without allocating (an allocator that
+ * always fails must not matter), while one that touches the clip still needs its mask. */
+TEST(gfxShadowOutsideClipDoesNoWork) {
+    Cv cv;
+    ASSERT_TRUE(cvInit(&cv, 40, 40, 0xFFFFFFFFu));
+    GfxAllocator none = {nullAlloc, noFree, NULL};
+    ASSERT_EQ(gfxDrawShadow(&cv.c, 200.0f, 200.0f, 30.0f, 30.0f, 4.0f, 3, 0, 0, 0xFF000000u, &none),
+              STATUS_OK); /* far right/below the canvas */
+    ASSERT_EQ(gfxDrawShadow(&cv.c, -100.0f, 5.0f, 30.0f, 30.0f, 4.0f, 3, 0, 0, 0xFF000000u, &none),
+              STATUS_OK); /* far left */
+    ASSERT_EQ(gfxCanvasPushClip(&cv.c, (GfxRect){0, 0, 10, 10}), STATUS_OK);
+    ASSERT_EQ(gfxDrawShadow(&cv.c, 25.0f, 25.0f, 10.0f, 10.0f, 2.0f, 3, 0, 0, 0xFF000000u, &none),
+              STATUS_OK); /* inside the canvas but outside the pushed clip */
+    ASSERT_EQ(gfxDrawShadow(&cv.c, 2.0f, 2.0f, 10.0f, 10.0f, 2.0f, 3, 0, 0, 0xFF000000u, &none),
+              STATUS_ERR_NO_MEMORY); /* touches the clip: needs the mask */
+    for (int32_t i = 0; i < 40 * 40; i++) {
+        ASSERT_EQ(cv.px[i], (uint32_t)0xFFFFFFFFu);
+    }
+    cvFree(&cv);
+}

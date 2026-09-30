@@ -1,4 +1,7 @@
 /* See gfx-path.h. */
+/* Float appears here (D-142): contraction is off so results do not depend on the target's FMA. */
+#pragma STDC FP_CONTRACT OFF
+
 #include "gfx/gfx-internal.h"
 
 #include <string.h>

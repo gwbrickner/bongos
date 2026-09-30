@@ -1084,7 +1084,8 @@ against tables dumped from the reference PC (`acpidump` from a Linux live USB, s
   - `InputDevice` objects: keyboard (scancode to keycode) and pointer.
 - **`compositor` (userspace):**
   - Clients create **surfaces** over a channel protocol and share pixel buffers as `VmObject`
-    handles.
+    handles. Buffers are premultiplied ARGB32, one `uint32_t` `0xAARRGGBB` per pixel (B,G,R,A
+    in memory), the `libs/gfx` format (D-141); the compositor treats client buffers as untrusted.
   - On commit, a client sends its damage rectangles. The compositor composites only the
     damaged regions into a back buffer, then blits to the framebuffer.
   - Frames are paced to 60 Hz. Input handling runs on a realtime-class thread, so the cursor

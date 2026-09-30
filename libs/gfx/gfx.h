@@ -74,8 +74,11 @@ typedef struct {
 } GfxCanvas;
 
 /* Failure modes: INVALID for a NULL surface, non-positive or over-GFX_SURFACE_MAX_DIM dimensions,
- * or stride < width (or a stride*height that overflows). Call gfxCanvasDestroy first if the canvas
- * already owns scratch (re-initializing would leak it). `a` may be NULL (the default allocator
+ * or stride < width (or a stride*height that overflows); *c is then still safe to pass to
+ * gfxCanvasDestroy. Call gfxCanvasDestroy first if the canvas already owns scratch
+ * (re-initializing would leak it). A GfxCanvas keeps the pointer `a` and uses it in every fill and
+ * in gfxCanvasDestroy, so the allocator must outlive the canvas; and a canvas must not be copied
+ * by value (two Destroy calls would free the scratch twice). `a` may be NULL (the default allocator
  * is used). Does not allocate. */
 Status gfxCanvasInit(GfxCanvas *c, GfxSurface s, const GfxAllocator *a);
 void gfxCanvasDestroy(GfxCanvas *c); /* frees the scratch buffer */

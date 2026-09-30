@@ -1,5 +1,5 @@
 /* libs/compress: from-scratch DEFLATE (RFC 1951) and zlib (RFC 1950) codecs, Adler-32 and CRC-32
- * (D-140). Shared by libs/gfx (PNG), tools/imgdiff, and later the package and TLS code (M11.4).
+ * (D-140). Shared by libs/gfx (PNG), tools/imgdiff, and later the package manager (M11.4).
  * Every entry point works on caller-provided buffers, never allocates (Huffman tables live on the
  * stack), is pure and reentrant, and has no libc dependency beyond <string.h>.
  *

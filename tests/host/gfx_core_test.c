@@ -600,3 +600,15 @@ TEST(gfxBlitRejectsShortStrideSource) {
     fixtureFree(&f);
     free(sp);
 }
+
+/* A failed gfxCanvasInit still leaves *c safe for gfxCanvasDestroy (the usual cleanup pattern). */
+TEST(gfxCanvasInitFailureLeavesCanvasDestroyable) {
+    GfxCanvas c;
+    memset(&c, 0xA5, sizeof(c)); /* garbage: what an uninitialized local looks like */
+    GfxSurface bad = {NULL, 4, 4, 4};
+    ASSERT_EQ(gfxCanvasInit(&c, bad, NULL), STATUS_ERR_INVALID);
+    ASSERT_TRUE(c.scratch == NULL);
+    ASSERT_TRUE(c.alloc != NULL);
+    gfxCanvasDestroy(&c); /* must not free garbage */
+    ASSERT_EQ(c.clipDepth, (uint32_t)0);
+}

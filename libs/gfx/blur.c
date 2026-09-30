@@ -1,4 +1,7 @@
 /* See gfx-blur.h. */
+/* Float appears here (D-142): contraction is off so results do not depend on the target's FMA. */
+#pragma STDC FP_CONTRACT OFF
+
 #include "gfx/gfx-blur.h"
 
 #include "gfx/gfx-internal.h"
@@ -108,6 +111,10 @@ Status gfxDrawShadow(GfxCanvas *c, float x, float y, float w, float h, float cor
     int64_t mx0 = sx - margin, my0 = sy - margin;
     if (mx0 < INT32_MIN || my0 < INT32_MIN || mx0 + mw > INT32_MAX || my0 + mh > INT32_MAX) {
         return STATUS_OK; /* wholly outside any possible surface */
+    }
+    GfxRect clip = gfxCanvasClipBounds(c); /* canvas coordinates, like mx0/my0 */
+    if (mx0 >= clip.x1 || my0 >= clip.y1 || mx0 + mw <= clip.x0 || my0 + mh <= clip.y0) {
+        return STATUS_OK; /* the shadow lies wholly outside the clip: no mask, no work */
     }
     size_t bytes = (size_t)mw * (size_t)mh;
     uint8_t *data = a->alloc(a->ctx, bytes);

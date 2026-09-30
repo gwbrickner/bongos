@@ -26,7 +26,9 @@ typedef struct {
     bool open;       /* a subpath is open (not closed since the last moveTo) */
 } GfxPath;
 
-/* `a` may be NULL (default allocator). No allocation until the first verb. */
+/* `a` may be NULL (default allocator). No allocation until the first verb. A path keeps the
+ * pointer `a` and uses it in every append and in gfxPathFree, so the allocator must outlive the
+ * path; a path must not be copied by value (two Free calls would free the buffers twice). */
 void gfxPathInit(GfxPath *p, const GfxAllocator *a);
 void gfxPathReset(GfxPath *p); /* empties the path and clears the error; keeps the buffers */
 void gfxPathFree(GfxPath *p);
@@ -60,7 +62,8 @@ Status gfxPathAddEllipse(GfxPath *p, float cx, float cy, float rx, float ry);
 Status gfxFillPath(GfxCanvas *c, const GfxPath *p, GfxFillRule rule, GfxColor col, GfxOp op);
 
 /* Composites the path's coverage into `m` (union: cov = new + old*(255-new)/255), with (0,0) at
- * the mask's top-left. Same failure modes as gfxFillPath. The mask may be wider than
+ * the mask's top-left. Same failure modes as gfxFillPath, plus INVALID for a NULL or malformed
+ * mask (width/height <= 0, stride < width). The mask may be wider than
  * GFX_SURFACE_MAX_DIM; past 131072 columns the scratch is one row, 9 bytes per column. */
 Status gfxFillPathMask(GfxMask *m, const GfxPath *p, GfxFillRule rule, const GfxAllocator *a);
 
@@ -83,13 +86,16 @@ typedef struct {
  * caps, a square for square caps, and nothing for butt caps. `in` and `out` must be different
  * paths. Coordinates and the half-width are clamped to +-GFX_COORD_MAX. Failure modes: `in`'s
  * sticky error, INVALID (a non-finite stroke width or miter limit), NO_MEMORY (including a subpath
- * that flattens to more than GFX_PATH_MAX_VERBS points). */
+ * that flattens to more than GFX_PATH_MAX_VERBS points); on failure `out` may hold a partial
+ * outline and must not be filled. A moveTo with no segment after it counts as a zero-length
+ * subpath (so it draws a dot for round and square caps). */
 Status gfxStrokeToPath(const GfxPath *in, const GfxStroke *s, GfxPath *out);
 
 /* gfxStrokeToPath + gfxFillPath (nonzero, SRC_OVER). Same failure modes as both. */
 Status gfxStrokePath(GfxCanvas *c, const GfxPath *p, const GfxStroke *s, GfxColor col);
 
-/* A butt-capped, bevel-joined line segment of the given width. */
+/* A butt-capped, bevel-joined line segment of the given width. Failure modes as for
+ * gfxStrokePath (INVALID for a non-finite coordinate or width, NO_MEMORY, UNSUPPORTED). */
 Status gfxStrokeLine(GfxCanvas *c, float x0, float y0, float x1, float y1, float width,
                      GfxColor col);
 

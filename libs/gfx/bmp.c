@@ -52,10 +52,6 @@ static uint32_t chanValue(const Chan *c, uint32_t pixel) {
     return (v * 255u + max / 2u) / max;
 }
 
-static uint32_t premul(uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
-    return (a << 24) | (gfxMulDiv255(r, a) << 16) | (gfxMulDiv255(g, a) << 8) | gfxMulDiv255(b, a);
-}
-
 Status gfxBmpDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim,
                     const GfxAllocator *a, GfxImage *out) {
     memset(out, 0, sizeof(*out));
@@ -208,7 +204,8 @@ Status gfxBmpDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim
                     break;
             }
             uint32_t alpha = ca.mask != 0 ? chanValue(&ca, px) : 255u;
-            dst[x] = premul(chanValue(&cr, px), chanValue(&cg, px), chanValue(&cb, px), alpha);
+            dst[x] =
+                gfxPremulArgb(chanValue(&cr, px), chanValue(&cg, px), chanValue(&cb, px), alpha);
         }
     }
     return STATUS_OK;

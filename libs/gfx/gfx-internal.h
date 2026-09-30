@@ -1,4 +1,6 @@
-/* Private to libs/gfx (and its host tests): pixel math and span blending. Integer-only. */
+/* Private to libs/gfx (and its host tests): pixel math, span blending, edges, decoder accounting.
+ * The blending, raster and decoder code is integer-only; float lives in path.c, flatten.c, stroke.c
+ * and gfxDrawShadow (D-142). */
 #ifndef LIBS_GFX_INTERNAL_H
 #define LIBS_GFX_INTERNAL_H
 
@@ -10,6 +12,11 @@
 static inline uint32_t gfxMulDiv255(uint32_t a, uint32_t b) {
     uint32_t t = a * b + 128u;
     return (t + (t >> 8)) >> 8;
+}
+
+/* Premultiplies straight 8-bit channels (each 0..255) into an ARGB pixel. */
+static inline uint32_t gfxPremulArgb(uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
+    return (a << 24) | (gfxMulDiv255(r, a) << 16) | (gfxMulDiv255(g, a) << 8) | gfxMulDiv255(b, a);
 }
 
 /* Clamps every channel of a premultiplied color to its alpha. */

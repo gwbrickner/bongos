@@ -60,7 +60,14 @@ static Pass passOf(const PngInfo *pi, uint32_t p) {
 
 /* Bytes of one pass in the inflated stream: an empty pass has none, not even filter bytes. */
 static uint64_t passBytes(const Pass *ps) {
-    return (ps->pw == 0 || ps->ph == 0) ? 0 : (uint64_t)ps->ph * (1 + ps->rowBytes);
+    if (ps->pw == 0 || ps->ph == 0) {
+        return 0;
+    }
+    uint64_t total;
+    if (__builtin_mul_overflow((uint64_t)ps->ph, 1 + ps->rowBytes, &total)) {
+        return UINT64_MAX; /* saturates: the caller's size checks then reject the image */
+    }
+    return total;
 }
 
 static bool validCombo(uint32_t ctype, uint32_t depth) {
@@ -154,10 +161,6 @@ static uint32_t to8(uint32_t v, uint32_t depth) {
     }
 }
 
-static uint32_t premulArgb(uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
-    return (a << 24) | (gfxMulDiv255(r, a) << 16) | (gfxMulDiv255(g, a) << 8) | gfxMulDiv255(b, a);
-}
-
 /* Pixel `i` of a row. Sets *bad for a palette index past PLTE. */
 static uint32_t pixelAt(const PngInfo *pi, const uint8_t *row, uint32_t i, bool *bad) {
     uint32_t d = pi->depth;
@@ -165,14 +168,14 @@ static uint32_t pixelAt(const PngInfo *pi, const uint8_t *row, uint32_t i, bool 
         case 0: {
             uint32_t v = sampleAt(row, i, d);
             uint32_t g = to8(v, d);
-            return premulArgb(g, g, g, (pi->hasTrns && v == pi->trnsG) ? 0u : 255u);
+            return gfxPremulArgb(g, g, g, (pi->hasTrns && v == pi->trnsG) ? 0u : 255u);
         }
         case 2: {
             uint32_t r = sampleAt(row, 3 * (uint64_t)i, d),
                      g = sampleAt(row, 3 * (uint64_t)i + 1, d),
                      b = sampleAt(row, 3 * (uint64_t)i + 2, d);
             bool clear = pi->hasTrns && r == pi->trnsR && g == pi->trnsG && b == pi->trnsB;
-            return premulArgb(to8(r, d), to8(g, d), to8(b, d), clear ? 0u : 255u);
+            return gfxPremulArgb(to8(r, d), to8(g, d), to8(b, d), clear ? 0u : 255u);
         }
         case 3: {
             uint32_t idx = sampleAt(row, i, d);
@@ -185,14 +188,14 @@ static uint32_t pixelAt(const PngInfo *pi, const uint8_t *row, uint32_t i, bool 
         case 4: {
             uint32_t g = to8(sampleAt(row, 2 * (uint64_t)i, d), d),
                      a = to8(sampleAt(row, 2 * (uint64_t)i + 1, d), d);
-            return premulArgb(g, g, g, a);
+            return gfxPremulArgb(g, g, g, a);
         }
         default: {
             uint32_t r = to8(sampleAt(row, 4 * (uint64_t)i, d), d),
                      g = to8(sampleAt(row, 4 * (uint64_t)i + 1, d), d),
                      b = to8(sampleAt(row, 4 * (uint64_t)i + 2, d), d),
                      a = to8(sampleAt(row, 4 * (uint64_t)i + 3, d), d);
-            return premulArgb(r, g, b, a);
+            return gfxPremulArgb(r, g, b, a);
         }
     }
 }
@@ -330,7 +333,7 @@ Status gfxPngDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim
         pi->nPal = (uint32_t)(plteLen / 3);
         for (uint32_t i = 0; i < pi->nPal; i++) {
             uint32_t alpha = (trns != NULL && i < trnsLen) ? trns[i] : 255u;
-            pi->pal[i] = premulArgb(plte[3 * i], plte[3 * i + 1], plte[3 * i + 2], alpha);
+            pi->pal[i] = gfxPremulArgb(plte[3 * i], plte[3 * i + 1], plte[3 * i + 2], alpha);
         }
     } else if (trns != NULL && pi->ctype == 0) {
         pi->hasTrns = true;
@@ -350,7 +353,6 @@ Status gfxPngDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim
             pi->trnsB &= m;
         }
     }
-    (void)trnsLen;
 
     /* The inflated size IHDR implies, before anything big is allocated. */
     uint64_t rawTotal = 0;
