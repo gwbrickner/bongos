@@ -499,10 +499,9 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     /* Wipe the loader's stack-local copy now that it's in the BootInfo page: otherwise it lingers
      * in BootServicesData memory, which becomes plain USABLE after ExitBootServices and would be
      * recoverable by any later kernel code that walks USABLE memory. volatile so this store isn't
-     * optimized away as a dead write to a local about to go out of scope. Note: the *original*
-     * BootInfo page's seed still needs a proper wipe once a real consumer (M2.1's CSPRNG init)
-     * exists and before LOADER_RECLAIM memory is ever freed -- that's a forward-reference for a
-     * later milestone, not something this one solves. */
+     * optimized away as a dead write to a local about to go out of scope. The copy in the BootInfo
+     * page is the kernel's job: kernelMain wipes it right after its two consumers (the stack
+     * canary and randomInit) have read it, and the reclaim later zeroes the whole page (D-123). */
     for (int i = 0; i < 8; i++) {
         *(volatile uint64_t *)&randomSeed[i] = 0;
     }
