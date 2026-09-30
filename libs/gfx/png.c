@@ -129,14 +129,14 @@ static bool unfilterPass(uint8_t *p, const Pass *ps, uint32_t bpp) {
 }
 
 /* Sample `i` (a channel index across the row) of a sub-byte or 8-bit row, native depth. */
-static uint32_t sampleAt(const uint8_t *row, uint32_t i, uint32_t depth) {
+static uint32_t sampleAt(const uint8_t *row, uint64_t i, uint32_t depth) {
     if (depth == 8) {
         return row[i];
     }
     if (depth == 16) {
-        return ((uint32_t)row[2 * (size_t)i] << 8) | row[2 * (size_t)i + 1];
+        return ((uint32_t)row[2 * i] << 8) | row[2 * i + 1];
     }
-    uint64_t bit = (uint64_t)i * depth;
+    uint64_t bit = i * depth;
     uint32_t byte = row[bit / 8];
     uint32_t shift = 8 - depth - (uint32_t)(bit % 8);
     return (byte >> shift) & ((1u << depth) - 1u);
@@ -168,8 +168,9 @@ static uint32_t pixelAt(const PngInfo *pi, const uint8_t *row, uint32_t i, bool 
             return premulArgb(g, g, g, (pi->hasTrns && v == pi->trnsG) ? 0u : 255u);
         }
         case 2: {
-            uint32_t r = sampleAt(row, 3 * i, d), g = sampleAt(row, 3 * i + 1, d),
-                     b = sampleAt(row, 3 * i + 2, d);
+            uint32_t r = sampleAt(row, 3 * (uint64_t)i, d),
+                     g = sampleAt(row, 3 * (uint64_t)i + 1, d),
+                     b = sampleAt(row, 3 * (uint64_t)i + 2, d);
             bool clear = pi->hasTrns && r == pi->trnsR && g == pi->trnsG && b == pi->trnsB;
             return premulArgb(to8(r, d), to8(g, d), to8(b, d), clear ? 0u : 255u);
         }
@@ -182,13 +183,15 @@ static uint32_t pixelAt(const PngInfo *pi, const uint8_t *row, uint32_t i, bool 
             return pi->pal[idx];
         }
         case 4: {
-            uint32_t g = to8(sampleAt(row, 2 * i, d), d), a = to8(sampleAt(row, 2 * i + 1, d), d);
+            uint32_t g = to8(sampleAt(row, 2 * (uint64_t)i, d), d),
+                     a = to8(sampleAt(row, 2 * (uint64_t)i + 1, d), d);
             return premulArgb(g, g, g, a);
         }
         default: {
-            uint32_t r = to8(sampleAt(row, 4 * i, d), d), g = to8(sampleAt(row, 4 * i + 1, d), d),
-                     b = to8(sampleAt(row, 4 * i + 2, d), d),
-                     a = to8(sampleAt(row, 4 * i + 3, d), d);
+            uint32_t r = to8(sampleAt(row, 4 * (uint64_t)i, d), d),
+                     g = to8(sampleAt(row, 4 * (uint64_t)i + 1, d), d),
+                     b = to8(sampleAt(row, 4 * (uint64_t)i + 2, d), d),
+                     a = to8(sampleAt(row, 4 * (uint64_t)i + 3, d), d);
             return premulArgb(r, g, b, a);
         }
     }

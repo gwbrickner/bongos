@@ -1115,7 +1115,12 @@ against tables dumped from the reference PC (`acpidump` from a Linux live USB, s
   - **Later:** full GSUB/GPOS shaping, bidi, and color emoji (COLR/CPAL).
   - Fonts: an OFL-licensed UI sans-serif and monospace font in `data/fonts/`.
 - **`libs/gfx`:** 2D rasterization (antialiased paths, rounded rects, blur for shadows) and
-  image decoders for PNG, JPEG (baseline and progressive), BMP, and GIF.
+  image decoders for PNG, JPEG (baseline and progressive), BMP, and GIF. Implemented so far
+  (M12.2): premultiplied ARGB32 canvas with a clip stack, exact-area anti-aliased fills (nonzero
+  and even-odd), strokes, A8 box blur and drop shadows, damage regions, and the PNG and BMP
+  decoders (D-141..D-147); JPEG and GIF arrive in M12.7. It is userland/host only (never linked
+  into the kernel), uses float only for path geometry, and takes an allocator hook so it has no
+  hidden libc dependency. The DEFLATE/zlib codec it uses lives in `libs/compress` (D-140).
 - **Apps:**
   - **terminal:** xterm-256color on a PTY, with tabs and scrollback
   - **files:** the file manager

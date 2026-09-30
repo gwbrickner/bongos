@@ -125,6 +125,9 @@ Status gfxBmpDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim
             mr = rd32(h + 40);
             mg = rd32(h + 44);
             mb = rd32(h + 48);
+            if (comp == 6 && dib < 56) {
+                return STATUS_ERR_INVALID; /* a 52-byte header has no alpha mask to use */
+            }
             ma = dib >= 56 ? rd32(h + 52) : 0;
         }
     } else if (bpp == 16) {

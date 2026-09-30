@@ -1343,3 +1343,19 @@ TEST(gfxGoldenDecodedImagesOverChecker) {
     ASSERT_TRUE(goldenCheck("gfx_decoded_images", &surf));
     freeFixtures(&fs);
 }
+
+/* BI_ALPHABITFIELDS in a 52-byte (V2) header: that header has no alpha mask, so there is nothing
+ * for the alpha-bit-fields to mean. */
+TEST(gfxBmpAlphaBitfieldsNeedsAnAlphaMask) {
+    FixtureSet fs;
+    ASSERT_TRUE(loadFixtures(&fs));
+    const Fixture *v2 = findFixture(&fs, "bmp_b32_v2_3x5");
+    ASSERT_TRUE(v2 != NULL);
+    uint8_t buf[2048];
+    ASSERT_TRUE(v2->dataLen <= sizeof(buf));
+    memcpy(buf, v2->data, v2->dataLen);
+    EXPECT_BMP(buf, v2->dataLen, STATUS_OK); /* BI_BITFIELDS in a V2 header is fine */
+    buf[30] = 6;                             /* -> BI_ALPHABITFIELDS */
+    EXPECT_BMP(buf, v2->dataLen, STATUS_ERR_INVALID);
+    freeFixtures(&fs);
+}
