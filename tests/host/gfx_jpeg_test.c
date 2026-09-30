@@ -1267,3 +1267,196 @@ TEST(gfxImageDecodeSniffsJpegAndGif) {
     ASSERT_TRUE(st != STATUS_OK);
     ASSERT_TRUE(img.pixels == NULL);
 }
+
+/* ---- long EOB runs in the middle of a scan (bug-sweeper) ---------------------------------- */
+
+/* The fixtures only hold EOB runs of 16 or more blocks at the END of a scan (where an off-by-one
+ * run length changes nothing), so a decoder that got EOBRUN wrong for r >= 3 (first scans) or
+ * r >= 4 (refinement scans) still passed. These files put one coefficient in chosen blocks of a
+ * 2048x1024 gray image so that runs of every length class r = 0..14 end mid-scan, and require the
+ * progressive decodes (AC first at Al=0; AC first at Al=1, all empty, then the refinement that
+ * brings the coefficients in) to equal the baseline decode of the same coefficients, which in turn
+ * must be flat exactly in the empty blocks. */
+typedef struct {
+    uint8_t *b;
+    size_t n, cap;
+    uint32_t acc, nbits;
+} ErBuf;
+
+static void erByte(ErBuf *e, uint32_t v) {
+    if (e->n == e->cap) {
+        e->cap = e->cap * 2 + 1024;
+        e->b = realloc(e->b, e->cap);
+    }
+    e->b[e->n++] = (uint8_t)v;
+}
+
+static void erBytes(ErBuf *e, const uint8_t *p, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        erByte(e, p[i]);
+    }
+}
+
+/* MSB-first entropy bits with FF stuffing. */
+static void erBits(ErBuf *e, uint32_t v, uint32_t n) {
+    for (uint32_t i = n; i-- > 0;) {
+        e->acc = (e->acc << 1) | ((v >> i) & 1u);
+        if (++e->nbits == 8) {
+            erByte(e, e->acc);
+            if (e->acc == 0xFF) {
+                erByte(e, 0);
+            }
+            e->acc = e->nbits = 0;
+        }
+    }
+}
+
+static void erFlushBits(ErBuf *e) {
+    while (e->nbits != 0) {
+        erBits(e, 1, 1);
+    }
+}
+
+/* AC symbols, all 5-bit codes numbered in this order: EOB, (0,1), then EOB1..EOB14. */
+static uint32_t erAcCode(uint32_t sym) {
+    return sym == 0x00 ? 0 : sym == 0x01 ? 1 : 1 + (sym >> 4);
+}
+
+static void erSym(ErBuf *e, uint32_t sym) {
+    erBits(e, erAcCode(sym), 5);
+}
+
+static void erEobRun(ErBuf *e, uint32_t run) {
+    if (run == 0) {
+        return;
+    }
+    uint32_t r = 0;
+    while ((run >> (r + 1)) != 0) {
+        r++;
+    }
+    erSym(e, r << 4);
+    erBits(e, run - (1u << r), r);
+}
+
+static void erSos(ErBuf *e, uint32_t ss, uint32_t se, uint32_t ah, uint32_t al) {
+    erFlushBits(e);
+    const uint8_t sos[] = {0xFF, 0xDA, 0,           8,           1,
+                           1,    0x00, (uint8_t)ss, (uint8_t)se, (uint8_t)((ah << 4) | al)};
+    erBytes(e, sos, sizeof(sos));
+}
+
+enum { ER_W = 2048, ER_H = 1024, ER_BLOCKS = (ER_W / 8) * (ER_H / 8) };
+
+static void erFile(ErBuf *e, int mode, const uint8_t *hot) {
+    static const uint8_t soi[] = {0xFF, 0xD8};
+    erBytes(e, soi, 2);
+    static const uint8_t dqt[] = {0xFF, 0xDB, 0, 67, 0};
+    erBytes(e, dqt, sizeof(dqt));
+    for (int k = 0; k < 64; k++) {
+        erByte(e, 64);
+    }
+    const uint8_t sof[] = {0xFF,
+                           mode == 0 ? 0xC0 : 0xC2,
+                           0,
+                           11,
+                           8,
+                           ER_H >> 8,
+                           ER_H & 0xFF,
+                           ER_W >> 8,
+                           ER_W & 0xFF,
+                           1,
+                           1,
+                           0x11,
+                           0};
+    erBytes(e, sof, sizeof(sof));
+    static const uint8_t dhtDc[] = {0xFF, 0xC4, 0, 20, 0x00, 1, 0, 0, 0, 0, 0,
+                                    0,    0,    0, 0,  0,    0, 0, 0, 0, 0, 0x00};
+    erBytes(e, dhtDc, sizeof(dhtDc));
+    static const uint8_t dhtAc[] = {0xFF, 0xC4, 0,    35,   0x10, 0,    0,    0,    0,    16,
+                                    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+                                    0,    0x00, 0x01, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70,
+                                    0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0};
+    erBytes(e, dhtAc, sizeof(dhtAc));
+    if (mode == 0) {
+        erSos(e, 0, 63, 0, 0);
+        for (uint32_t i = 0; i < ER_BLOCKS; i++) {
+            erBits(e, 0, 1); /* DC difference category 0 */
+            if (hot[i]) {
+                erSym(e, 0x01);
+                erBits(e, 1, 1);
+            }
+            erSym(e, 0x00);
+        }
+    } else {
+        erSos(e, 0, 0, 0, 0);
+        for (uint32_t i = 0; i < ER_BLOCKS; i++) {
+            erBits(e, 0, 1);
+        }
+        for (int pass = mode == 1 ? 1 : 0; pass < 2; pass++) {
+            /* mode 1: one AC first scan at Al=0. mode 2: an empty AC first scan at Al=1 (pass 0),
+             * then the refinement (pass 1) whose new +1 coefficients use the same stream shape. */
+            erSos(e, 1, 63, mode == 2 && pass == 1 ? 1 : 0, mode == 2 && pass == 0 ? 1 : 0);
+            uint32_t run = 0;
+            for (uint32_t i = 0; i < ER_BLOCKS; i++) {
+                if (pass == 1 && hot[i]) {
+                    erEobRun(e, run);
+                    erSym(e, 0x01);
+                    erBits(e, 1, 1);
+                    run = 1; /* this block's own end of band */
+                } else {
+                    run++;
+                }
+                if (run == 0x7FFF) {
+                    erEobRun(e, run);
+                    run = 0;
+                }
+            }
+            erEobRun(e, run);
+        }
+    }
+    erFlushBits(e);
+    erByte(e, 0xFF);
+    erByte(e, 0xD9);
+}
+
+TEST(gfxJpegLongEobRunsMidScan) {
+    static const uint32_t gaps[] = {0,   1,   2,   3,   7,   8,   15,   16,   17,   31,   32,
+                                    100, 255, 256, 257, 511, 512, 1000, 1023, 2047, 4095, 16383};
+    uint8_t *hot = calloc(ER_BLOCKS, 1);
+    ASSERT_TRUE(hot != NULL);
+    uint32_t pos = 0;
+    for (size_t g = 0; g < sizeof(gaps) / sizeof(gaps[0]); g++) {
+        pos += gaps[g];
+        ASSERT_TRUE(pos < ER_BLOCKS);
+        hot[pos++] = 1;
+    }
+    GfxImage img[3];
+    for (int mode = 0; mode < 3; mode++) {
+        ErBuf e = {0};
+        erFile(&e, mode, hot);
+        Status st = decodeDefault(e.b, e.n, &img[mode]);
+        free(e.b);
+        ASSERT_EQ(st, STATUS_OK);
+    }
+    bool flatOk = true;
+    for (uint32_t i = 0; i < ER_BLOCKS && flatOk; i++) {
+        const uint32_t *p =
+            img[0].pixels + (size_t)(i / (ER_W / 8)) * 8 * ER_W + (i % (ER_W / 8)) * 8;
+        bool flat = true;
+        for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8; x++) {
+                flat = flat && p[(size_t)y * ER_W + x] == 0xFF808080u;
+            }
+        }
+        flatOk = flat == !hot[i];
+    }
+    bool same1 = memcmp(img[0].pixels, img[1].pixels, (size_t)ER_W * ER_H * 4) == 0;
+    bool same2 = memcmp(img[0].pixels, img[2].pixels, (size_t)ER_W * ER_H * 4) == 0;
+    for (int i = 0; i < 3; i++) {
+        gfxImageFree(&img[i]);
+    }
+    free(hot);
+    ASSERT_TRUE(flatOk);
+    ASSERT_TRUE(same1);
+    ASSERT_TRUE(same2);
+}
