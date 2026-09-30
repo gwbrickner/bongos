@@ -249,6 +249,50 @@ KTEST(random_sanity) {
     KTEST_ASSERT(randomU64() != randomU64());
 }
 
+/* random.c's own step loop (randomGetBytes splits a request into RANDOM_STEP_MAX-byte steps, each
+ * under the lock): a request spanning several steps plus a partial one must fill every byte of
+ * `out[0..n)` -- no step may land on the same bytes as another or leave a hole -- and nothing past
+ * it. The other tests only ask for <= 256 bytes at a time, so a loop that forgot to advance its
+ * output pointer passed all of them (finish sweep, 2026-09-30). A 16-byte window left at the
+ * prefill value by a working generator has odds 2^-128. n == 0 with NULL is a no-op. */
+KTEST(random_get_bytes_long_request) {
+    enum { N = 3 * RANDOM_STEP_MAX + 37, SENTINEL = 64, WIN = 16 };
+    static uint8_t buf[N + SENTINEL];
+    for (size_t i = 0; i < sizeof(buf); i++) {
+        buf[i] = 0xA5;
+    }
+    uint64_t g0 = randomGeneration();
+    randomGetBytes(NULL, 0);
+    KTEST_ASSERT_EQ(randomGeneration(), g0);
+
+    randomGetBytes(buf, N);
+    for (size_t i = N; i < sizeof(buf); i++) {
+        if (buf[i] != 0xA5) {
+            ktestFail(ktestCtx, __FILE__, __LINE__, "byte %u past the end written",
+                      (unsigned)(i - N));
+            return;
+        }
+    }
+    static uint8_t prefill[WIN];
+    for (size_t i = 0; i < WIN; i++) {
+        prefill[i] = 0xA5;
+    }
+    for (size_t off = 0; off + WIN <= N; off += WIN) {
+        if (bytesEqual(buf + off, prefill, WIN)) {
+            ktestFail(ktestCtx, __FILE__, __LINE__, "bytes [%u, %u) never written", (unsigned)off,
+                      (unsigned)(off + WIN));
+            return;
+        }
+    }
+    KTEST_ASSERT(!bytesEqual(buf + N - WIN, prefill, WIN)); /* the partial last step */
+    /* Each step's output is distinct from every other step's. */
+    for (size_t a = 0; a < N; a += RANDOM_STEP_MAX) {
+        for (size_t b = a + RANDOM_STEP_MAX; b + 32 <= N; b += RANDOM_STEP_MAX) {
+            KTEST_ASSERT(!bytesEqual(buf + a, buf + b, 32));
+        }
+    }
+}
+
 /* D-123 seed lifecycle: kernelMain wipes the loader's live seed right after randomInit (the page
  * is also zeroed by the reclaim later, which is why kernelMain records a read-back for this test),
  * and kernelBootInfo()'s copy never holds seed bytes. A loader seed is never all zero (it always
