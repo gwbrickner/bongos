@@ -15,8 +15,9 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # $(CONSOLE_FONT_C) (mk/font.mk): fbtext.c links against the generated font data (fontConsolePsf),
 # not a wildcard match under boot/common/*.c, so it's listed explicitly; Make builds it first since
 # it's its own target with its own rule. tools/imgdiff/*.c minus main.c (which defines its own
-# `main`, conflicting with tests/host/main.c's): imgdiff's PPM/PNG reader/writer (its DEFLATE codec is in
-# libs/compress, below) is host-testable logic living outside tests/host/, same reasoning as gpt.c/bootcfg.c below. kernel/drivers/fbcon/
+# `main`, conflicting with tests/host/main.c's): imgdiff's PPM/PNG reader/writer (its DEFLATE
+# codec is in libs/compress, below) is host-testable logic living outside tests/host/, same
+# reasoning as gpt.c/bootcfg.c below. kernel/drivers/fbcon/
 # fbcon.c: pure C on top of fbtext.c's primitive (no hardware I/O, no locks yet), so it's just as
 # host-testable as fbtext.c itself -- only needs kernel/include on the path for uapi/status.h.
 # kernel/core/ksym.c: the KSYM v1 decoder (D-075) is deliberately pure (no sections.h/ksnprintf
