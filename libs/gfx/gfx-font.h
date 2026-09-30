@@ -11,9 +11,10 @@
  * Units: "Q6" is 26.6 fixed point (1/64 px); a size is pixels-per-em in Q6.
  *
  * Bounded memory (no byte-budget wrapper is needed, every allocation has a static bound): an
- * outline is at most ~164 KB, a glyph path 65536 verbs, the raster edges 8192 x 20 B, a mask
- * 4 MiB (2048 x 2048), the cache its budget plus ~200 KB of tables, a layout at most 24 B per
- * codepoint plus 28 B per line with the input capped at 1 MiB. */
+ * outline is at most ~164 KB once built (~238 KB peak while it grows), a glyph path 65536
+ * verbs, the raster edges 8192 x 20 B, a mask 4 MiB (2048 x 2048), the cache its budget plus
+ * ~200 KB of tables, a layout at most 24 B per codepoint plus 28 B per line with the input
+ * capped at 1 MiB. */
 #ifndef LIBS_GFX_FONT_H
 #define LIBS_GFX_FONT_H
 
