@@ -166,7 +166,9 @@ static void joinAt(GfxPath *out, float px, float py, float d0x, float d0y, float
     float n0x = -d0y * h * s, n0y = d0x * h * s;
     float n1x = -d1y * h * s, n1y = d1x * h * s;
     if (st->join == GFX_JOIN_ROUND) {
-        arcFan(out, px, py, n0x, n0y, n1x, n1y, cross >= 0.0f ? 1.0f : -1.0f, h);
+        /* Sweep from n0 through the heading d0 to n1: the rotation sense must follow `s`, also at
+         * an exact reversal (cross == 0), where any other choice sweeps the side behind. */
+        arcFan(out, px, py, n0x, n0y, n1x, n1y, -s, h);
         return;
     }
     if (st->join == GFX_JOIN_MITER) {

@@ -253,6 +253,48 @@ TEST(gfxStrokeInvalidWidthsAndPaths) {
     cvFree(&cv);
 }
 
+/* A path that turns back on itself exactly (cross product 0) still gets its round join: a half
+ * disc beyond the turning point, on the side the path was heading. It used to be swept on the
+ * other side (already covered by the segments), so the join vanished while a turn 0.5 px off
+ * exact showed it. Both directions, horizontal and vertical, open and closed. */
+TEST(gfxStrokeExactReversalKeepsRoundJoin) {
+    static const float pts[4][6] = {
+        {10.0f, 20.0f, 30.0f, 20.0f, 10.0f, 20.0f}, /* turns at (30,20), heading +x */
+        {30.0f, 20.0f, 10.0f, 20.0f, 30.0f, 20.0f}, /* turns at (10,20), heading -x */
+        {20.0f, 10.0f, 20.0f, 30.0f, 20.0f, 10.0f}, /* turns at (20,30), heading +y */
+        {20.0f, 30.0f, 20.0f, 10.0f, 20.0f, 30.0f}, /* turns at (20,10), heading -y */
+    };
+    /* a pixel inside the half disc of radius 4 beyond each turning point, and one outside it */
+    static const int32_t in[4][2] = {{32, 20}, {7, 19}, {20, 32}, {19, 7}};
+    static const int32_t out[4][2] = {{35, 20}, {4, 19}, {20, 35}, {19, 4}};
+    for (int k = 0; k < 4; k++) {
+        for (int closed = 0; closed < 2; closed++) {
+            GfxPath p;
+            gfxPathInit(&p, NULL);
+            gfxPathMoveTo(&p, pts[k][0], pts[k][1]);
+            gfxPathLineTo(&p, pts[k][2], pts[k][3]);
+            gfxPathLineTo(&p, pts[k][4], pts[k][5]);
+            if (closed) {
+                gfxPathClose(&p); /* the closing point repeats the start: both ends turn back */
+            }
+            Cv cv;
+            ASSERT_TRUE(cvInit(&cv, 40, 40, 0xFF000000u));
+            ASSERT_EQ(strokeWhite(&cv, &p, GFX_CAP_BUTT, GFX_JOIN_ROUND, 8.0f, 4.0f), STATUS_OK);
+            if (cov(&cv, in[k][0], in[k][1]) != 255u) {
+                fprintf(stderr, "  case %d closed %d: pixel (%d,%d) = %u\n", k, closed, in[k][0],
+                        in[k][1], cov(&cv, in[k][0], in[k][1]));
+            }
+            ASSERT_EQ(cov(&cv, in[k][0], in[k][1]), 255u);
+            ASSERT_EQ(cov(&cv, out[k][0], out[k][1]), 0u);
+            /* 20 x 8 plus one half disc (open), or two (closed) */
+            double want = 160.0 + (closed ? 2.0 : 1.0) * 3.14159265 * 8.0;
+            ASSERT_TRUE(sumCov(&cv) > want * 0.97 && sumCov(&cv) < want * 1.03);
+            gfxPathFree(&p);
+            cvFree(&cv);
+        }
+    }
+}
+
 /* Reversing the stroked path changes nothing about the union. */
 TEST(gfxStrokeDirectionIndependent) {
     GfxPath fwd, rev;
