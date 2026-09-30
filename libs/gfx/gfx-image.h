@@ -47,9 +47,65 @@ Status gfxPngDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim
 Status gfxBmpDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim,
                     const GfxAllocator *a, GfxImage *out);
 
-/* Sniffs the PNG signature or "BM" and dispatches; UNSUPPORTED for anything else. */
+/* Sniffs the PNG signature, "BM", FF D8 FF (JPEG) or GIF87a/GIF89a and dispatches; UNSUPPORTED for
+ * anything else. GIF yields frame 0. */
 Status gfxImageDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim,
                       const GfxAllocator *a, GfxImage *out);
+
+/* ---- JPEG and GIF (M12.7, D-160..D-164) -------------------------------------------------- */
+
+/* JPEG scope: SOF0/SOF1/SOF2 (baseline, extended sequential and progressive), Huffman coding,
+ * 8-bit samples, 1 component (gray) or 3 (YCbCr, or RGB per the JFIF/Adobe/component-id rule),
+ * every sampling factor 1..4, restart intervals, up to 128 scans. CMYK/YCCK, arithmetic coding,
+ * 12-bit, lossless and hierarchical files are UNSUPPORTED. Strict: the EOI marker is required
+ * (a truncated file is INVALID, never a partial image), restarts must be exactly RSTn in order
+ * (no resync). EXIF orientation and ICC profiles are ignored. The output is opaque and exactly
+ * reproducible on every host: an integer "islow" IDCT, replicated chroma, libjpeg's fixed-point
+ * YCbCr conversion. Output pixels are opaque, so already premultiplied.
+ * Budget: whole-image int16 coefficients (about 7 bytes/pixel for 4:2:0, 10 for 4:4:4) plus the
+ * output count against `maxTotalBytes`; the sum is checked before anything is allocated. */
+Status gfxJpegDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim,
+                     const GfxAllocator *a, GfxImage *out);
+
+/* GIF87a/GIF89a. gfxGifDecode returns frame 0 composited onto a transparent W x H logical screen.
+ * Animation uses the streaming compositor below: one W x H canvas (plus one save buffer when any
+ * frame uses disposal 3), so memory does not depend on the frame count; there is no frame limit
+ * (each NextFrame call is bounded by the frame area, which is <= maxPixels).
+ * Semantics: the trailer is required; LZW minimum code size 2..11 (1 is INVALID); a full table
+ * keeps decoding with the last code width (deferred clear); the LZW stream may end early (the rest
+ * of the frame is left as it was); frames are clipped to the logical screen; the logical screen's
+ * background color is ignored (transparent); a pixel index beyond the palette (or with no palette)
+ * is opaque black; disposal 4..7 behave as 0. */
+Status gfxGifDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim,
+                    const GfxAllocator *a, GfxImage *out);
+
+typedef struct GfxGif GfxGif; /* opaque; allocated through the accounting; not thread-safe */
+
+typedef struct {
+    uint32_t width, height; /* logical screen */
+    uint32_t frameCount;    /* >= 1, exact (from the open-time pre-scan) */
+    int32_t loopCount;      /* -1: no NETSCAPE2.0/ANIMEXTS1.0 extension; 0: forever; n: raw count */
+} GfxGifInfo;
+
+typedef struct {
+    GfxSurface canvas; /* owned by the GfxGif; valid until the next NextFrame/Rewind/Close */
+    uint32_t index;
+    uint32_t delayMs;  /* raw GCE delay * 10 (0 without a GCE); callers apply their own minimum */
+    uint32_t disposal; /* raw 0..7 of THIS frame (applied at the start of the next call) */
+    GfxRect rect;      /* this frame's rectangle clipped to the canvas (may be empty): the damage */
+} GfxGifFrame;
+
+/* Validates the whole container except the LZW data (see gfxGifDecode) and allocates the canvas.
+ * `data` must outlive the GfxGif. */
+Status gfxGifOpen(const uint8_t *data, size_t size, const GfxDecodeLimits *lim,
+                  const GfxAllocator *a, GfxGif **out);
+GfxGifInfo gfxGifGetInfo(const GfxGif *g);
+/* Applies the previous frame's disposal, draws the next frame, returns a view of the canvas.
+ * NOT_FOUND after the last frame; INVALID on an LZW error (sticky until gfxGifRewind). On any
+ * failure `*f` is zeroed. */
+Status gfxGifNextFrame(GfxGif *g, GfxGifFrame *f);
+void gfxGifRewind(GfxGif *g); /* back to frame 0 with a cleared canvas; clears a sticky error */
+void gfxGifClose(GfxGif *g);  /* NULL-safe */
 
 void gfxImageFree(GfxImage *img);                /* NULL-safe; idempotent (zeroes *img) */
 GfxSurface gfxImageSurface(const GfxImage *img); /* a view of the pixels for gfxBlit */
