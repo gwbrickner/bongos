@@ -20,6 +20,9 @@
  * erased (longer requests are split into steps, each under its own fresh key). */
 #define RANDOM_STEP_MAX 512
 
+/* Size of the loader's boot seed (BootInfo.randomSeed). */
+#define RANDOM_SEED_SIZE 64
+
 /* randomGetBytes reseeds first when at least this many bytes were added since the last reseed. */
 #define RANDOM_RESEED_PENDING 32
 
@@ -40,6 +43,18 @@ void randomCoreInit(RandomState *s);
  * then be NULL. `s` must have been through randomCoreInit. No locks, may not sleep, IRQ-safe,
  * cannot fail. */
 void randomCoreAddEntropy(RandomState *s, const void *data, size_t n);
+
+/* randomCoreAddEntropy of the 8 little-endian bytes of `v` (the temporary is wiped). Same
+ * contract. */
+void randomCoreAddWord(RandomState *s, uint64_t v);
+
+/* The boot seeding, as one pure step so tests can pin it (random.c's randomInit only gathers the
+ * inputs): randomCoreInit, then the pool absorbs the RANDOM_SEED_SIZE bytes of `seed`, then each of
+ * `words[0..count)` via randomCoreAddWord, in that order, then randomCoreReseed (so generation is
+ * 1, pending 0, and the key is a hash of all of it). `words` may be NULL when `count` is 0. No
+ * locks, may not sleep, IRQ-safe, cannot fail. */
+void randomCoreSeed(RandomState *s, const uint8_t seed[RANDOM_SEED_SIZE], const uint64_t *words,
+                    size_t count);
 
 /* Reseeds: d = SHA-256(pool); key = SHA-256("rng-reseed-v1" || oldKey || le64(generation) || d);
  * generation++; pending = 0; the pool restarts (domain only). Hashing the OLD key in makes the new

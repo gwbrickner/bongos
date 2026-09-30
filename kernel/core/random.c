@@ -26,35 +26,12 @@ static void randomUnlock(uint64_t flags) {
     archIrqRestore(flags);
 }
 
-static void storeLe64(uint8_t *p, uint64_t v) {
-    for (int i = 0; i < 8; i++) {
-        p[i] = (uint8_t)(v >> (8 * i));
-    }
-}
-
-/* Absorbs `v` (8 bytes, little endian) into the pool of `s`. */
-static void poolAddWord(RandomState *s, uint64_t v) {
-    uint8_t b[8];
-    storeLe64(b, v);
-    randomCoreAddEntropy(s, b, sizeof(b));
-    cryptoWipe(b, sizeof(b));
-}
-
-__attribute__((noinline)) void randomInit(const uint8_t seed[64]) {
-    uint64_t flags = randomLock();
-    if (rngSeeded) {
-        randomUnlock(flags);
-        panic("random: randomInit() called twice");
-    }
-
-    randomCoreInit(&rng);
-    /* The 64 loader bytes go into the pool through SHA-256: the key is a hash of them (plus more),
-     * so no output is ever raw seed bytes. The same bytes also fed the KASLR slide (a splitmix64
-     * hash, 8 bits kept, visible on serial) and the stack canary (D-077), so the RNG must not be
-     * a cheap function of them -- SHA-256 makes the relation one-way. */
-    randomCoreAddEntropy(&rng, seed, 64);
-    poolAddWord(&rng, archReadTsc());
-
+__attribute__((noinline)) void randomInit(const uint8_t seed[RANDOM_SEED_SIZE]) {
+    /* The inputs are gathered first (boot-time, nothing else touches the RNG yet) and handed to
+     * the pure randomCoreSeed, which the host tests pin: TSC, then up to 8 hardware words. */
+    uint64_t words[1 + RANDOM_BOOT_HW_WORDS];
+    size_t count = 0;
+    words[count++] = archReadTsc();
     uint32_t viaSeed = 0;
     uint32_t viaRand = 0;
     for (int i = 0; i < RANDOM_BOOT_HW_WORDS; i++) {
@@ -66,13 +43,24 @@ __attribute__((noinline)) void randomInit(const uint8_t seed[64]) {
         } else {
             continue;
         }
-        poolAddWord(&rng, w);
+        words[count++] = w;
         cryptoWipe(&w, sizeof(w));
     }
 
-    randomCoreReseed(&rng);
+    uint64_t flags = randomLock();
+    if (rngSeeded) {
+        randomUnlock(flags);
+        cryptoWipe(words, sizeof(words));
+        panic("random: randomInit() called twice");
+    }
+    /* The 64 loader bytes go into the pool through SHA-256: the key is a hash of them (plus more),
+     * so no output is ever raw seed bytes. The same bytes also fed the KASLR slide (a splitmix64
+     * hash, 8 bits kept, visible on serial) and the stack canary (D-077), so the RNG must not be
+     * a cheap function of them -- SHA-256 makes the relation one-way. */
+    randomCoreSeed(&rng, seed, words, count);
     rngSeeded = true;
     randomUnlock(flags);
+    cryptoWipe(words, sizeof(words));
 
     uint32_t total = viaSeed + viaRand;
     const char *via = "none";
@@ -113,11 +101,11 @@ static void reseedLocked(void) {
     for (int i = 0; i < RANDOM_RESEED_HW_WORDS; i++) {
         uint64_t w;
         if (archHwRandom64(&w)) {
-            poolAddWord(&rng, w);
+            randomCoreAddWord(&rng, w);
             cryptoWipe(&w, sizeof(w));
         }
     }
-    poolAddWord(&rng, archReadTsc());
+    randomCoreAddWord(&rng, archReadTsc());
     randomCoreReseed(&rng);
 }
 

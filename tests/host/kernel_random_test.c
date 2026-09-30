@@ -320,3 +320,80 @@ TEST(initResetsEverything) {
     randomCoreReseed(&s);
     ASSERT_TRUE(memcmp(s.key, drbgVectorReseedAbc, 32) == 0);
 }
+
+/* randomCoreSeed (what randomInit runs on the global state): a known answer over a seed and three
+ * words, computed with python hashlib as
+ *   SHA-256("rng-reseed-v1" || 32 zero bytes || le64(0) ||
+ *           SHA-256("rng-pool-v1" || seed || le64(w0) || le64(w1) || le64(w2))),
+ * seed = 40 41 ... 7f, words = 0x0123456789abcdef, 0xfedcba9876543210, 1. */
+static const uint8_t seedKatKey[32] = {
+    0x2f, 0x4a, 0x4b, 0x1b, 0xdd, 0x6f, 0x37, 0x24, 0xfe, 0x6c, 0x23, 0x24, 0xbb, 0xb0, 0xcc, 0xb4,
+    0x0e, 0xf3, 0x75, 0x86, 0x34, 0x02, 0xdf, 0xe1, 0xcc, 0x6e, 0x46, 0x67, 0x6c, 0x46, 0x4d, 0xa8,
+};
+
+static void seedKatInputs(uint8_t seed[RANDOM_SEED_SIZE], uint64_t words[3]) {
+    for (int i = 0; i < RANDOM_SEED_SIZE; i++) {
+        seed[i] = (uint8_t)(0x40 + i);
+    }
+    words[0] = 0x0123456789abcdefull;
+    words[1] = 0xfedcba9876543210ull;
+    words[2] = 1;
+}
+
+TEST(seedKnownAnswer) {
+    uint8_t seed[RANDOM_SEED_SIZE];
+    uint64_t words[3];
+    seedKatInputs(seed, words);
+    RandomState s;
+    setKeyTo0to31(&s); /* stale state: randomCoreSeed must start from randomCoreInit */
+    s.generation = 5;
+    s.pending = 5;
+    randomCoreAddEntropy(&s, "stale", 5);
+    randomCoreSeed(&s, seed, words, 3);
+    ASSERT_TRUE(memcmp(s.key, seedKatKey, 32) == 0);
+    ASSERT_EQ(s.generation, 1ull);
+    ASSERT_EQ(s.pending, 0u);
+    /* randomCoreAddWord is exactly the 8 little-endian bytes. */
+    RandomState a, b;
+    randomCoreInit(&a);
+    randomCoreInit(&b);
+    const uint8_t le[8] = {0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01};
+    randomCoreAddWord(&a, 0x0123456789abcdefull);
+    randomCoreAddEntropy(&b, le, sizeof(le));
+    ASSERT_EQ(a.pending, 8u);
+    randomCoreReseed(&a);
+    randomCoreReseed(&b);
+    ASSERT_TRUE(memcmp(a.key, b.key, 32) == 0);
+}
+
+/* Every seed byte, every word, and the word count reach the key (dropping or truncating any input
+ * in randomCoreSeed fails here); count 0 with words == NULL is allowed. */
+TEST(seedDependsOnEveryInput) {
+    uint8_t seed[RANDOM_SEED_SIZE];
+    uint64_t words[3];
+    seedKatInputs(seed, words);
+    RandomState s;
+    for (int i = 0; i < RANDOM_SEED_SIZE; i++) {
+        seed[i] ^= 0x01;
+        randomCoreSeed(&s, seed, words, 3);
+        seed[i] ^= 0x01;
+        ASSERT_TRUE(memcmp(s.key, seedKatKey, 32) != 0);
+    }
+    for (int w = 0; w < 3; w++) {
+        for (int bit = 0; bit < 64; bit += 9) {
+            words[w] ^= 1ull << bit;
+            randomCoreSeed(&s, seed, words, 3);
+            words[w] ^= 1ull << bit;
+            ASSERT_TRUE(memcmp(s.key, seedKatKey, 32) != 0);
+        }
+    }
+    randomCoreSeed(&s, seed, words, 2);
+    ASSERT_TRUE(memcmp(s.key, seedKatKey, 32) != 0);
+    uint8_t noWords[32];
+    randomCoreSeed(&s, seed, NULL, 0);
+    memcpy(noWords, s.key, 32);
+    ASSERT_EQ(s.generation, 1ull);
+    ASSERT_TRUE(memcmp(noWords, seedKatKey, 32) != 0);
+    randomCoreSeed(&s, seed, words, 3); /* and back: deterministic */
+    ASSERT_TRUE(memcmp(s.key, seedKatKey, 32) == 0);
+}

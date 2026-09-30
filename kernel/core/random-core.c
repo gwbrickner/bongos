@@ -35,6 +35,25 @@ void randomCoreAddEntropy(RandomState *s, const void *data, size_t n) {
     s->pending = total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
 }
 
+void randomCoreAddWord(RandomState *s, uint64_t v) {
+    uint8_t b[8];
+    for (int i = 0; i < 8; i++) {
+        b[i] = (uint8_t)(v >> (8 * i));
+    }
+    randomCoreAddEntropy(s, b, sizeof(b));
+    cryptoWipe(b, sizeof(b));
+}
+
+void randomCoreSeed(RandomState *s, const uint8_t seed[RANDOM_SEED_SIZE], const uint64_t *words,
+                    size_t count) {
+    randomCoreInit(s);
+    randomCoreAddEntropy(s, seed, RANDOM_SEED_SIZE);
+    for (size_t i = 0; i < count; i++) {
+        randomCoreAddWord(s, words[i]);
+    }
+    randomCoreReseed(s);
+}
+
 void randomCoreReseed(RandomState *s) {
     uint8_t digest[SHA256_DIGEST_SIZE];
     uint8_t newKey[CHACHA20_KEY_SIZE];
