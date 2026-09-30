@@ -184,7 +184,7 @@ workflow is green on the PR.
 enable CSM and try the USB. If it won't come up, report what you see; the BIOS path stays
 QEMU-verified only.
 
-### [ ] M2.6 KASLR + kernel RNG `needs-owner`
+### [x] M2.6 KASLR + kernel RNG `needs-owner`
 **Needs:** M2.4, M2.5
 1. Loaders: pick a 2 MiB-aligned slide inside the kernel window from the random seed, and apply the relocations from `--emit-relocs` (`R_X86_64_64`, `R_X86_64_32S`). Honor `kaslr=off`.
 2. Kernel: the entropy pool (RDSEED/RDRAND, boot seed, interrupt timing later), a ChaCha20 CSPRNG, and `randomGetBytes`.

@@ -3,23 +3,17 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-09-30 (M2.6: steps 1-6 done and swept; only the finish gate remains)
+**Last updated:** 2026-09-30 (M2.6 finished and awaiting owner merge; M3.1 is next)
 
 ## Next step
-**M2.6 finish gate** (`needs-owner`; branch `claude/bold-hawking-dzmwlg`, which carries the M2.6 work
-merged with `origin/main`), CLAUDE.md "Finishing a milestone". Gate step 1 is done: `qemu-tester`
-reported `make format-check`, `host-tests` (503/503), `test` and `test-full` passing on the merge
-commit. Step 2 is in progress: `bug-sweeper` finish mode was cut off by a rate limit and resumed; it
-had committed `044b502` (random_get_bytes_long_request) and `a66c5b7` (RFC 8439 vectors
-cross-checked). Remaining: (2) wait for `SWEEP: PASS` in `docs/sweeps/M2.6.md` (rerun until it
-does); (3) `reviewer` on `git diff origin/main...HEAD`; (4) `make screenshot SHOT=docs/screenshots/M2.6.png`
-and the `FW=bios` `M2.6-bios.png`, open both; (5) tick M2.6 in ROADMAP.md, write the log's
-Summary/Verification, update this file; (6) PR from the template (`needs-owner: yes`). Then M3.1.
+Start **M3.1 ACPI tables** (its Need, M2.4, is done), after the owner merges the M2.6 PR
+(`needs-owner`). M2.6's finish gate is complete except that the owner waived the finish-mode
+`bug-sweeper` (see `docs/logs/M2.6.md` "Verification" for exactly what no sweep covered).
+1. `git fetch origin main && git switch -c m3-1-acpi-tables origin/main`
+2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M3.1.md` and write its Plan from ROADMAP.md.
 
 ## Current milestone
-**M2.6 KASLR + kernel RNG**, log `docs/logs/M2.6.md`, decisions D-120..D-126. Steps 1-6 (loader
-relocation, kernel slide awareness, loaders wired, `libs/crypto`, kernel RNG + seed lifecycle, docs)
-are done and steps 1-5 swept. Remaining: the finish gate above.
+None in progress (M2.6 is awaiting owner merge).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -36,6 +30,7 @@ are done and steps 1-5 swept. Remaining: the finish gate above.
 | M2.3 | [#7](https://github.com/gwbrickner/bongos/pull/7) | Kernel page tables, W^X verifier, framebuffer WC, SMEP/SMAP/UMIP, loader reclaim, KVA |
 | M2.4 | [#8](https://github.com/gwbrickner/bongos/pull/8) | Slab caches, kmalloc (16–8192 bytes), vmalloc with guard pages, `PMM_BUG_OWNED_PAGE` |
 | M2.5 | [#11](https://github.com/gwbrickner/bongos/pull/11) | BIOS loader: stage1 MBR, stage2 with a real-mode thunk, E820/VBE, a GPT+FAT32 reader, the shared menu and handoff. One image boots both ways |
+| M2.6 | PR pending | KASLR in both loaders (2 MiB slide, `--emit-relocs` relocation, `kaslr=off`), slide-aware symbolizer, `libs/crypto` (SHA-256, ChaCha20), kernel RNG (`randomGetBytes`) |
 
 The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
@@ -51,6 +46,9 @@ _(none)_
 - **M2.6:** accept 8 bits of KASLR entropy (512 MiB window, D-121)? Keep the canary on D-077's seed
   fold, or move it to `randomGetBytes` later (the serial-printed slide leaks ~8 bits of that seed)?
   Is falling back to an unslid boot on a relocation failure (D-120) acceptable, versus refusing?
+- **M2.6 slide in logs:** the kernel prints its KASLR slide (the `kaslr: virtBase=` line and every
+  backtrace header). Once a user-readable kernel log exists (logd/dmesg) that defeats KASLR against
+  local users, so that milestone must make the log privileged or redact the slide. Agree?
 - **M2.6 vector provenance (needs network):** `libs/crypto/test/crypto-vectors.h` could not be diffed
   against the RFC text (rfc-editor.org was denied by the proxy). Every field was cross-checked against
   independent transcriptions (Nettle, Mbed TLS, pyca, Linux testmgr, Crypto++, `a66c5b7`), but
@@ -72,6 +70,11 @@ _(none)_
   legacy/BIOS mode, and report whether the menu and kernel screen appear, and at what
   resolution. If it doesn't boot, report the last thing visible. Full steps are in
   `docs/logs/M2.5.md`, "Owner hardware check".
+
+- **M2.6 hardware check** (optional; never blocks): boot the USB stick twice (UEFI, and BIOS with CSM)
+  and confirm the menu and kernel screen appear both times; with a serial cable, compare the
+  `kaslr: virtBase=` line across the two boots and check `random: seeded (hw words n/8 ...)`. Full steps
+  are in `docs/logs/M2.6.md`, "Owner hardware check".
 
 ## Open leads (for the next `bug-sweeper` or `/milestone-sweep` to triage)
 - `make analyze` on main reports 5 warnings: `kernel/include/list.h:50` (a possible NULL
