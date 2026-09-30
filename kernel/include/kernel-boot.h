@@ -34,8 +34,8 @@ const char *kernelCmdline(void);
  * need this directly. No locks; read-only. */
 const BootMemRegion *kernelBootMemMap(uint32_t *outCount);
 
-/* The physical address of the loader's original BootInfo page. Since M2.6 (D-123, superseding
- * D-089's carve-out) pmmReclaimLoaderMemory() frees and zeroes that page like any other
+/* The physical address (4 KiB-aligned) of the loader's original BootInfo page. Since M2.6 (D-123,
+ * superseding D-089's carve-out) pmmReclaimLoaderMemory() frees and zeroes that page like any other
  * LOADER_RECLAIM page (when it lies at or above 1 MiB), so this is only an identity for ktests:
  * never dereference it. No locks; read-only. */
 uint64_t kernelBootInfoPagePhys(void);

@@ -36,9 +36,9 @@ static char cmdlineCopy[BOOTINFO_CMDLINE_MAX];
  * that gets freed. */
 static BootMemRegion *memMapSnapshot;
 static uint32_t memMapSnapshotCount;
-/* The physical address of the original BootInfo page. pmmReclaimLoaderMemory() frees and zeroes
- * that page like any other LOADER_RECLAIM page (M2.6, D-123; D-089 used to keep it), so this is
- * only an identity for ktests (loader_reclaimed) -- never dereference it. */
+/* The physical address of the original BootInfo page (page-aligned). pmmReclaimLoaderMemory() frees
+ * and zeroes that page like any other LOADER_RECLAIM page (M2.6, D-123; D-089 used to keep it), so
+ * this is only an identity for ktests (loader_reclaimed) -- never dereference it. */
 static uint64_t bootInfoPagePhysValue;
 /* The OR of the live BootInfo seed bytes, read back right after kernelMain wiped them: 0 unless the
  * wipe is missing. Only for the random_boot_seed_wiped ktest (the page itself is zeroed by the
@@ -168,7 +168,8 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
         bootSeedResidueValue = residue;
     }
 
-    bootInfoPagePhysValue = (uint64_t)(uintptr_t)bi - bi->hhdmBase;
+    /* The page, not the struct: bootInfoValidate() only requires 8-byte alignment. */
+    bootInfoPagePhysValue = ((uint64_t)(uintptr_t)bi - bi->hhdmBase) & ~(uint64_t)0xFFF;
     bootInfoCopy = *bi;
     /* Nothing reads randomSeed out of bootInfoCopy: both consumers (stackGuardInit() and
      * randomInit(), above) read it from the live `bi` pointer, which was wiped right after, so
