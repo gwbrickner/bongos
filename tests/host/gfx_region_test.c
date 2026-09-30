@@ -222,6 +222,48 @@ TEST(gfxRegionExtremeCoordinatesAreSafe) {
     }
 }
 
+/* Past 16 rects the pair whose bounding box wastes the least area merges: 16 unit squares 10 px
+ * apart plus one touching the first merge into a 2x1 box, leaving exactly the 17 px added. */
+TEST(gfxRegionOverflowMergesCheapestPair) {
+    GfxRegion g;
+    gfxRegionInit(&g, (GfxRect){-1000, -1000, 1000, 1000});
+    for (int32_t i = 0; i < 16; i++) {
+        gfxRegionAdd(&g, (GfxRect){i * 10, 0, i * 10 + 1, 1});
+    }
+    gfxRegionAdd(&g, (GfxRect){1, 0, 2, 1}); /* touches (0,0)-(1,1): a free merge */
+    ASSERT_EQ(g.count, (uint32_t)16);
+    ASSERT_TRUE(invariantsHold(&g));
+    int64_t area = 0;
+    for (uint32_t i = 0; i < g.count; i++) {
+        area += (int64_t)(g.r[i].x1 - g.r[i].x0) * (g.r[i].y1 - g.r[i].y0);
+    }
+    ASSERT_EQ(area, (int64_t)17);
+}
+
+/* Translation saturates at the int32 range: a rect that crosses the edge is cut there, one that
+ * lands wholly on it collapses and is dropped. */
+TEST(gfxRegionTranslateSaturates) {
+    GfxRegion g;
+    gfxRegionInit(&g, (GfxRect){INT32_MIN, INT32_MIN, INT32_MAX, INT32_MAX});
+    gfxRegionAdd(&g, (GfxRect){-10, 0, 10, 10});
+    gfxRegionTranslate(&g, INT32_MAX, 0);
+    ASSERT_EQ(g.count, (uint32_t)1);
+    ASSERT_EQ(g.r[0].x0, INT32_MAX - 10);
+    ASSERT_EQ(g.r[0].x1, INT32_MAX);
+    ASSERT_EQ(g.r[0].y1, 10);
+    ASSERT_TRUE(invariantsHold(&g));
+    gfxRegionTranslate(&g, 0, INT32_MIN); /* y [0,10) -> [INT32_MIN, INT32_MIN + 10): kept */
+    ASSERT_EQ(g.count, (uint32_t)1);
+    gfxRegionTranslate(&g, 0, INT32_MIN); /* both y edges saturate to INT32_MIN: collapses */
+    ASSERT_EQ(g.count, (uint32_t)0);
+    GfxRegion h;
+    gfxRegionInit(&h, (GfxRect){INT32_MIN, INT32_MIN, INT32_MAX, INT32_MAX});
+    gfxRegionAdd(&h, (GfxRect){0, 0, 10, 10});
+    gfxRegionTranslate(&h, INT32_MAX, 0); /* [INT32_MAX, INT32_MAX): empty */
+    ASSERT_EQ(h.count, (uint32_t)0);
+    ASSERT_TRUE(gfxRegionIsEmpty(&h));
+}
+
 /* An empty limit swallows everything. */
 TEST(gfxRegionEmptyLimit) {
     GfxRegion g;

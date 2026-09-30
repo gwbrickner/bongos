@@ -401,3 +401,197 @@ TEST(gfxStrokeFarFromOriginIsSolid) {
         cvFree(&ref);
     }
 }
+
+/* The SVG miter rule at its boundary: a right angle has miter ratio sqrt(2) = 1.41421; a limit
+ * just above keeps the miter, just below falls back to a bevel. */
+TEST(gfxStrokeMiterLimitBoundary) {
+    GfxPath p;
+    gfxPathInit(&p, NULL);
+    gfxPathMoveTo(&p, 8.0f, 30.0f);
+    gfxPathLineTo(&p, 8.0f, 8.0f);
+    gfxPathLineTo(&p, 30.0f, 8.0f);
+    Cv above, below;
+    ASSERT_TRUE(cvInit(&above, 40, 40, 0xFF000000u));
+    ASSERT_TRUE(cvInit(&below, 40, 40, 0xFF000000u));
+    ASSERT_EQ(strokeWhite(&above, &p, GFX_CAP_BUTT, GFX_JOIN_MITER, 6.0f, 1.4143f), STATUS_OK);
+    ASSERT_EQ(strokeWhite(&below, &p, GFX_CAP_BUTT, GFX_JOIN_MITER, 6.0f, 1.4142f), STATUS_OK);
+    ASSERT_EQ(cov(&above, 5, 5), 255u); /* the miter square's outer corner */
+    ASSERT_TRUE(cov(&below, 5, 5) < 10u);
+    gfxPathFree(&p);
+    cvFree(&above);
+    cvFree(&below);
+}
+
+/* Sum of the shoelace areas of the outline's closed pieces (all wound positively). */
+static double outlineArea(const GfxPath *o) {
+    double total = 0.0, sx = 0.0, sy = 0.0, px = 0.0, py = 0.0, a = 0.0;
+    const float *pt = o->pts;
+    for (uint32_t i = 0; i < o->nVerbs; i++) {
+        switch (o->verbs[i]) {
+            case GFX_VERB_MOVE:
+                sx = px = pt[0];
+                sy = py = pt[1];
+                a = 0.0;
+                pt += 2;
+                break;
+            case GFX_VERB_LINE:
+                a += px * pt[1] - pt[0] * py;
+                px = pt[0];
+                py = pt[1];
+                pt += 2;
+                break;
+            case GFX_VERB_CLOSE:
+                a += px * sy - sx * py;
+                total += a * 0.5;
+                break;
+            default:
+                return -1.0; /* the stroker only emits polygons */
+        }
+    }
+    return total;
+}
+
+/* Round caps stay complete half discs at any radius: the arc step has a floor, so a big radius
+ * cannot run out of ARC_MAX_STEPS before it reaches the end of the arc. */
+TEST(gfxStrokeRoundCapsCompleteAtHugeRadius) {
+    float radii[] = {2.0f, 50.0f, 900.0f, 5000.0f, 20000.0f, 200000.0f};
+    for (size_t i = 0; i < sizeof(radii) / sizeof(radii[0]); i++) {
+        double h = radii[i];
+        GfxPath in, out;
+        gfxPathInit(&in, NULL);
+        gfxPathInit(&out, NULL);
+        gfxPathMoveTo(&in, 0.0f, 0.0f);
+        gfxPathLineTo(&in, 10.0f, 0.0f);
+        GfxStroke s = {2.0f * radii[i], GFX_CAP_ROUND, GFX_JOIN_ROUND, 4.0f};
+        ASSERT_EQ(gfxStrokeToPath(&in, &s, &out), STATUS_OK);
+        double want = 10.0 * 2.0 * h + 3.14159265358979 * h * h;
+        double got = outlineArea(&out);
+        /* inscribed chords of sagitta s lose about (2pi/3)*h*s per half disc; s is 0.1 px, or
+         * 1.2e-4*h once the step floor (0.03 rad) applies, above h = 889 */
+        double tol = 4.5 * h * (h > 889.0 ? h * 1.2e-4 : 0.1) + 1e-5 * want;
+        if (!(got <= want * (1.0 + 1e-5) && got >= want - tol)) {
+            fprintf(stderr, "  radius %g: outline area %.1f, want %.1f (tol %.1f)\n", h, got, want,
+                    tol);
+        }
+        ASSERT_TRUE(got <= want * (1.0 + 1e-5) && got >= want - tol);
+        gfxPathFree(&in);
+        gfxPathFree(&out);
+    }
+}
+
+/* Coordinates and widths far past GFX_COORD_MAX are clamped to it, not turned into inf/NaN:
+ * the strokes still succeed and draw. */
+TEST(gfxStrokeClampsHugeValues) {
+    Cv cv;
+    ASSERT_TRUE(cvInit(&cv, 20, 20, 0xFF000000u));
+    GfxPath huge;
+    gfxPathInit(&huge, NULL);
+    gfxPathMoveTo(&huge, -3.0e38f, 10.0f);
+    gfxPathLineTo(&huge, 3.0e38f, 10.0f);
+    ASSERT_EQ(strokeWhite(&cv, &huge, GFX_CAP_SQUARE, GFX_JOIN_MITER, 4.0f, 4.0f), STATUS_OK);
+    ASSERT_EQ(cov(&cv, 0, 9), 255u); /* a horizontal band y in [8, 12) across the canvas */
+    ASSERT_EQ(cov(&cv, 19, 10), 255u);
+    ASSERT_EQ(cov(&cv, 10, 5), 0u);
+    GfxPath p;
+    gfxPathInit(&p, NULL);
+    gfxPathMoveTo(&p, 5.0f, 5.0f);
+    gfxPathLineTo(&p, 15.0f, 15.0f);
+    gfxPathLineTo(&p, 5.0f, 15.0f);
+    GfxCap caps[3] = {GFX_CAP_SQUARE, GFX_CAP_SQUARE, GFX_CAP_ROUND};
+    GfxJoin joins[3] = {GFX_JOIN_BEVEL, GFX_JOIN_MITER, GFX_JOIN_ROUND};
+    for (int k = 0; k < 3; k++) {
+        Cv all;
+        ASSERT_TRUE(cvInit(&all, 20, 20, 0xFF000000u));
+        ASSERT_EQ(strokeWhite(&all, &p, caps[k], joins[k], 3.0e38f, 4.0f), STATUS_OK);
+        for (int32_t i = 0; i < 20 * 20; i++) {
+            ASSERT_EQ(all.px[i] & 0xFFu, 0xFFu); /* the whole canvas is inside the stroke */
+        }
+        cvFree(&all);
+    }
+    gfxPathFree(&huge);
+    gfxPathFree(&p);
+    cvFree(&cv);
+}
+
+typedef struct {
+    int failAt, count, live;
+    size_t liveBytes, peakBytes;
+} StrokeAlloc;
+
+static void *saAlloc(void *ctx, size_t n) {
+    StrokeAlloc *a = ctx;
+    if (a->count++ == a->failAt) {
+        return NULL;
+    }
+    void *p = malloc(n != 0 ? n : 1);
+    if (p != NULL) {
+        a->live++;
+        a->liveBytes += n;
+        if (a->liveBytes > a->peakBytes) {
+            a->peakBytes = a->liveBytes;
+        }
+    }
+    return p;
+}
+
+static void saFree(void *ctx, void *p, size_t n) {
+    StrokeAlloc *a = ctx;
+    if (p != NULL) {
+        a->live--;
+        a->liveBytes -= n;
+    }
+    free(p);
+}
+
+/* Every allocation of a stroke failing in turn: NO_MEMORY, nothing leaked. */
+TEST(gfxStrokeAllocationFailureSweep) {
+    GfxPath in;
+    gfxPathInit(&in, NULL);
+    gfxPathMoveTo(&in, 2.0f, 2.0f);
+    for (int i = 0; i < 40; i++) { /* more than one poly-array growth (32 points) */
+        gfxPathLineTo(&in, 4.0f + (float)i, (i & 1) ? 30.0f : 4.0f);
+    }
+    gfxPathCubicTo(&in, 60.0f, 0.0f, 0.0f, 60.0f, 50.0f, 50.0f);
+    bool done = false;
+    for (int failAt = 0; failAt < 200 && !done; failAt++) {
+        StrokeAlloc sa = {failAt, 0, 0, 0, 0};
+        GfxAllocator a = {saAlloc, saFree, &sa};
+        GfxPath out;
+        gfxPathInit(&out, &a);
+        GfxStroke s = {3.0f, GFX_CAP_ROUND, GFX_JOIN_ROUND, 4.0f};
+        Status st = gfxStrokeToPath(&in, &s, &out);
+        if (st == STATUS_OK) {
+            done = sa.count <= failAt; /* needed fewer allocations: every one was tried */
+        } else {
+            ASSERT_EQ(st, STATUS_ERR_NO_MEMORY);
+        }
+        gfxPathFree(&out);
+        ASSERT_EQ(sa.live, 0);
+    }
+    ASSERT_TRUE(done);
+    gfxPathFree(&in);
+}
+
+/* A subpath that flattens to more than GFX_PATH_MAX_VERBS points stops growing its point arrays at
+ * that cap (NO_MEMORY) instead of first buffering every point. */
+TEST(gfxStrokeFlattenedPointsAreBounded) {
+    GfxPath in;
+    gfxPathInit(&in, NULL);
+    gfxPathMoveTo(&in, 0.0f, 0.0f);
+    for (int i = 0; i < 300; i++) { /* each big loop flattens to the 256-segment cap */
+        gfxPathCubicTo(&in, 100000.0f, 100000.0f, -100000.0f, 100000.0f, 0.0f, 0.0f);
+    }
+    ASSERT_EQ(in.error, STATUS_OK);
+    StrokeAlloc sa = {-1, 0, 0, 0, 0};
+    GfxAllocator a = {saAlloc, saFree, &sa};
+    GfxPath out;
+    gfxPathInit(&out, &a);
+    GfxStroke s = {2.0f, GFX_CAP_BUTT, GFX_JOIN_BEVEL, 4.0f};
+    ASSERT_EQ(gfxStrokeToPath(&in, &s, &out), STATUS_ERR_NO_MEMORY);
+    /* x and y arrays of 65536 floats plus the 32768-float pair they grew from (768 KiB); one
+     * more doubling would need 1.5 MiB */
+    ASSERT_TRUE(sa.peakBytes <= (size_t)1 << 20);
+    gfxPathFree(&out);
+    ASSERT_EQ(sa.live, 0);
+    gfxPathFree(&in);
+}

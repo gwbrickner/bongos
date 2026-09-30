@@ -294,6 +294,50 @@ TEST(gfxShadowParameterHandling) {
     cvFree(&cv);
 }
 
+/* With blurRadius 0 a shadow is exactly the shape's coverage, moved by the offset: it must match
+ * filling the same rounded rect there (to float rounding: the shadow builds it at a different
+ * absolute position), at fractional and negative positions and under a canvas origin. */
+TEST(gfxShadowRadiusZeroIsTheShape) {
+    struct {
+        float x, y, w, h, r;
+        int32_t offX, offY, orgX, orgY;
+    } cases[] = {
+        {10.25f, 7.5f, 20.5f, 12.75f, 3.0f, 3, -2, 0, 0},
+        {-3.75f, 4.125f, 30.0f, 9.5f, 4.5f, 7, 5, 0, 0},
+        {110.5f, 60.25f, 17.25f, 21.0f, 0.0f, -95, -50, -2, 3},
+        {0.0f, 0.0f, 12.0f, 12.0f, 6.0f, 0, 0, 20, 10},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        Cv a, b;
+        ASSERT_TRUE(cvInit(&a, 64, 48, 0xFFE0C0A0u));
+        ASSERT_TRUE(cvInit(&b, 64, 48, 0xFFE0C0A0u));
+        gfxCanvasSetOrigin(&a.c, cases[i].orgX, cases[i].orgY);
+        gfxCanvasSetOrigin(&b.c, cases[i].orgX, cases[i].orgY);
+        ASSERT_EQ(gfxDrawShadow(&a.c, cases[i].x, cases[i].y, cases[i].w, cases[i].h, cases[i].r, 0,
+                                cases[i].offX, cases[i].offY, 0xC0204060u, NULL),
+                  STATUS_OK);
+        GfxPath p;
+        gfxPathInit(&p, NULL);
+        ASSERT_EQ(gfxPathAddRoundedRect(&p, cases[i].x + (float)cases[i].offX,
+                                        cases[i].y + (float)cases[i].offY, cases[i].w, cases[i].h,
+                                        cases[i].r),
+                  STATUS_OK);
+        ASSERT_EQ(gfxFillPath(&b.c, &p, GFX_FILL_NONZERO, 0xC0204060u, GFX_OP_SRC_OVER), STATUS_OK);
+        gfxPathFree(&p);
+        int differing = 0;
+        for (int32_t k = 0; k < 64 * 48; k++) {
+            for (int sh = 0; sh < 32; sh += 8) {
+                int32_t d = (int32_t)((a.px[k] >> sh) & 0xFFu) - (int32_t)((b.px[k] >> sh) & 0xFFu);
+                ASSERT_TRUE(d >= -1 && d <= 1);
+            }
+            differing += a.px[k] != 0xFFE0C0A0u;
+        }
+        ASSERT_TRUE(differing > 40); /* and it drew something */
+        cvFree(&a);
+        cvFree(&b);
+    }
+}
+
 /* Shadow under a card: the classic use, and the golden for it. */
 TEST(gfxGoldenShadowCard) {
     Cv cv;
