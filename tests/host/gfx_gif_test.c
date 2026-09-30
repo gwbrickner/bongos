@@ -990,6 +990,8 @@ TEST(gfxGifBudgetIsTheExactPeak) {
         ASSERT_EQ(gfxGifOpen(b.b, b.n, &lim, &a.al, &g), STATUS_ERR_UNSUPPORTED);
         ASSERT_TRUE(g == NULL);
         ASSERT_EQ(a.ca.live, 0);
+        /* refused by the pre-check before either buffer, not by a later allocation (D-163) */
+        ASSERT_EQ(a.ca.peakBytes, peak - canvas * (save ? 2u : 1u));
         /* the same budget governs the single-image path */
         lim.maxTotalBytes = peak;
         ASSERT_EQ(decodeOnly(&b, &lim, NULL), STATUS_OK);

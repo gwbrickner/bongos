@@ -955,6 +955,8 @@ TEST(gfxJpegBudgetIsTheExactPeak) {
         ASSERT_TRUE(img.pixels == NULL);
         ASSERT_EQ(st.live, 0);
         ASSERT_TRUE(st.peakBytes < lim.maxTotalBytes); /* stopped before the big allocations */
+        /* ...and before ANY of them: the SOF pre-check refuses, not a later gfxDecAlloc (D-162) */
+        ASSERT_EQ(st.peakBytes, sizeof(JpegDec));
     }
     freeJFix(&fs);
 }
