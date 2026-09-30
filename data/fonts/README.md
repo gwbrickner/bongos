@@ -18,5 +18,6 @@ in any image or initrd that carries them.
 | `LiberationSans-Regular.ttf` | `4659bc0c58c5028dd488ec928d41d9265db43d9b669fc14ca8b0832daca7b144` |
 | `LiberationMono-Regular.ttf` | `395fa5ab8d40c8eba390ced528744ea75a7f69aabf3e68b6f925ca0e39a27370` |
 
-`tests/host/gfx_font_sfnt_test.c` checks both files against these sizes and checksums. Bold and
+`tests/host/gfx_font_sfnt_test.c` checks both files' sizes and CRC-32s against an independent
+Python parse (the sha256 values above are for humans and for `sha256sum` against the Ubuntu package). Bold and
 Italic are not shipped yet (the engine has no synthetic bold or oblique).

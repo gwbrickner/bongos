@@ -637,3 +637,33 @@ TEST(fontTruncationSweep) {
         }
     }
 }
+
+/* D-152 fallbacks: an all-zero OS/2 typo set and a positive head yMin (sweep S4 leads). */
+TEST(fontMetricsHeadBoxFallback) {
+    GfxFont f;
+    Copy c = copyOf(FTU_SYNTH_FALLBACK);
+    uint32_t hhea = tOff(&c, "hhea"), os2 = tOff(&c, "OS/2"), head = tOff(&c, "head");
+    ftuPut16(c.d, hhea + 4, 0);
+    ftuPut16(c.d, hhea + 6, 0);
+    ftuPut16(c.d, os2 + 62, 0); /* no USE_TYPO_METRICS */
+    ftuPut16(c.d, os2 + 68, 0);
+    ftuPut16(c.d, os2 + 70, 0);
+    ASSERT_EQ(initCopy(&c, &f), STATUS_OK);
+    ASSERT_EQ((int)f.ascender, 900); /* the head box, not a 0/0 typo pair */
+    ASSERT_EQ((int)f.descender, 0);
+    ftuPut16(c.d, head + 38, 50); /* yMin above the baseline */
+    ASSERT_EQ(initCopy(&c, &f), STATUS_OK);
+    ASSERT_EQ((int)f.descender, 0);
+    ftuPut16(c.d, head + 38, (uint32_t)-120 & 0xFFFFu);
+    ASSERT_EQ(initCopy(&c, &f), STATUS_OK);
+    ASSERT_EQ((int)f.descender, -120);
+    ftuPut16(c.d, os2 + 70, (uint32_t)-250 & 0xFFFFu); /* a nonzero typo descender counts */
+    ASSERT_EQ(initCopy(&c, &f), STATUS_OK);
+    ASSERT_EQ((int)f.descender, -250);
+    free(c.d);
+    GfxFont zero;
+    memset(&zero, 0, sizeof zero);
+    zero.data = (const uint8_t *)"x";
+    GfxFontMetricsPx m;
+    ASSERT_EQ(gfxFontMetrics(&zero, 1024, &m), STATUS_ERR_INVALID); /* unitsPerEm == 0 */
+}

@@ -185,13 +185,17 @@ Status gfxFontInit(GfxFont *f, const uint8_t *data, size_t size) {
         asc = hheaAsc;
         desc = hheaDesc;
         gap = fontRdS16(data, hhea + 8, hheaEnd);
-    } else if (haveOs2) {
+    } else if (haveOs2 &&
+               (fontRdS16(data, os2 + 68, os2End) != 0 || fontRdS16(data, os2 + 70, os2End) != 0)) {
         asc = fontRdS16(data, os2 + 68, os2End);
         desc = fontRdS16(data, os2 + 70, os2End);
         gap = fontRdS16(data, os2 + 72, os2End);
     } else {
         asc = fontRdS16(data, head + 42, headEnd);
         desc = fontRdS16(data, head + 38, headEnd);
+        if (desc > 0) {
+            desc = 0; /* a box that starts above the baseline has no descender */
+        }
         gap = 0;
     }
     if (asc < 0) {
@@ -267,8 +271,8 @@ static int64_t ceilDiv64(int64_t a, int64_t b) { /* b > 0, a >= 0 */
 
 /* Contract: pure, never sleeps. */
 Status gfxFontMetrics(const GfxFont *f, uint32_t sizeQ6, GfxFontMetricsPx *out) {
-    if (f == NULL || f->data == NULL || out == NULL || sizeQ6 < GFX_FONT_MIN_SIZE_Q6 ||
-        sizeQ6 > GFX_FONT_MAX_SIZE_Q6) {
+    if (f == NULL || f->data == NULL || f->unitsPerEm == 0 || out == NULL ||
+        sizeQ6 < GFX_FONT_MIN_SIZE_Q6 || sizeQ6 > GFX_FONT_MAX_SIZE_Q6) {
         return STATUS_ERR_INVALID;
     }
     const int64_t den = (int64_t)f->unitsPerEm * 64;
