@@ -20,6 +20,7 @@ enum {
     FTU_SANS,
     FTU_MONO,
     FTU_SYNTH_SYMBOL,
+    FTU_SYNTH_BAD,
     FTU_COUNT
 };
 const uint8_t *ftuFont(int which, size_t *size);

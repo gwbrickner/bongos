@@ -30,6 +30,7 @@ static const char *const fontPaths[FTU_COUNT] = {
     "tests/data/font/synth-fallback.ttf",    "tests/data/font/synth-gpos.ttf",
     "tests/data/font/synth-grid.ttf",        "data/fonts/LiberationSans-Regular.ttf",
     "data/fonts/LiberationMono-Regular.ttf", "tests/data/font/synth-symbol.ttf",
+    "tests/data/font/synth-bad.ttf",
 };
 
 const uint8_t *ftuFont(int which, size_t *size) {

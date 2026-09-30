@@ -8,6 +8,7 @@ Outputs, in this directory:
   synth-gpos.ttf      GPOS kerning (extension, pair formats 1 and 2, coverage/classdef 1+2), plus a
                       'kern' table that must never apply
   synth-grid.ttf      every ASCII glyph a box of advance 500 (space classes empty), CJK 1000
+  synth-bad.ttf       malformed glyphs on purpose; bad.oracle lists the Status each must give
   synth-symbol.ttf    a (3,0) symbol cmap: U+F041 is reachable as U+0041
   synth.oracle        expected values and outlines of the synthetic fonts, by construction
   liberation.oracle   an INDEPENDENT Python parse of data/fonts/*.ttf (sfnt, cmap 4/12, hmtx, glyf
@@ -623,6 +624,74 @@ def make_symbol(orc):
     return build_sfnt(tables)
 
 
+# ---------------------------------------------------------------- synth-bad --------------------
+def make_bad(orc):
+    """Glyphs that are malformed on purpose, with the Status the loader must return for each
+    (bad.oracle). Every truncated case is short by more than the up-to-3 bytes of loca padding."""
+
+    def hdr(nc):
+        return s16(nc) + s16(0) * 4
+
+    def comp_raw(comps):
+        out = hdr(-1)
+        for fl, gid, args in comps:
+            out += u16(fl) + u16(gid) + args
+        return out
+
+    G = []
+    lines = []
+
+    def add(b, want, gid=None):
+        if gid is not None:
+            assert len(G) == gid, (len(G), gid)
+        lines.append("bad %d %s" % (len(G), want))
+        G.append(b)
+
+    tri = simple_glyph([[(0, 0, 1), (100, 0, 1), (0, 100, 1)]])
+    two = b"\0\0"
+    add(tri, "OK", 0)
+    add(hdr(2) + u16(3) + u16(2) + u16(0) + b"\x01" * 8 + b"\0" * 40, "INVALID", 1)  # ends 3, 2
+    add(hdr(5000) + b"\0" * 20, "UNSUPPORTED", 2)  # too many contours
+    add(hdr(1) + u16(19999) + u16(0) + b"\x01" * 20, "UNSUPPORTED", 3)  # too many points
+    add(hdr(1) + u16(2) + u16(0) + bytes([0x09, 5]) + b"\0" * 10, "INVALID", 4)  # repeat overrun
+    add(hdr(1) + u16(2) + u16(0) + bytes([1, 1, 1]) + b"\0", "INVALID", 5)  # truncated x
+    add(hdr(1) + u16(2) + u16(100) + bytes([1, 1, 1]), "INVALID", 6)  # instructions run past end
+    add(comp_raw([(0x0002, 7, two)]), "UNSUPPORTED", 7)  # self reference
+    add(comp_raw([(0x0002, 9, two)]), "UNSUPPORTED", 8)  # 8 -> 9 -> 8
+    add(comp_raw([(0x0002, 8, two)]), "UNSUPPORTED", 9)
+    add(comp_raw([(0x0000, 0, two)]), "UNSUPPORTED", 10)  # point matching
+    add(comp_raw([(0x0002, 500, two)]), "INVALID", 11)  # component out of range
+    add(comp_raw([(0x0022, 0, two)]), "INVALID", 12)  # MORE_COMPONENTS, then nothing
+    add(b"\x00\x01\x00\x00\x00\x00", "INVALID", 13)  # shorter than the 10-byte header
+    add(comp_raw([(0x0022, 15, two)] * 15 + [(0x0002, 15, two)]), "UNSUPPORTED", 14)  # 16*16 fan-out
+    add(comp_raw([(0x0022, 16, two)] * 15 + [(0x0002, 16, two)]), "OK", 15)
+    add(tri, "OK", 16)
+    add(tri, "OK", 17)  # the test patches loca so that start > end
+    add(tri, "OK", 18)  # the test patches loca so that end > glyf length
+    add(hdr(0), "OK", 19)  # zero contours
+    add(comp_raw([(0x0002, 19, two)]), "OK", 20)  # composite of an empty glyph
+    for i in range(21, 29):  # a chain of 8 composites ending in a simple glyph: depth 8 is fine
+        add(comp_raw([(0x0002, i + 1, two)]), "OK", i)
+    add(tri, "OK", 29)
+    add(comp_raw([(0x0002, 21, two)]), "UNSUPPORTED", 30)  # one level too deep
+    add(simple_glyph([[(0, 0, 1), (32767, 0, 1), (32767, 32767, 1), (0, 32767, 1)]]), "OK", 31)
+    # ends [0,1,2]: every contour has one point (skipped by the path builder, but loaded)
+    add(simple_glyph([[(0, 0, 1)], [(10, 0, 1)], [(10, 10, 0)]]), "OK", 32)
+    ng = len(G)
+    loca, glyf = loca_glyf(G, True)
+    tables = {
+        "head": head_table(1000, (0, 0, 1000, 1000), 1),
+        "hhea": hhea_table(800, -200, 0, ng),
+        "maxp": maxp_table(ng),
+        "hmtx": hmtx_table([500] * ng, ng),
+        "cmap": cmap_table([(3, 1, cmap_f4([(0x41, 0x41, "delta", (1 - 0x41) & 0xFFFF)]))]),
+        "loca": loca,
+        "glyf": glyf,
+    }
+    orc.lines += lines
+    return build_sfnt(tables)
+
+
 # ---------------------------------------------------------------- Liberation oracle ------------
 class PyFont:
     """A from-scratch reader written straight from the OpenType spec, independent of libs/gfx."""
@@ -1024,6 +1093,10 @@ def main():
         open(os.path.join(HERE, name), "wb").write(data)
         print(name, len(data))
     orc.write(os.path.join(HERE, "synth.oracle"))
+    bad = Oracle()
+    data = make_bad(bad)
+    open(os.path.join(HERE, "synth-bad.ttf"), "wb").write(data)
+    bad.write(os.path.join(HERE, "bad.oracle"))
     lo = Oracle()
     liberation_oracle(lo)
     lo.write(os.path.join(HERE, "liberation.oracle"))
