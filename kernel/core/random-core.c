@@ -68,8 +68,10 @@ static void generateStep(RandomState *s, uint8_t *out, size_t m) {
     uint8_t ks[KEYSTREAM_MAX_BLOCKS * CHACHA20_BLOCK_SIZE];
     size_t blocks = (CHACHA20_KEY_SIZE + m + CHACHA20_BLOCK_SIZE - 1) / CHACHA20_BLOCK_SIZE;
 
-    /* Everything is computed under the OLD key before it is replaced. */
-    for (size_t b = 0; b < blocks; b++) {
+    /* Everything is computed under the OLD key before it is replaced. Block 0 (new key + first
+     * 32 output bytes) always exists since 32 + m >= 32; it is written outside the loop. */
+    chacha20Block(s->key, 0, zeroNonce, ks);
+    for (size_t b = 1; b < blocks; b++) {
         chacha20Block(s->key, (uint32_t)b, zeroNonce, ks + b * CHACHA20_BLOCK_SIZE);
     }
     copyBytes(out, ks + CHACHA20_KEY_SIZE, m);

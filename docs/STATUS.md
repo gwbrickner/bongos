@@ -3,7 +3,7 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-09-29 (M2.5 merged; the AI-facing docs were reworked; M2.6 is next)
+**Last updated:** 2026-09-30 (M2.6 in progress: steps 1-5 done)
 
 ## Next step
 Start **M2.6 KASLR + kernel RNG** (`needs-owner`). Its Needs, M2.4 and M2.5, are done.
@@ -20,7 +20,7 @@ Start **M2.6 KASLR + kernel RNG** (`needs-owner`). Its Needs, M2.4 and M2.5, are
 4. The first commit also adds M2.4's Done-when ktests to `_check-ktest-pass` (see Open leads).
 
 ## Current milestone
-**M2.6 KASLR + kernel RNG** in progress on branch `claude/amazing-cray-tovyk0` (log: `docs/logs/M2.6.md`). Architect design done (in the log); steps 1 (loader relocation code), 2 (kernel slide awareness, swept), 3 (both loaders slide via `loaderKaslrApply`, `kaslr-check.sh`, kaslr-off image, kaslr ktests) and 4 (`libs/crypto` ChaCha20/SHA-256/`cryptoWipe` + shared vectors + host tests + 3 required ktests; green, not yet swept) committed; next is bug-sweeper step mode on step 4, then step 5 (`random-core`/`random`, hw RNG, seed lifecycle; see the log's Next step).
+**M2.6 KASLR + kernel RNG** in progress on branch `claude/amazing-cray-tovyk0` (log: `docs/logs/M2.6.md`). Architect design done (in the log); steps 1 (loader relocation code), 2 (kernel slide awareness), 3 (both loaders slide, `kaslr-check.sh`, kaslr ktests) and 4 (`libs/crypto` ChaCha20/SHA-256/`cryptoWipe`) are committed and swept; step 5 (kernel RNG: `random-core`/`random`, `archHwRandom*`, seed lifecycle, `pmmReclaimLoaderMemory(void)` reclaiming the BootInfo page per D-123, 3 required `random_*` ktests, host tests) is committed and green but not yet swept. Next: `bug-sweeper` step mode on step 5, then step 6 (docs, D-120..D-125).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
