@@ -164,6 +164,19 @@ TEST(gfxRoundedRectDegenerateRadii) {
     ASSERT_EQ(gfxPathAddRoundedRect(&q, 3.0f, 4.0f, 30.0f, 18.0f, 9.0f), STATUS_OK);
     ASSERT_EQ(memcmp(p.pts, q.pts, p.nPts * sizeof(float)), 0);
     ASSERT_EQ(p.nPts, q.nPts);
+    /* ...including just above the bound (a clamp at 2*min/2 or any looser bound would pass the
+     * r = 500 case above), while a radius just below it is kept as given */
+    static const float OVER[] = {9.0001f, 9.5f, 12.0f, 17.9f, 18.0f};
+    for (size_t i = 0; i < sizeof(OVER) / sizeof(OVER[0]); i++) {
+        gfxPathReset(&p);
+        ASSERT_EQ(gfxPathAddRoundedRect(&p, 3.0f, 4.0f, 30.0f, 18.0f, OVER[i]), STATUS_OK);
+        ASSERT_EQ(p.nPts, q.nPts);
+        ASSERT_EQ(memcmp(p.pts, q.pts, p.nPts * sizeof(float)), 0);
+    }
+    gfxPathReset(&p);
+    ASSERT_EQ(gfxPathAddRoundedRect(&p, 3.0f, 4.0f, 30.0f, 18.0f, 8.999f), STATUS_OK);
+    ASSERT_EQ(p.nPts, q.nPts);
+    ASSERT_TRUE(memcmp(p.pts, q.pts, p.nPts * sizeof(float)) != 0);
     gfxPathReset(&p);
     ASSERT_EQ(gfxPathAddRoundedRect(&p, 3.0f, 4.0f, 30.0f, 18.0f, -5.0f), STATUS_OK);
     ASSERT_EQ(p.nVerbs, (uint32_t)5); /* move + 3 lines + close, i.e. a plain rect */
