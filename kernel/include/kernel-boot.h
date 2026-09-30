@@ -40,4 +40,9 @@ const BootMemRegion *kernelBootMemMap(uint32_t *outCount);
  * never dereference it. No locks; read-only. */
 uint64_t kernelBootInfoPagePhys(void);
 
+/* The OR of the 64 BootInfo.randomSeed bytes on the loader's live BootInfo page, read back
+ * (volatile) right after kernelMain wiped them (D-123): 0 when the wipe happened. For the
+ * random_boot_seed_wiped ktest only. No locks; read-only. */
+uint8_t kernelBootSeedResidue(void);
+
 #endif

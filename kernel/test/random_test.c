@@ -6,6 +6,7 @@
  * faults fail every time. */
 #include "crypto/chacha20.h"
 #include "drbg-vectors.h"
+#include "kernel-boot.h"
 #include "ktest.h"
 #include "random-core.h"
 #include "random.h"
@@ -244,4 +245,19 @@ KTEST(random_sanity) {
         }
     }
     KTEST_ASSERT(randomU64() != randomU64());
+}
+
+/* D-123 seed lifecycle: kernelMain wipes the loader's live seed right after randomInit (the page
+ * is also zeroed by the reclaim later, which is why kernelMain records a read-back for this test),
+ * and kernelBootInfo()'s copy never holds seed bytes. A loader seed is never all zero (it always
+ * mixes in at least TSC jitter), so a missing wipe shows up here. */
+KTEST(random_boot_seed_wiped) {
+    KTEST_ASSERT_EQ(kernelBootSeedResidue(), 0);
+    const BootInfo *bi = kernelBootInfo();
+    uint8_t acc = 0;
+    for (size_t i = 0; i < sizeof(bi->randomSeed); i++) {
+        acc |= bi->randomSeed[i];
+    }
+    KTEST_ASSERT_EQ(acc, 0);
+    KTEST_ASSERT(randomGeneration() >= 1); /* the seed was consumed before it was wiped */
 }

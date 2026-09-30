@@ -40,6 +40,10 @@ static uint32_t memMapSnapshotCount;
  * that page like any other LOADER_RECLAIM page (M2.6, D-123; D-089 used to keep it), so this is
  * only an identity for ktests (loader_reclaimed) -- never dereference it. */
 static uint64_t bootInfoPagePhysValue;
+/* The OR of the live BootInfo seed bytes, read back right after kernelMain wiped them: 0 unless the
+ * wipe is missing. Only for the random_boot_seed_wiped ktest (the page itself is zeroed by the
+ * reclaim moments later, so nothing else could tell). */
+static uint8_t bootSeedResidueValue;
 
 const BootInfo *kernelBootInfo(void) {
     return &bootInfoCopy;
@@ -56,6 +60,10 @@ const BootMemRegion *kernelBootMemMap(uint32_t *outCount) {
 
 uint64_t kernelBootInfoPagePhys(void) {
     return bootInfoPagePhysValue;
+}
+
+uint8_t kernelBootSeedResidue(void) {
+    return bootSeedResidueValue;
 }
 
 /* Copies `bi`'s memory-map array (still live loader memory at this point -- called before
@@ -150,6 +158,15 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
      * the loader's own writable page (still on the loader's page tables here). */
     randomInit(bi->randomSeed);
     cryptoWipe((void *)(uintptr_t)bi->randomSeed, sizeof(bi->randomSeed));
+    {
+        /* Volatile read-back, OR-accumulated (no branch on seed bytes), for the ktest. */
+        const volatile uint8_t *liveSeed = bi->randomSeed;
+        uint8_t residue = 0;
+        for (size_t k = 0; k < sizeof(bi->randomSeed); k++) {
+            residue |= liveSeed[k];
+        }
+        bootSeedResidueValue = residue;
+    }
 
     bootInfoPagePhysValue = (uint64_t)(uintptr_t)bi - bi->hhdmBase;
     bootInfoCopy = *bi;
