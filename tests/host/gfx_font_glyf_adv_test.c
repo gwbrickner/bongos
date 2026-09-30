@@ -1031,6 +1031,133 @@ TEST(renderAdvGlyphsBeyondTheFloatRange) {
     }
 }
 
+TEST(renderAdvEachFarBoundIsRefusedAlone) {
+    /* Four glyphs, each beyond +-2^24 px on exactly one side (and less than 2^25 px out, and only
+     * ~1024 px across): up, down, right, left. Each clause of the renderer's range check must
+     * refuse its glyph on its own; a clamped control box would give a bogus 1-px mask. Chain:
+     * 5 levels of scale ~2 with 32767-unit offsets on the deepest two, upem 16 at 512 px. */
+    enum { SMALL, UP0, RIGHT0 = UP0 + 5, DOWN = RIGHT0 + 5, LEFT, NG };
+    static const Pt small[] = {{0, 0, 1}, {1, 0, 1}, {0, 1, 1}};
+    static const uint32_t smallEnd[] = {2};
+    Buf g[NG];
+    memset(g, 0, sizeof g);
+    encSimple(&g[SMALL], small, 3, smallEnd, 1, 0, 0);
+    for (int axis = 0; axis < 2; axis++) {
+        const int base = axis == 0 ? UP0 : RIGHT0;
+        for (int i = 0; i < 5; i++) {
+            const int32_t off = i >= 3 ? 32767 : 0;
+            Comp c = {.gid = (uint16_t)(i < 4 ? base + i + 1 : SMALL),
+                      .dx = axis == 1 ? off : 0,
+                      .dy = axis == 0 ? off : 0,
+                      .words = 1,
+                      .kind = XF_SCALE,
+                      .m = {0x7FFF}};
+            encComposite(&g[base + i], &c, 1);
+        }
+    }
+    Comp down = {.gid = UP0 + 1, .kind = XF_SCALE, .m = {-0x8000}};
+    encComposite(&g[DOWN], &down, 1);
+    Comp left = {.gid = RIGHT0 + 1, .kind = XF_SCALE, .m = {-0x8000}};
+    encComposite(&g[LEFT], &left, 1);
+    size_t fn;
+    uint8_t *font = glyphFont(g, NG, 16, (size_t)-1, &fn);
+    GfxFont f;
+    ASSERT_EQ(gfxFontInit(&f, font, fn), STATUS_OK);
+    const uint32_t size = GFX_FONT_MAX_SIZE_Q6;
+    const float lim = 16777216.0f, lim2 = 33554432.0f;
+    static const int gids[] = {UP0, DOWN, RIGHT0, LEFT};
+    for (int k = 0; k < 4; k++) {
+        float x0, x1, y0, y1;
+        ASSERT_TRUE(renderBox(&f, (uint16_t)gids[k], size, &x0, &x1, &y0, &y1));
+        /* the precondition: out on one side only, by less than 2^25 px, small across */
+        const int out = (x0 < -lim) + (x1 > lim) * 2 + (y0 < -lim) * 4 + (y1 > lim) * 8;
+        static const int wantOut[] = {4, 8, 2, 1};
+        ASSERT_EQ(out, wantOut[k]);
+        ASSERT_TRUE(x0 > -lim2 && x1 < lim2 && y0 > -lim2 && y1 < lim2);
+        ASSERT_TRUE(x1 - x0 < 2048.0f && y1 - y0 < 2048.0f);
+        Strict st;
+        GfxAllocator a;
+        strictInit(&st, &a, -1);
+        GfxGlyphScratch sc;
+        gfxGlyphScratchInit(&sc, &a);
+        GfxGlyphImage img;
+        Status s = gfxFontRenderGlyph(&f, (uint16_t)gids[k], size, 0, &sc, &a, &img);
+        if (s != STATUS_ERR_UNSUPPORTED) {
+            fprintf(stderr, "  case %d: status %d, %dx%d mask at (%d, %d)\n", k, (int)s,
+                    (int)img.mask.width, (int)img.mask.height, (int)img.left, (int)img.top);
+        }
+        ASSERT_EQ(s, STATUS_ERR_UNSUPPORTED);
+        ASSERT_TRUE(img.mask.data == NULL);
+        gfxGlyphImageFree(&img);
+        gfxGlyphScratchFree(&sc);
+        ASSERT_EQ(st.live, (size_t)0);
+        ASSERT_EQ(st.bad, 0);
+    }
+    free(font);
+    for (int i = 0; i < NG; i++) {
+        bufFree(&g[i]);
+    }
+}
+
+TEST(glyfAdvFreeLeavesAReusableOutline) {
+    size_t n;
+    const uint8_t *d = ftuFont(FTU_SANS, &n);
+    GfxFont f;
+    ASSERT_EQ(gfxFontInit(&f, d, n), STATUS_OK);
+    const uint16_t gid = gfxFontGlyphIndex(&f, 0xE9); /* e acute: a composite */
+    Strict st;
+    GfxAllocator a;
+    strictInit(&st, &a, -1);
+    GfxGlyphOutline o;
+    gfxGlyphOutlineInit(&o, &a);
+    ASSERT_EQ(gfxFontGlyphOutline(&f, gid, NULL, &o), STATUS_OK);
+    const uint32_t np = o.nPoints, nc = o.nContours;
+    ASSERT_TRUE(np > 8 && nc >= 2);
+    float *xy = malloc(sizeof(float) * 2 * np);
+    memcpy(xy, o.xy, sizeof(float) * 2 * np);
+    gfxGlyphOutlineFree(&o);
+    ASSERT_TRUE(o.xy == NULL && o.onCurve == NULL && o.contourEnd == NULL);
+    ASSERT_TRUE(o.nPoints == 0 && o.nContours == 0 && o.capPoints == 0 && o.capContours == 0);
+    ASSERT_TRUE(o.alloc == &a);
+    ASSERT_EQ(st.live, (size_t)0);
+    /* reused after the free: the same glyph again, through the same allocator */
+    ASSERT_EQ(gfxFontGlyphOutline(&f, gid, NULL, &o), STATUS_OK);
+    ASSERT_EQ(o.nPoints, np);
+    ASSERT_EQ(o.nContours, nc);
+    ASSERT_TRUE(memcmp(xy, o.xy, sizeof(float) * 2 * np) == 0);
+    gfxGlyphOutlineFree(&o);
+    gfxGlyphOutlineFree(NULL);
+    ASSERT_EQ(st.live, (size_t)0);
+    ASSERT_EQ(st.bad, 0);
+    free(xy);
+}
+
+TEST(glyfAdvOutlineToPathAllOffStartsAtTheMidpoint) {
+    /* all off-curve, with first and last differing in both x and y */
+    float xy[] = {0, 0, 10, 2, 4, 8};
+    uint8_t off[] = {0, 0, 0};
+    uint32_t ends[] = {2};
+    GfxGlyphOutline o;
+    hostileOutline(&o, xy, off, 3, ends, 1);
+    GfxPath p;
+    gfxPathInit(&p, NULL);
+    ASSERT_EQ(gfxGlyphOutlineToPath(&o, 1.0f, -1.0f, &p), STATUS_OK);
+    ASSERT_EQ(p.nVerbs, 5u); /* move, 3 quads, close */
+    static const float want[] = {
+        3,  3,        /* move: mid(last (4,8), first (0,0)) + (1,-1) */
+        1,  -1, 6, 0, /* quad: control first, to mid(first, second) */
+        11, 1,  8, 4, /* quad: control second, to mid(second, third) */
+        5,  7,  3, 3, /* quad: control third (the last), back to the start */
+    };
+    for (int i = 0; i < 14; i++) {
+        if (p.pts[i] != want[i]) {
+            fprintf(stderr, "  pts[%d] = %g, want %g\n", i, (double)p.pts[i], (double)want[i]);
+        }
+        ASSERT_TRUE(p.pts[i] == want[i]);
+    }
+    gfxPathFree(&p);
+}
+
 TEST(renderAdvDegenerateGlyphs) {
     enum { DOT, LINE, SAME, NG };
     Buf g[NG];
