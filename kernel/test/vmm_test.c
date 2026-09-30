@@ -70,14 +70,18 @@ KTEST(vmm_map_unmap) {
     pmmFreePages(page, 0);
 }
 
-/* ROADMAP M2.3 step 6 (D-089): every LOADER_RECLAIM page at or above 1 MiB, except the one
- * BootInfo page pmmReclaimLoaderMemory() deliberately keeps, must no longer be RESERVED -- proving
- * the reclaim actually ran and actually freed the right pages, not just that it logged a line. */
+/* ROADMAP M2.3 step 6 (D-089, amended by D-123): every LOADER_RECLAIM page at or above 1 MiB must
+ * no longer be RESERVED -- proving the reclaim actually ran and actually freed the right pages,
+ * not just that it logged a line. Since M2.6 that includes the original BootInfo page, which
+ * D-089 used to keep RESERVED: kernelMain wipes the live random seed before vmmInit(), so
+ * pmmReclaimLoaderMemory() zeroes and frees that page too. Below 1 MiB (D-080) nothing is
+ * reclaimed, BootInfo page included, so such a page is not checked. */
 KTEST(loader_reclaimed) {
     uint32_t count;
     const BootMemRegion *regions = kernelBootMemMap(&count);
     uint64_t bootInfoPhys = kernelBootInfoPagePhys();
     bool checkedAny = false;
+    bool sawBootInfoPage = false;
 
     for (uint32_t i = 0; i < count; i++) {
         if (regions[i].type != BOOT_MEM_LOADER_RECLAIM) {
@@ -92,13 +96,15 @@ KTEST(loader_reclaimed) {
             KTEST_ASSERT(pmmPfnValid(phys >> 12));
             Page *p = pmmPhysToPage(phys);
             KTEST_ASSERT(p != NULL);
-            if (phys == bootInfoPhys) {
-                KTEST_ASSERT_EQ(p->state, PAGE_STATE_RESERVED);
-                continue;
-            }
             KTEST_ASSERT(p->state != PAGE_STATE_RESERVED);
+            if (phys == bootInfoPhys) {
+                sawBootInfoPage = true; /* D-123: the old carve-out is gone */
+            }
             checkedAny = true;
         }
     }
     KTEST_ASSERT(checkedAny);
+    /* The BootInfo page is in LOADER_RECLAIM (bootInfoCheckRefs() requires it), so unless the
+     * loader placed it below 1 MiB it must have been among the pages just checked. */
+    KTEST_ASSERT(bootInfoPhys < 0x100000 || sawBootInfoPage);
 }

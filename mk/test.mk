@@ -91,10 +91,13 @@ endif
 # ("kaslr: disabled") or stopped sliding fails here (tests/harness/kaslr-check.sh, run by `make
 # test`/`test-full` after the matrix, checks the slide values across several boots and kaslr=off).
 # The crypto primitives' vector ktests (kernel/test/crypto_test.c, vectors in
-# libs/crypto/test/crypto-vectors.h) are required too: they are the CSPRNG's foundation.
+# libs/crypto/test/crypto-vectors.h) are required too: they are the CSPRNG's foundation, and so are
+# the RNG's own ktests (kernel/test/random_test.c) plus the `random: seeded` log line every boot
+# must print (kernelMain -> randomInit: a kernel that stops seeding its RNG cannot pass).
 M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad kaslr_slide_consistent \
                        kaslr_relocs_applied chacha20_rfc8439_block chacha20_rfc8439_encrypt \
-                       sha256_fips180_vectors
+                       sha256_fips180_vectors random_drbg_fast_key_erasure \
+                       random_add_entropy_reseeds random_sanity
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus mem; do \
@@ -151,6 +154,10 @@ _check-ktest-pass:
 	    fi; \
 	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^loader: kaslr: slide=0x[0-9a-f]{16} base=0x[0-9a-f]{16} relocs=[0-9]+$$'; then \
 	        echo "make test: $$log does not contain the loader's 'kaslr: slide=... base=... relocs=...' line (ROADMAP M2.6 Done-when guarantee not met; KASLR is on by default)"; \
+	        status=1; \
+	    fi; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^\[info\] random: seeded'; then \
+	        echo "make test: $$log does not contain the kernel's 'random: seeded ...' line (ROADMAP M2.6 Done-when guarantee not met)"; \
 	        status=1; \
 	    fi; \
 	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^  kaslr slide 0x[0-9a-f]{16} \(link address = address - slide\)$$'; then \
