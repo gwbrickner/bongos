@@ -81,7 +81,7 @@ SLAB_REQUIRED_KTESTS := kmalloc_stress kmalloc_alignment kmalloc_double_free sla
 ifneq ($(RELEASE),1)
 SLAB_REQUIRED_KTESTS += kmalloc_redzone_overflow kmalloc_poison_detects_uaf
 endif
-# M2.6 (KASLR + kernel RNG): only the ktests that exist so far; later steps append their own
+# M2.6 (KASLR + kernel RNG): the ktests its Done-when clauses rest on
 # (bootinfo_rejects_bad carries the kernel-window bound on kaslrSlide). Every matrix log must also
 # show the kernel's kaslr line (kernelMain), so a kernel that stops reporting its slide cannot
 # pass, and the slide header backtracePrint() puts before every backtrace (ROADMAP M2.6 item 3:

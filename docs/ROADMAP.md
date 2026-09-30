@@ -749,7 +749,7 @@ your network, `ping` your router, and resolve and ping a public hostname.
 > files and keep those names and APIs rather than re-implementing them; item 3 is therefore done
 > except for whatever the new Poly1305/AEAD work changes. `cryptoWipe` is a volatile-store loop
 > with no inline asm (ARCHITECTURE §4); `cryptoEqual` does not exist yet. The RFC 8439 vector
-> inputs there are flagged UNVERIFIED against the RFC text (see STATUS.md).
+> inputs there are cross-checked against independent transcriptions (Nettle, Mbed TLS, pyca, Linux testmgr, Crypto++); not yet diffed against the RFC text itself (see STATUS.md).
 
 **Done when:** every vector test passes.
 

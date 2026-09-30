@@ -251,7 +251,7 @@ empty `initrd =` or `cmdline =` in a section overrides an inherited non-empty va
 - `initrd` (path; built-in default: none; not yet loaded, D-067 -- M5.5)
 - `cmdline` (any bytes but NUL; built-in default: empty)
 - `resolution = auto | WIDTHxHEIGHT` (built-in default `auto`)
-- `kaslr = on | off` (built-in default `on`; no effect until M2.6)
+- `kaslr = on | off` (built-in default `on`; `off` gives the fixed link-time base)
 
 `timeout` (seconds, 0-3600, or `forever`; default 0 = no menu) and `default` (a 1-based index if
 all digits, else an exact entry name; default 1) are **global-only**. At most 9 `[entry]`
@@ -1080,7 +1080,7 @@ and `cryptoWipe`, because the kernel RNG (§6.6) needs them. They are **EXPERIME
 unaudited**, and nothing is claimed beyond what the tests show: the FIPS 180-4 messages (empty,
 "abc", the 448-bit message, one million 'a'), padding-boundary and split-update cases, and the
 RFC 8439 block/encryption/A.1/A.2 vectors, run on the host (`make host-tests`) and in the kernel
-(`make test`). The vector file is flagged UNVERIFIED against the RFC text (see STATUS.md).
+(`make test`). The vector file is cross-checked against independent transcriptions (Nettle, Mbed TLS, pyca, Linux testmgr, Crypto++); not yet diffed against the RFC text itself (see STATUS.md).
 `cryptoWipe` is a `noinline` loop of volatile stores (no inline asm, since §4 keeps assembly in
 `kernel/arch/` and `boot/`). The rest of the table arrives in M11.1, which must build on these files.
 

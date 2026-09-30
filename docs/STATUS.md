@@ -52,9 +52,9 @@ _(none)_
   fold, or move it to `randomGetBytes` later (the serial-printed slide leaks ~8 bits of that seed)?
   Is falling back to an unslid boot on a relocation failure (D-120) acceptable, versus refusing?
 - **M2.6 vector provenance (needs network):** `libs/crypto/test/crypto-vectors.h` could not be diffed
-  against the RFC text (rfc-editor.org was denied by the proxy). Someone with network access should
-  diff it against RFC 8439 2.3.2/2.4.2/A.1/A.2 and FIPS 180-4; the A.2 #2/#3 plaintexts are from
-  memory (expected outputs came from two independent implementations).
+  against the RFC text (rfc-editor.org was denied by the proxy). Every field was cross-checked against
+  independent transcriptions (Nettle, Mbed TLS, pyca, Linux testmgr, Crypto++, `a66c5b7`), but
+  someone with network access should still diff it against RFC 8439 2.3.2/2.4.2/A.1/A.2 and FIPS 180-4.
 
 ## Waiting on owner (hardware checks and other owner-only steps)
 - **Default the main session to Sonnet** (D-117). Adding `"model": "sonnet"` to
