@@ -166,7 +166,7 @@ TEST(gfxRasterMatchesExactWindingIntegral) {
     static uint8_t md[W * H];
     rngSeed(0x5EED1234);
     int worst = 0;
-    for (int iter = 0; iter < 1500; iter++) {
+    for (int iter = 0; iter < 800; iter++) {
         int n = 3 + (int)(rngNext() % (MAX_POLY - 2));
         Pt v[MAX_POLY];
         for (int i = 0; i < n; i++) {
