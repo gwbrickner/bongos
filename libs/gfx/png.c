@@ -364,6 +364,10 @@ Status gfxPngDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim
     }
     rawLen = (size_t)rawTotal;
     idatLen = (size_t)idatTotal;
+    if (idatLen == 0) {
+        st = STATUS_ERR_INVALID; /* no image data (and no zero-byte allocation to misreport) */
+        goto done;
+    }
 
     /* Pass 2: concatenate the IDAT payloads. */
     idat = gfxDecAlloc(&d, idatLen);

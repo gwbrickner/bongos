@@ -1359,3 +1359,35 @@ TEST(gfxBmpAlphaBitfieldsNeedsAnAlphaMask) {
     EXPECT_BMP(buf, v2->dataLen, STATUS_ERR_INVALID);
     freeFixtures(&fs);
 }
+
+/* An allocator that, like a bare malloc(0) may, returns NULL for a zero-byte request. */
+static void *nullOnZeroAlloc(void *ctx, size_t n) {
+    (void)ctx;
+    return n == 0 ? NULL : malloc(n);
+}
+
+static void plainFree(void *ctx, void *p, size_t n) {
+    (void)ctx;
+    (void)n;
+    free(p);
+}
+
+/* IDAT chunks that are all empty are malformed (a zlib stream is at least 6 bytes), whatever the
+ * allocator does with a zero-byte request: INVALID, never NO_MEMORY. */
+TEST(gfxPngEmptyImageDataIsInvalidWithAnyAllocator) {
+    static const GfxAllocator nullOnZero = {nullOnZeroAlloc, plainFree, NULL};
+    for (int nIdat = 1; nIdat <= 3; nIdat++) {
+        Buf b = {0};
+        pngSig(&b);
+        pngIhdr(&b, 1, 1, 8, 0, 0, 0, 0);
+        for (int i = 0; i < nIdat; i++) {
+            pngChunk(&b, "IDAT", NULL, 0);
+        }
+        pngChunk(&b, "IEND", NULL, 0);
+        GfxImage img;
+        ASSERT_EQ(gfxPngDecode(b.b, b.n, NULL, &nullOnZero, &img), STATUS_ERR_INVALID);
+        ASSERT_TRUE(img.pixels == NULL);
+        ASSERT_EQ(gfxPngDecode(b.b, b.n, NULL, NULL, &img), STATUS_ERR_INVALID);
+        free(b.b);
+    }
+}
