@@ -55,11 +55,12 @@ static __attribute__((noinline, used)) void kaslrTestMarkerFn(void) {
 }
 static volatile uint64_t kaslrTestMarkerData = 0x4B41534C52ULL; /* non-zero: .data, not .bss */
 
-/* The loader tells the kernel its slide in BootInfo, while kernelSlide() derives it from where
- * kernelImageStart really is; both must agree, be a legal slot, and describe the address the code
- * is actually running at (a function's runtime address minus the slide is a link address inside
- * [BASE, BASE + kernelSize)). Comparing against BootInfo also catches a kernelSlide() stuck at 0.
- */
+/* The loader tells the kernel its slide in BootInfo, while kernelSlide() derives it from
+ * kernelImageStart (an absolute reference the loader slid); both must agree, be a legal slot, and
+ * describe the address the code is actually running at. That last part is checked through a
+ * RIP-relative `lea` (PC32, which no relocation touches), because comparing kernelImageStart with
+ * BASE + kernelSlide() would only compare a value with itself. Comparing against BootInfo also
+ * catches a kernelSlide() stuck at 0. */
 KTEST(kaslr_slide_consistent) {
     const BootInfo *bi = kernelBootInfo();
     uint64_t slide = kernelSlide();
@@ -70,7 +71,9 @@ KTEST(kaslr_slide_consistent) {
     KTEST_ASSERT_EQ(slide % BOOTINFO_KASLR_ALIGN, 0);
     KTEST_ASSERT(needed <= window && slide <= window - needed);
     KTEST_ASSERT_EQ(bi->kernelVirtBase, BOOTINFO_KERNEL_WINDOW_BASE + slide);
-    KTEST_ASSERT_EQ((uint64_t)(uintptr_t)kernelImageStart, BOOTINFO_KERNEL_WINDOW_BASE + slide);
+    uint64_t runningStart;
+    __asm__ volatile("leaq %c1(%%rip), %0" : "=r"(runningStart) : "i"(kernelImageStart));
+    KTEST_ASSERT_EQ(runningStart, BOOTINFO_KERNEL_WINDOW_BASE + bi->kaslrSlide);
 
     uint64_t fnAddr = (uint64_t)(uintptr_t)&kaslrTestMarkerFn;
     KTEST_ASSERT(fnAddr >= (uint64_t)(uintptr_t)kernelTextStart &&
