@@ -210,8 +210,9 @@ static void genCodes(uint32_t *s, MFrame *f) {
                 code = (1u << width) - 1;
             }
             adds = true;
-        } else if (r < 9 + kwkwkPer1000) {
-            code = next < 4096 ? next : clear + 2 + rnd(s, 4096 - clear - 2); /* KwKwK */
+        } else if (r < 9 + kwkwkPer1000 + (next >= 4096 ? 100u : 0u)) {
+            /* KwKwK; once the table is full, the last entries (4095 is the easiest to lose) */
+            code = next < 4096 ? next : 4095 - rnd(s, 3);
             adds = true;
         } else if (r < (big ? 900u : 500u)) {
             code = rnd(s, litMax);
