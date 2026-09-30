@@ -96,6 +96,12 @@ Status gfxFontRenderGlyph(const GfxFont *f, uint16_t glyph, uint32_t sizeQ6, uin
         minY = y < minY ? y : minY;
         maxY = y > maxY ? y : maxY;
     }
+    /* a glyph placed beyond +-2^24 px (hostile composite offsets and scales) would be clamped by
+     * floorI/ceilI into a bogus mask at a bogus place: refuse it. `!(...)` also catches NaN. */
+    if (!(minX >= -16777216.0f && maxX <= 16777216.0f && minY >= -16777216.0f &&
+          maxY <= 16777216.0f)) {
+        return STATUS_ERR_UNSUPPORTED;
+    }
     const int32_t ix0 = floorI(minX), iy0 = floorI(minY);
     int32_t ix1 = ceilI(maxX), iy1 = ceilI(maxY);
     if (ix1 == ix0) {

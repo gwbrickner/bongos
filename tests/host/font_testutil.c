@@ -150,3 +150,55 @@ uint32_t ftuTable(const uint8_t *d, size_t n, const char *tag, uint32_t *len) {
     }
     return 0;
 }
+
+uint8_t *ftuRebuild(const uint8_t *src, const FtuTable *ov, int nOv, size_t *outN) {
+    struct {
+        char tag[4];
+        const uint8_t *data;
+        uint32_t len;
+    } t[64];
+    uint32_t n = 0;
+    uint32_t nt = ftuGet16(src, 4);
+    for (uint32_t i = 0; i < nt && n < 64; i++) {
+        const uint8_t *r = src + 12 + 16 * i;
+        int skip = 0;
+        for (int k = 0; k < nOv; k++) {
+            skip = skip || memcmp(r, ov[k].tag, 4) == 0;
+        }
+        if (!skip) {
+            memcpy(t[n].tag, r, 4);
+            t[n].data = src + ftuGet32(src, 12 + 16 * i + 8);
+            t[n].len = ftuGet32(src, 12 + 16 * i + 12);
+            n++;
+        }
+    }
+    for (int k = 0; k < nOv && n < 64; k++) {
+        if (ov[k].data != NULL) {
+            memcpy(t[n].tag, ov[k].tag, 4);
+            t[n].data = ov[k].data;
+            t[n].len = ov[k].len;
+            n++;
+        }
+    }
+    size_t size = 12 + 16 * (size_t)n;
+    for (uint32_t i = 0; i < n; i++) {
+        size = (size + 3u) & ~(size_t)3u;
+        size += t[i].len;
+    }
+    uint8_t *d = calloc(size != 0 ? size : 1, 1);
+    memcpy(d, src, 4);
+    ftuPut16(d, 4, n);
+    size_t at = 12 + 16 * (size_t)n;
+    for (uint32_t i = 0; i < n; i++) {
+        at = (at + 3u) & ~(size_t)3u;
+        memcpy(d + 12 + 16 * i, t[i].tag, 4);
+        ftuPut32(d, 12 + 16 * i + 8, (uint32_t)at);
+        ftuPut32(d, 12 + 16 * i + 12, t[i].len);
+        if (t[i].len != 0) {
+            memcpy(d + at, t[i].data, t[i].len);
+        }
+        at += t[i].len;
+    }
+    *outN = size;
+    return d;
+}

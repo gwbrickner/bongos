@@ -47,4 +47,15 @@ void ftuPut32(uint8_t *d, uint32_t off, uint32_t v);
 uint32_t ftuGet16(const uint8_t *d, uint32_t off);
 uint32_t ftuGet32(const uint8_t *d, uint32_t off);
 
+/* A table override for ftuRebuild: `data == NULL` removes the table. */
+typedef struct {
+    const char *tag;
+    const uint8_t *data;
+    uint32_t len;
+} FtuTable;
+/* Rebuilds the sfnt `src` with the tables in `ov` replaced, added or removed. The overrides are
+ * laid out after every other table, in `ov` order, and the file ends exactly at the last byte of
+ * the last one (so ASan sees any read past it). Returns a malloc'd buffer. */
+uint8_t *ftuRebuild(const uint8_t *src, const FtuTable *ov, int nOv, size_t *outN);
+
 #endif
