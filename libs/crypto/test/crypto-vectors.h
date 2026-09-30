@@ -10,12 +10,22 @@
  * against the leading bytes of the published vectors that are well known (RFC 8439 2.1.1
  * quarter round, 2.3.2 block "10 f1 e7 e4 d1 3b 59 15 ...", 2.4.2 ciphertext "6e 2e 35 9a 25 68
  * f9 80 ...", A.1 #1 keystream "76 b8 e0 ad a0 f1 3d 90 ...", FIPS 180-4 SHA-256 digests of "",
- * "abc", the 448-bit message and 1,000,000 'a'). The M2.6 step-4 sweep re-derived every output
- * the same way (all agree) and found them consistent with its own recollection of the RFC
- * vectors, but that is still not a copy of the RFC text: the vectors named rfc8439_* / a1_* /
- * a2_* are UNVERIFIED against the published RFC until someone diffs them against RFC 8439
- * sections 2.3.2, 2.4.2, A.1 and A.2 (TODO, needs network). The SHA-256 padding-boundary set
- * further down is not from any standard (see its comment). */
+ * "abc", the 448-bit message and 1,000,000 'a').
+ *
+ * CROSS-CHECKED (M2.6 finish sweep, 2026-09-30): the RFC text itself is still unreachable from
+ * the sandbox, but every field of every rfc8439_* / a1_* / a2_* vector (key, counter, nonce,
+ * plaintext, expected output) was compared byte for byte, by script, with independent published
+ * transcriptions of the same RFC 7539/8439 vectors (RFC 8439 kept 7539's vectors unchanged),
+ * fetched from github.com at their default branches: 2.3.2 = GNU Nettle testsuite/chacha-test.c
+ * (its draft-irtf-cfrg-chacha20-poly1305 96-bit-nonce test); 2.4.2 and A.2 #1-#3 = Mbed TLS
+ * test_suite_chacha20.data ("ChaCha20 RFC 7539 Example and Test Vector", "Test Vector #1-#3");
+ * A.2 #1-#3 also = pyca/cryptography vectors ChaCha20/rfc7539.txt and Linux crypto/testmgr.h
+ * chacha20_tv_template; A.1 #1-#5 = Crypto++ TestVectors/chacha_tls.txt ("Section A.1 ... Test
+ * 1-5"); the 2.4.2 plaintext also = Linux testmgr's RFC 7539 2.8.2 AEAD plaintext. All matched.
+ * "", "abc" and the 448-bit message with their digests match Linux testmgr sha256_tv_template.
+ * Every expected output was also recomputed by `openssl enc -chacha20` and a fresh Python
+ * ChaCha20 (checked against the RFC 2.1.1 quarter-round example) / python hashlib: all match.
+ * The SHA-256 padding-boundary set further down is not from any standard (see its comment). */
 #ifndef CRYPTO_TEST_VECTORS_H
 #define CRYPTO_TEST_VECTORS_H
 
