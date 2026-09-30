@@ -214,6 +214,26 @@ TEST(sha256ChunkedUpdateEquivalence) {
     }
 }
 
+/* Digests at 55/57/63/64/65/119/120/128 bytes (crypto-vectors.h): pins the padding decision in
+ * sha256Final against an independent implementation. The FIPS vectors plus the self-consistency
+ * test above could not tell `bufLen > 56` from `bufLen >= 56` (a 55-byte message). */
+TEST(sha256PaddingBoundaryVectors) {
+    uint8_t msg[SHA256_BOUNDARY_MAX_LEN];
+    for (size_t i = 0; i < sizeof(msg); i++) {
+        msg[i] = (uint8_t)(i * 13 + 7);
+    }
+    for (size_t i = 0; i < SHA256_BOUNDARY_VECTOR_COUNT; i++) {
+        const Sha256LenVector *v = &sha256BoundaryVectors[i];
+        ASSERT_TRUE(v->len <= sizeof(msg));
+        uint8_t d[32];
+        sha256Hex(msg, v->len, d);
+        if (memcmp(d, v->digest, 32) != 0) {
+            fprintf(stderr, "  sha256 boundary vector len %zu differs\n", v->len);
+        }
+        ASSERT_TRUE(memcmp(d, v->digest, 32) == 0);
+    }
+}
+
 TEST(sha256UnalignedInputAndZeroLengthUpdate) {
     uint8_t raw[80 + 8];
     for (size_t i = 0; i < sizeof(raw); i++) {

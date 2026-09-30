@@ -66,13 +66,33 @@ KTEST(sha256_fips180_vectors) {
             ktestFail(ktestCtx, __FILE__, __LINE__, "sha256 vector %s differs", v->name);
             return;
         }
-        /* Split at every offset in the first 70 bytes (covers a block boundary for the longest). */
+        /* Split at every offset of the message (the longest is 56 bytes, so this exercises the
+         * buffered partial-block path; the 1000-byte chunks below cross block edges). */
         for (size_t s = 0; s <= v->len; s++) {
             sha256Init(&ctx);
             sha256Update(&ctx, v->msg, s);
             sha256Update(&ctx, v->msg + s, v->len - s);
             sha256Final(&ctx, d);
             KTEST_ASSERT(bytesEqual(d, v->digest, sizeof(d)));
+        }
+    }
+
+    /* Padding-boundary lengths (55 = exactly one block with padding, 56..63 need a second
+     * block, ...): none of the FIPS messages has them (crypto-vectors.h). */
+    static uint8_t msg[SHA256_BOUNDARY_MAX_LEN];
+    for (size_t i = 0; i < sizeof(msg); i++) {
+        msg[i] = (uint8_t)(i * 13 + 7);
+    }
+    for (size_t i = 0; i < SHA256_BOUNDARY_VECTOR_COUNT; i++) {
+        const Sha256LenVector *v = &sha256BoundaryVectors[i];
+        KTEST_ASSERT(v->len <= sizeof(msg));
+        sha256Init(&ctx);
+        sha256Update(&ctx, msg, v->len);
+        sha256Final(&ctx, d);
+        if (!bytesEqual(d, v->digest, sizeof(d))) {
+            ktestFail(ktestCtx, __FILE__, __LINE__, "sha256 boundary len %u differs",
+                      (unsigned)v->len);
+            return;
         }
     }
 
