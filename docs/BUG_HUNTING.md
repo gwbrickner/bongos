@@ -100,8 +100,10 @@ make clean && make            # leave a debug build behind
 **Symbolizing an address by hand:** `llvm-addr2line -f -e build/kernel/kernel.elf <addr>` prints
 the function name. The file:line shows as `??:0` without DWARF, so to find the instruction,
 disassemble around it with `llvm-objdump -d --start-address=<addr-0x40> --stop-address=<addr+0x10>
-build/kernel/kernel.elf`. Once KASLR lands (M2.6), subtract the `kaslr slide=` value printed
-at boot first.
+build/kernel/kernel.elf`. The kernel is KASLR-slid on every boot (M2.6): subtract the slide first,
+i.e. use `address - slide`. The slide is on the loader's serial line `loader: kaslr: slide=0x...`, on
+the kernel's `[info] kaslr: virtBase=... slide=...` line, and in the first line of every backtrace
+(`kaslr slide 0x... (link address = address - slide)`). Backtrace symbol names already account for it.
 
 #DF, NMI, and #MC already run on their own IST stacks (M2.1, `cpu-init.c`). Still to come:
 guard pages under each kernel stack (arriving with threads), and lock debugging (owner CPU
@@ -168,13 +170,22 @@ Connect to it with `nc -U build/run/<name>.monitor`.
 For humans, `make gdb` starts QEMU paused with the gdbstub on `:1234`, then attaches an
 interactive gdb. **Agents must use batch mode** (an interactive gdb never returns):
 ```sh
-tests/harness/run-qemu.sh --image build/bongos-ktest.img --gdb --name dbg   # returns at once
+tests/harness/run-qemu.sh --image build/bongos-kaslroff.img --gdb --name dbg   # returns at once
 timeout 120 gdb -batch build/kernel/kernel.elf -ex "target remote :1234" \
     -ex "hbreak kernelMain" -ex continue -ex "info registers rip rsp cr3" -ex "bt" -ex "x/8gx \$rsp"
 kill "$(cat build/run/dbg.pid)"                                               # always clean up
 ```
+**KASLR (M2.6):** every other image (`build/bongos.img`, `build/bongos-ktest.img`) slides the kernel
+by a random multiple of 2 MiB on each boot, so `hbreak kernelMain` with `kernel.elf` at its link
+addresses would never hit. Use `build/bongos-kaslroff.img` (the ktest image with `kaslr = off`,
+slide 0, `ktest=all`) as above. To debug a slid boot instead, the slide must be known before symbols
+can be loaded: it is on the loader's serial line `loader: kaslr: slide=0x<hex>`
+(`build/logs/<name>.serial.log`). So attach to a VM that is already past the loader (a hang, or a
+run paused after that line appeared), then run
+`-ex "symbol-file build/kernel/kernel.elf -o 0x<slide>"` before any `bt`/`hbreak` on kernel symbols.
+Every boot picks a new slide, so a slide read from an earlier run never applies to the next one.
 The entry points are `kernelEntry` (asm) and `kernelMain` (C). Check other symbols with
-`nm build/kernel/kernel.elf | grep <name>`.
+`nm build/kernel/kernel.elf | grep <name>` (add the slide to those addresses on a slid boot).
 
 Tips:
 - Use **`hbreak`** early in boot and around paging changes. Software breakpoints write `int3`

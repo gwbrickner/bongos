@@ -3,24 +3,20 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-09-30 (M2.6 in progress: steps 1-5 done)
+**Last updated:** 2026-09-30 (M2.6: steps 1-6 done and swept; only the finish gate remains)
 
 ## Next step
-Start **M2.6 KASLR + kernel RNG** (`needs-owner`). Its Needs, M2.4 and M2.5, are done.
-1. `git fetch origin main && git switch -c m2-6-kaslr-rng origin/main`
-2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.6.md`, then write its Plan from ROADMAP.md's
-   M2.6 steps and ARCHITECTURE §5.3/§6.6. Every step is **risky** (the boot handoff, and
-   crypto), so consult `architect` before any code.
-3. The scope, in short: both loaders pick a 2 MiB-aligned slide from the random seed and apply
-   the `--emit-relocs` relocations (`R_X86_64_64`, `R_X86_64_32S`), honoring `kaslr=off`. The
-   kernel gets an entropy pool (RDSEED/RDRAND, the boot seed), a ChaCha20 CSPRNG, and
-   `randomGetBytes`. The symbolizer and panic output account for the slide. The ktests: two
-   boots give different `kernelVirtBase` (a harness check), an RNG sanity test, and the RFC 8439
-   vectors. Done when this passes under both firmwares, and `kaslr=off` gives the fixed base.
-4. The first commit also adds M2.4's Done-when ktests to `_check-ktest-pass` (see Open leads).
+**M2.6 finish gate** (`needs-owner`; branch `claude/amazing-cray-tovyk0`), CLAUDE.md "Finishing a
+milestone": (1) `qemu-tester`: `make format-check`, `host-tests`, `test`, `test-full` on HEAD;
+(2) `bug-sweeper` finish mode vs `origin/main`, until `SWEEP: PASS`; (3) `reviewer` on
+`git diff origin/main...HEAD`; (4) `make screenshot SHOT=docs/screenshots/M2.6.png` and the `FW=bios`
+`M2.6-bios.png`, open both; (5) tick M2.6 in ROADMAP.md, write the log's Summary/Verification,
+update this file; (6) PR from the template (`needs-owner: yes`). Then M3.1 ACPI tables.
 
 ## Current milestone
-**M2.6 KASLR + kernel RNG** in progress on branch `claude/amazing-cray-tovyk0` (log: `docs/logs/M2.6.md`). Architect design done (in the log); steps 1 (loader relocation code), 2 (kernel slide awareness), 3 (both loaders slide, `kaslr-check.sh`, kaslr ktests) and 4 (`libs/crypto` ChaCha20/SHA-256/`cryptoWipe`) are committed and swept; step 5 (kernel RNG: `random-core`/`random`, `archHwRandom*`, seed lifecycle, `pmmReclaimLoaderMemory(void)` reclaiming the BootInfo page per D-123, 3 required `random_*` ktests, host tests) is committed and green but not yet swept. Next: `bug-sweeper` step mode on step 5, then step 6 (docs, D-120..D-125).
+**M2.6 KASLR + kernel RNG**, log `docs/logs/M2.6.md`, decisions D-120..D-126. Steps 1-6 (loader
+relocation, kernel slide awareness, loaders wired, `libs/crypto`, kernel RNG + seed lifecycle, docs)
+are done and steps 1-5 swept. Remaining: the finish gate above.
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -49,6 +45,13 @@ _(none)_
   so both stay zero. Suggestion: use the UEFI PartitionInfo protocol plus a BlockIo
   GPT-header read (the BIOS loader already has a GPT reader, D-105), in M6.4 (which adds the
   kernel's own GPT scanner, per D-056).
+- **M2.6:** accept 8 bits of KASLR entropy (512 MiB window, D-121)? Keep the canary on D-077's seed
+  fold, or move it to `randomGetBytes` later (the serial-printed slide leaks ~8 bits of that seed)?
+  Is falling back to an unslid boot on a relocation failure (D-120) acceptable, versus refusing?
+- **M2.6 vector provenance (needs network):** `libs/crypto/test/crypto-vectors.h` could not be diffed
+  against the RFC text (rfc-editor.org was denied by the proxy). Someone with network access should
+  diff it against RFC 8439 2.3.2/2.4.2/A.1/A.2 and FIPS 180-4; the A.2 #2/#3 plaintexts are from
+  memory (expected outputs came from two independent implementations).
 
 ## Waiting on owner (hardware checks and other owner-only steps)
 - **Default the main session to Sonnet** (D-117). Adding `"model": "sonnet"` to
@@ -72,9 +75,6 @@ _(none)_
   `prev` dereference), `kernel/test/kmalloc_test.c:68,143,365`, and
   `kernel/test/pmm_test.c:405`. The test-file hits are probably deliberate misuse, but none has
   been triaged yet.
-- M2.4's Done-when ktests (slab, kmalloc, vmalloc) aren't in `mk/test.mk`'s
-  `_check-ktest-pass` required list, unlike M2.1–M2.3. CLAUDE.md now requires this. Add them
-  (and confirm each one fails under a mutation) in M2.6's first commit, or in a sweep.
 - M2.5 deferred some items on purpose (D-114), including a PM-side diagnostic IDT in stage2
   and dual teletype+serial logging before VBE is set up.
 
