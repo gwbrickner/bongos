@@ -1,6 +1,7 @@
 /* libs/gfx damage regions (M12.2, D-144): a small fixed set of disjoint rectangles that always
  * covers everything added to it. Compositors collect per-window damage here and repaint only the
- * covered area. No allocation; every operation is O(16^2) at worst and never fails. */
+ * covered area. No allocation, no failure path, and bounded work: an add is O(16^3) rect
+ * comparisons at worst (a merge can cascade), a union is at most 16 adds. */
 #ifndef LIBS_GFX_REGION_H
 #define LIBS_GFX_REGION_H
 
