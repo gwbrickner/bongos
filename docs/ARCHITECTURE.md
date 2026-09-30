@@ -1119,7 +1119,9 @@ against tables dumped from the reference PC (`acpidump` from a Linux live USB, s
   image decoders for PNG, JPEG (baseline and progressive), BMP, and GIF. Implemented so far
   (M12.2): premultiplied ARGB32 canvas with a clip stack, exact-area anti-aliased fills (nonzero
   and even-odd), strokes, A8 box blur and drop shadows, damage regions, and the PNG and BMP
-  decoders (D-141..D-147); JPEG and GIF arrive in M12.7. It is userland/host only (never linked
+  decoders (D-141..D-147). M12.7 added the JPEG decoder (SOF0/1/2, Huffman, 8-bit gray/YCbCr/RGB,
+  exact integer pipeline) and the GIF decoder (87a/89a, streaming animation compositor)
+  (D-160..D-165). It is userland/host only (never linked
   into the kernel), uses float only for path geometry, and takes an allocator hook so it has no
   hidden libc dependency. The DEFLATE/zlib codec it uses lives in `libs/compress` (D-140).
 - **Apps:**

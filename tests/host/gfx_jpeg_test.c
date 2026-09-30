@@ -10,6 +10,7 @@
 #include "gfx/gfx.h"
 #include "gfx/jpeg-internal.h"
 #include "gfx_decode_testutil.h"
+#include "gfx_golden.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1060,6 +1061,150 @@ TEST(gfxJpegAllocationFailureSweep) {
             }
         }
     }
+    freeJFix(&fs);
+}
+
+/* ---- golden: JPEG and GIF over a checkerboard ---------------------------------------------- */
+
+/* A GIF writer just big enough for the golden: an 8-colour global palette, minimum code size 3,
+ * 4-bit codes, and a clear code every 5 literals so the code width never grows. */
+typedef struct {
+    uint8_t b[8192];
+    size_t n;
+} GifBuf;
+
+static void gbPut(GifBuf *g, const void *p, size_t n) {
+    memcpy(g->b + g->n, p, n);
+    g->n += n;
+}
+
+static void gbFrame(GifBuf *g, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t disposal,
+                    const uint8_t *idx) {
+    const uint8_t gce[] = {0x21, 0xF9, 0x04, (uint8_t)((disposal << 2) | 1), 10, 0, 0, 0};
+    gbPut(g, gce, sizeof(gce));
+    const uint8_t desc[] = {0x2C, (uint8_t)x, 0, (uint8_t)y, 0, (uint8_t)w, 0, (uint8_t)h, 0, 0, 3};
+    gbPut(g, desc, sizeof(desc));
+    uint8_t raw[4096];
+    size_t rn = 0;
+    uint32_t acc = 0;
+    int nb = 0, cnt = 0;
+#define GB_PUT(code)                                                                               \
+    do {                                                                                           \
+        acc |= (uint32_t)(code) << nb;                                                             \
+        nb += 4;                                                                                   \
+        while (nb >= 8) {                                                                          \
+            raw[rn++] = (uint8_t)(acc & 0xFF);                                                     \
+            acc >>= 8;                                                                             \
+            nb -= 8;                                                                               \
+        }                                                                                          \
+    } while (0)
+    GB_PUT(8);
+    for (uint32_t i = 0; i < w * h; i++) {
+        GB_PUT(idx[i]);
+        if (++cnt == 5 && i + 1 < w * h) {
+            GB_PUT(8);
+            cnt = 0;
+        }
+    }
+    GB_PUT(9);
+    if (nb > 0) {
+        raw[rn++] = (uint8_t)acc;
+    }
+#undef GB_PUT
+    for (size_t off = 0; off < rn; off += 255) {
+        uint8_t len = (uint8_t)(rn - off > 255 ? 255 : rn - off);
+        gbPut(g, &len, 1);
+        gbPut(g, raw + off, len);
+    }
+    uint8_t term = 0;
+    gbPut(g, &term, 1);
+}
+
+static void gifGolden(GifBuf *g) {
+    g->n = 0;
+    gbPut(g, "GIF89a", 6);
+    const uint8_t lsd[] = {64, 0, 48, 0, 0xF2, 0, 0};
+    gbPut(g, lsd, sizeof(lsd));
+    static const uint8_t pal[8][3] = {{255, 0, 255},   {220, 50, 40},  {40, 180, 60},
+                                      {50, 80, 220},   {240, 220, 60}, {50, 200, 210},
+                                      {250, 250, 250}, {30, 30, 40}};
+    gbPut(g, pal, sizeof(pal));
+    static uint8_t f0[64 * 48], f1[24 * 24], f2[28 * 20];
+    for (int y = 0; y < 48; y++) {
+        for (int x = 0; x < 64; x++) {
+            int dx = x - 32, dy = y - 24;
+            f0[y * 64 + x] = (uint8_t)(dx * dx + dy * dy < 400 ? 4 : 1 + ((x / 8 + y / 8) % 3));
+        }
+    }
+    for (int y = 0; y < 24; y++) {
+        for (int x = 0; x < 24; x++) {
+            int edge = x < 3 || y < 3 || x >= 21 || y >= 21;
+            int dx = x - 12, dy = y - 12;
+            f1[y * 24 + x] = (uint8_t)(edge ? 0 : (dx * dx + dy * dy < 25 ? 0 : 6 - ((x + y) & 1)));
+        }
+    }
+    for (int y = 0; y < 20; y++) {
+        for (int x = 0; x < 28; x++) {
+            f2[y * 28 + x] = (uint8_t)((x + y) % 5 == 0 ? 0 : 3 + (x / 7) % 3);
+        }
+    }
+    gbFrame(g, 0, 0, 64, 48, 1, f0);
+    gbFrame(g, 20, 10, 24, 24, 2, f1);
+    gbFrame(g, 30, 20, 28, 20, 1, f2);
+    const uint8_t trailer = 0x3B;
+    gbPut(g, &trailer, 1);
+}
+
+TEST(gfxGoldenJpegAndGifOverChecker) {
+    JFixSet fs;
+    ASSERT_TRUE(loadJFix(&fs));
+    enum { W = 208, H = 112 };
+    static uint32_t px[W * H];
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            px[y * W + x] = (((x / 8) + (y / 8)) & 1) ? 0xFFB8B8B8u : 0xFFF0F0F0u;
+        }
+    }
+    GfxSurface surf = {px, W, H, W};
+    GfxCanvas c;
+    ASSERT_EQ(gfxCanvasInit(&c, surf, NULL), STATUS_OK);
+    static const struct {
+        const char *name;
+        int32_t x;
+    } jpegs[] = {{"jg_nat_c420_64x48__seq_inter", 4},
+                 {"jg_nat_c444_64x48__prog_default", 72},
+                 {"jg_nat_gray1_64x48__seq_inter", 140}};
+    for (size_t i = 0; i < 3; i++) {
+        const JFix *x = findJFix(&fs, jpegs[i].name);
+        ASSERT_TRUE(x != NULL);
+        GfxImage img;
+        ASSERT_EQ(gfxImageDecode(x->data, x->dataLen, NULL, NULL, &img), STATUS_OK);
+        ASSERT_TRUE(pixelsMatch(x, &img));
+        GfxSurface src = gfxImageSurface(&img);
+        gfxBlit(&c, jpegs[i].x, 4, &src, (GfxRect){0, 0, src.width, src.height}, GFX_OP_SRC_OVER,
+                255);
+        gfxImageFree(&img);
+    }
+    /* GIF frames 0, 1 and 2 (the second clears its rect afterwards, so the third shows a hole) */
+    static GifBuf gb;
+    gifGolden(&gb);
+    GfxGif *g = NULL;
+    ASSERT_EQ(gfxGifOpen(gb.b, gb.n, NULL, NULL, &g), STATUS_OK);
+    ASSERT_EQ(gfxGifGetInfo(g).frameCount, 3u);
+    for (int f = 0; f < 3; f++) {
+        GfxGifFrame fr;
+        ASSERT_EQ(gfxGifNextFrame(g, &fr), STATUS_OK);
+        gfxBlit(&c, 4 + 68 * f, 64, &fr.canvas, (GfxRect){0, 0, 64, 48}, GFX_OP_SRC_OVER, 255);
+        if (f == 1) { /* the transparent ring of frame 1 shows frame 0 (yellow disc) */
+            ASSERT_EQ(fr.canvas.pixels[10 * 64 + 20], (uint32_t)0xFF000000u | 0xF0DC3Cu);
+        }
+        if (f == 2) { /* frame 1's rect was cleared: transparent unless frame 2 drew there */
+            ASSERT_EQ(fr.canvas.pixels[12 * 64 + 22], (uint32_t)0);
+        }
+    }
+    gfxGifClose(g);
+    gfxCanvasDestroy(&c);
+    ASSERT_TRUE(goldenCheck("gfx_jpeg_gif", &surf));
     freeJFix(&fs);
 }
 
