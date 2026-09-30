@@ -32,7 +32,7 @@ BIOS_CFLAGS := --target=i386-unknown-elf -m32 -march=i686 -std=c17 -ffreestandin
 
 BIOS_STAGE2_C_SOURCES := $(wildcard boot/bios/stage2/*.c)
 BIOS_STAGE2_HW_SOURCES := boot/common/hw/serial.c boot/common/hw/libc-shim.c boot/common/hw/cpu.c \
-                          boot/common/hw/menu-ui.c
+                          boot/common/hw/menu-ui.c boot/common/hw/loader-kaslr.c
 BIOS_STAGE2_COMMON_SOURCES := boot/common/bootmem.c boot/common/memmap.c boot/common/bootheap.c \
                                boot/common/boot-status.c boot/common/bootcrc32.c \
                                boot/common/bootgpt.c boot/common/bootfat.c boot/common/bootcfg.c \

@@ -17,6 +17,7 @@
 #include "elf64.h"
 #include "fbtext.h"
 #include "loader-cpu.h"
+#include "loader-kaslr.h"
 #include "loader-serial.h"
 #include "memmap.h"
 #include "menu.h"
@@ -255,6 +256,11 @@ _Noreturn void handoffRun(void) {
         handoffHalt("loader: halting\n");
     }
 
+    /* The random seed drives the KASLR slide below, so it is gathered here (right after the ELF
+     * is validated) rather than later; the same 64 bytes still go into BootInfo. */
+    uint64_t randomSeed[8];
+    handoffGatherRandomSeed(randomSeed);
+
     BootAllocList allocs;
     bootMemset(&allocs, 0, sizeof(allocs));
 
@@ -265,6 +271,18 @@ _Noreturn void handoffRun(void) {
         handoffHalt("loader: out of memory allocating the kernel image; halting\n");
     }
     bst = elfLoad(&elfImage, kernelFileBuf, (uint8_t *)(uintptr_t)kernelPhys);
+    if (bst != BOOT_OK) {
+        loaderSerialWriteString("loader: kernel.elf: ");
+        loaderSerialWriteString(bootStatusString(bst));
+        loaderSerialWriteString("\n");
+        handoffHalt("loader: halting\n");
+    }
+    /* KASLR (M2.6, D-120/D-121): relocate the loaded image from kernel.elf's --emit-relocs tables
+     * (the whole file is still in kernelFileBuf). Any failure falls back to an unslid boot. */
+    uint64_t kaslrSlide = 0;
+    bst = loaderKaslrApply(&elfImage, kernelFileBuf, kernelFile.size,
+                           (uint8_t *)(uintptr_t)kernelPhys, (const uint8_t *)randomSeed,
+                           entry.kaslr, &kaslrSlide);
     if (bst != BOOT_OK) {
         loaderSerialWriteString("loader: kernel.elf: ");
         loaderSerialWriteString(bootStatusString(bst));
@@ -287,8 +305,6 @@ _Noreturn void handoffRun(void) {
     }
 
     uint64_t rsdpPhys = handoffFindRsdp();
-    uint64_t randomSeed[8];
-    handoffGatherRandomSeed(randomSeed);
 
     /* The HHDM run set: only USABLE/ACPI_RECLAIM/ACPI_NVS from the E820 map, retyped to USABLE
      * (rank is irrelevant for this pass -- one type going in), then normalized/coalesced. */
@@ -358,6 +374,7 @@ _Noreturn void handoffRun(void) {
         .hhdmRunCount = nHhdmRuns,
         .elfImage = &elfImage,
         .kernelPhys = kernelPhys,
+        .slide = kaslrSlide,
         .trampPhys = trampPhys,
         .patEntry2Uncacheable = loaderCpuPatEntry2Uncacheable(),
     };
@@ -375,7 +392,7 @@ _Noreturn void handoffRun(void) {
         loaderSerialWriteString("\n");
     }
 
-    uint64_t entryVa = elfImage.entry;
+    uint64_t entryVa = elfImage.entry + kaslrSlide;
     uint64_t stackTopVa = BOOTINFO_HHDM_BASE + stackPhys +
                           (uint64_t)BOOT_HANDOFF_BOOT_STACK_PAGES * BOOT_HANDOFF_PAGE_SIZE;
     uint64_t bootInfoVa = BOOTINFO_HHDM_BASE + bootInfoPhys;
@@ -392,8 +409,9 @@ _Noreturn void handoffRun(void) {
         .fb = fb,
         .rsdpPhys = rsdpPhys,
         .kernelPhys = kernelPhys,
-        .kernelVirtBase = elfImage.linkBase,
+        .kernelVirtBase = elfImage.linkBase + kaslrSlide,
         .kernelSize = elfImage.span,
+        .kaslrSlide = kaslrSlide,
         .cmdlinePhys = cmdlinePhys,
         .hhdmBase = BOOTINFO_HHDM_BASE,
         .loaderTsc = loaderTsc,

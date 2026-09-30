@@ -92,7 +92,7 @@ BootStatus bootHandoffMapAll(PtBuilder *pt, const BootPtPlan *plan, BootFramebuf
             return bst;
         }
     }
-    BootStatus bst = ptMapElfImage(pt, plan->elfImage, plan->kernelPhys, 0);
+    BootStatus bst = ptMapElfImage(pt, plan->elfImage, plan->kernelPhys, plan->slide);
     if (bst != BOOT_OK) {
         return bst;
     }
@@ -148,7 +148,7 @@ void bootHandoffFillInfo(BootInfo *bi, const BootHandoffFields *fields) {
     bi->kernelPhysBase = fields->kernelPhys;
     bi->kernelVirtBase = fields->kernelVirtBase;
     bi->kernelSize = fields->kernelSize;
-    bi->kaslrSlide = 0;
+    bi->kaslrSlide = fields->kaslrSlide;
     bi->cmdlinePhys = fields->cmdlinePhys;
     bi->hhdmBase = fields->hhdmBase;
     bi->loaderTsc = fields->loaderTsc;
