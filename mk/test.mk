@@ -99,9 +99,13 @@ M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad kaslr_slide_con
                        sha256_fips180_vectors random_drbg_fast_key_erasure \
                        random_add_entropy_reseeds random_sanity \
                        random_drbg_key_erased_before_output random_boot_seed_wiped \
-                       hwrandom_matches_cpuid
+                       hwrandom_matches_cpuid random_boot_unique
+# random_boot_unique prints the first output of the key randomInit derived; every matrix log must
+# have exactly one such fingerprint and no two logs may share one, so an RNG that ignores the boot
+# seed, the TSC and the hardware words (identical output every boot) cannot pass (M2.6 finish
+# sweep: nothing else could see it, the global key is private).
 _check-ktest-pass:
-	@status=0; \
+	@status=0; fps=""; \
 	while read -r fw cpus mem; do \
 	    case "$$fw" in ''|\#*) continue ;; esac; \
 	    if [ -n "$$mem" ]; then name="$${fw}-$${cpus}cpu-$${mem}m"; else name="$${fw}-$${cpus}cpu"; fi; \
@@ -166,5 +170,17 @@ _check-ktest-pass:
 	        echo "make test: $$log does not contain backtracePrint's 'kaslr slide 0x...' header (ROADMAP M2.6 Done-when guarantee not met)"; \
 	        status=1; \
 	    fi; \
+	    fp=$$(tr -d '\r' < "$$log" 2>/dev/null | sed -n 's/^\[info\] random: ktest boot fingerprint 0x\([0-9a-f]\{16\}\)$$/\1/p'); \
+	    if [ "$$(printf '%s\n' "$$fp" | grep -c .)" != 1 ]; then \
+	        echo "make test: $$log does not contain exactly one 'random: ktest boot fingerprint 0x...' line (ROADMAP M2.6 Done-when guarantee not met)"; \
+	        status=1; \
+	    else \
+	        fps="$$fps $$fp"; \
+	    fi; \
 	done < "$(MATRIX)"; \
+	dups=$$(printf '%s\n' $$fps | sort | uniq -d); \
+	if [ -n "$$dups" ]; then \
+	    echo "make test: two matrix boots printed the same RNG fingerprint ($$dups): the kernel RNG is not seeded from per-boot entropy (ROADMAP M2.6 Done-when guarantee not met)"; \
+	    status=1; \
+	fi; \
 	exit $$status

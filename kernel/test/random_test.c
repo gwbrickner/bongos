@@ -9,6 +9,7 @@
 #include "crypto/chacha20.h"
 #include "drbg-vectors.h"
 #include "kernel-boot.h"
+#include "klog.h"
 #include "ktest.h"
 #include "random-core.h"
 #include "random.h"
@@ -32,6 +33,21 @@ static void setKeyTo0to31(RandomState *s) {
     for (int i = 0; i < 32; i++) {
         s->key[i] = DRBG_VECTOR_KEY_BYTE(i);
     }
+}
+
+/* The live RNG must be seeded from this boot's entropy, not a constant: every other test here would
+ * pass against an RNG that ignores its inputs (ChaCha20 output looks random under any key, and the
+ * global key is private). So the first output of the key randomInit derived is printed, and
+ * mk/test.mk's _check-ktest-pass requires the value to differ between every matrix boot (both
+ * firmwares; a false failure needs a 64-bit collision). Must run before anything reseeds the
+ * global RNG (reseeds stir in fresh RDRAND/TSC words, which would hide a constant boot seeding),
+ * hence the first test in this file and the generation checks. Printing it is harmless: the value
+ * is discarded, and fast key erasure replaces the key before randomU64 returns. */
+KTEST(random_boot_unique) {
+    KTEST_ASSERT_EQ(randomGeneration(), 1); /* only randomInit's reseed so far */
+    uint64_t v = randomU64();
+    KTEST_ASSERT_EQ(randomGeneration(), 1);
+    klogWrite(KLOG_INFO, "random", "ktest boot fingerprint 0x%016llx", (unsigned long long)v);
 }
 
 /* ChaCha20 with fast key erasure: known answers, the step structure, and that the key really is
