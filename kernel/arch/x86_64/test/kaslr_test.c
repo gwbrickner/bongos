@@ -1,7 +1,9 @@
 /* ktests for KASLR (M2.6, ARCHITECTURE §5.5/§6.6): the slide the loader reports agrees with where
  * the image really runs, the loader's relocations were applied, and the KSYM blob accounts for the
  * slide. These are meaningful at every slide, and stay correct (vacuously for the relocation
- * proofs) when the loader chose slide 0 or `kaslr = off` was configured. */
+ * proofs) when the loader chose slide 0 or `kaslr = off` was configured. Lives under
+ * kernel/arch/x86_64/test/ because it names x86-64 relocation types and uses inline assembly
+ * (`movq $sym` / `leaq sym(%rip)`), which ARCHITECTURE §4 keeps inside kernel/arch/. */
 #include "cmdline.h"
 #include "kernel-boot.h"
 #include "ksym.h"
