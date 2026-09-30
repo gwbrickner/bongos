@@ -51,7 +51,7 @@ Status gfxFillPathMask(GfxMask *m, const GfxPath *p, GfxFillRule rule, const Gfx
     if (p->error != STATUS_OK) {
         return p->error;
     }
-    if (m->data == NULL || m->width <= 0 || m->height <= 0 || m->stride < m->width) {
+    if (m == NULL || m->data == NULL || m->width <= 0 || m->height <= 0 || m->stride < m->width) {
         return STATUS_ERR_INVALID;
     }
     if (a == NULL) {

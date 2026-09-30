@@ -980,3 +980,23 @@ TEST(gfxFillPathMaskWiderThanBandBudget) {
     gfxPathFree(&p);
     free(md);
 }
+
+/* gfxFillPathMask's contract promises INVALID for a NULL or malformed mask, like gfxBlurBox:
+ * a NULL GfxMask pointer, NULL data, non-positive dimensions and a short stride are all rejected
+ * without touching memory. */
+TEST(gfxFillPathMaskRejectsNullAndMalformedMasks) {
+    GfxPath p;
+    gfxPathInit(&p, NULL);
+    ASSERT_EQ(gfxPathAddRect(&p, 0.0f, 0.0f, 4.0f, 4.0f), STATUS_OK);
+    ASSERT_EQ(gfxFillPathMask(NULL, &p, GFX_FILL_NONZERO, NULL), STATUS_ERR_INVALID);
+    uint8_t d[16] = {0};
+    const GfxMask bad[] = {{NULL, 4, 4, 4}, {d, 0, 4, 4}, {d, 4, 0, 4}, {d, 4, 4, 3}};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        GfxMask m = bad[i];
+        ASSERT_EQ(gfxFillPathMask(&m, &p, GFX_FILL_NONZERO, NULL), STATUS_ERR_INVALID);
+    }
+    for (size_t i = 0; i < sizeof(d); i++) {
+        ASSERT_EQ(d[i], (uint8_t)0);
+    }
+    gfxPathFree(&p);
+}
