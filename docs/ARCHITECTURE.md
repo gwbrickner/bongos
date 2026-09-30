@@ -250,7 +250,8 @@ empty `initrd =` or `cmdline =` in a section overrides an inherited non-empty va
 - `initrd` (path; built-in default: none; not yet loaded, D-067 -- M5.5)
 - `cmdline` (any bytes but NUL; built-in default: empty)
 - `resolution = auto | WIDTHxHEIGHT` (built-in default `auto`)
-- `kaslr = on | off` (built-in default `on`; no effect until M2.6)
+- `kaslr = on | off` (built-in default `on`; since M2.6 `off` boots the kernel at its link
+  address with slide 0, §5.5/§6.6)
 
 `timeout` (seconds, 0-3600, or `forever`; default 0 = no menu) and `default` (a 1-based index if
 all digits, else an exact entry name; default 1) are **global-only**. At most 9 `[entry]`

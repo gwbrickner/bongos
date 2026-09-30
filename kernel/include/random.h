@@ -20,10 +20,10 @@
  * or output directly, so no RNG output is a function of the seed that the KASLR slide and the
  * stack canary are also derived from in any way an observer of those can invert. The caller wipes
  * `seed` itself afterwards (cryptoWipe on the live BootInfo page, D-123). Logs
- * `random: seeded (hw words n/8 via RDSEED|RDRAND|none)` and, when n is 0, a WARN. Panics if
- * called twice. `noinline` so the hashing temporaries live in a frame that has returned before
- * anything else runs. Locks: takes the RNG lock. IRQ-safe: yes (but boot-time, BSP). May sleep:
- * no. */
+ * `random: seeded (hw words n/8 via RDSEED|RDRAND|RDSEED+RDRAND|none)` and, when n is 0, a WARN.
+ * Panics if called twice. `noinline` so the hashing temporaries live in a frame that has returned
+ * before anything else runs. Locks: takes the RNG lock. IRQ-safe: yes (but boot-time, BSP). May
+ * sleep: no. */
 void randomInit(const uint8_t seed[64]);
 
 /* Absorbs `n` bytes of caller-supplied entropy (interrupt timing, device noise, ...) into the
