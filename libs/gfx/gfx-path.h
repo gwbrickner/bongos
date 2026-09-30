@@ -64,4 +64,30 @@ Status gfxFillPath(GfxCanvas *c, const GfxPath *p, GfxFillRule rule, GfxColor co
  * GFX_SURFACE_MAX_DIM; past 131072 columns the scratch is one row, 9 bytes per column. */
 Status gfxFillPathMask(GfxMask *m, const GfxPath *p, GfxFillRule rule, const GfxAllocator *a);
 
+typedef enum { GFX_CAP_BUTT, GFX_CAP_SQUARE, GFX_CAP_ROUND } GfxCap;
+typedef enum { GFX_JOIN_BEVEL, GFX_JOIN_MITER, GFX_JOIN_ROUND } GfxJoin;
+
+typedef struct {
+    float width; /* total width; <= 0 draws nothing */
+    GfxCap cap;
+    GfxJoin join;
+    float miterLimit; /* SVG semantics: miter length / width; a sharper join falls back to bevel */
+} GfxStroke;
+
+/* Builds the outline of stroking `in` into `out` (which is reset first): one closed polygon per
+ * segment, join and cap, ALL WOUND THE SAME WAY, to be filled together with GFX_FILL_NONZERO so
+ * shared edges cancel and no seams appear (D-143). Curves are flattened to 0.1 px. Round joins
+ * and caps are short arc fans, not full circles, to keep the edge count down. A subpath with no
+ * length draws a dot for round caps, a square for square caps, and nothing for butt caps.
+ * Failure modes: `in`'s sticky error, INVALID (a non-finite stroke width or miter limit),
+ * NO_MEMORY. */
+Status gfxStrokeToPath(const GfxPath *in, const GfxStroke *s, GfxPath *out);
+
+/* gfxStrokeToPath + gfxFillPath (nonzero, SRC_OVER). Same failure modes as both. */
+Status gfxStrokePath(GfxCanvas *c, const GfxPath *p, const GfxStroke *s, GfxColor col);
+
+/* A butt-capped, bevel-joined line segment of the given width. */
+Status gfxStrokeLine(GfxCanvas *c, float x0, float y0, float x1, float y1, float width,
+                     GfxColor col);
+
 #endif

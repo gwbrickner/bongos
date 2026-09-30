@@ -50,6 +50,12 @@ void gfxEdgeListAdd(GfxEdgeList *l, int32_t x0, int32_t y0, int32_t x1, int32_t 
  * pixels. Every subpath is closed implicitly. Returns l->error. */
 Status gfxFlattenPath(const GfxPath *p, int32_t originX, int32_t originY, GfxEdgeList *l);
 
+/* Cubic subdivision to 0.1 px (shared by the fill flattener and the stroker). `fn` is called for
+ * each point after (x0,y0); the last call is exactly (x3,y3). */
+typedef void (*GfxPointFn)(void *ctx, float x, float y);
+void gfxSubdivideCubic(float x0, float y0, float x1, float y1, float x2, float y2, float x3,
+                       float y3, GfxPointFn fn, void *ctx);
+
 /* Called once per output row segment: coverage `cov[0..n)` (0..255) for pixels x..x+n-1 of row y.
  */
 typedef void (*GfxSpanFn)(void *ctx, int32_t y, int32_t x, const uint8_t *cov, int32_t n);

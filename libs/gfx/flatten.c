@@ -120,9 +120,10 @@ static float absf(float v) {
 
 /* Cubic from (x0,y0): the segment count n is the smallest integer with 4*n^2*tol >= 3*M, where M
  * bounds the second difference (the flatness error of n uniform pieces is <= 0.75*M/n^2). Points
- * are evaluated directly in Bernstein form (no forward differencing, which accumulates error). */
-static void flatCubic(Flat *f, float x0, float y0, float x1, float y1, float x2, float y2, float x3,
-                      float y3) {
+ * are evaluated directly in Bernstein form (no forward differencing, which accumulates error).
+ * Calls fn for the n points after (x0,y0), the last being exactly (x3,y3). */
+void gfxSubdivideCubic(float x0, float y0, float x1, float y1, float x2, float y2, float x3,
+                       float y3, GfxPointFn fn, void *ctx) {
     float m1 = absf(x0 - 2.0f * x1 + x2) + absf(y0 - 2.0f * y1 + y2);
     float m2 = absf(x1 - 2.0f * x2 + x3) + absf(y1 - 2.0f * y2 + y3);
     float m = m1 > m2 ? m1 : m2;
@@ -134,11 +135,19 @@ static void flatCubic(Flat *f, float x0, float y0, float x1, float y1, float x2,
         float t = (float)i / (float)n;
         float u = 1.0f - t;
         float b0 = u * u * u, b1 = 3.0f * u * u * t, b2 = 3.0f * u * t * t, b3 = t * t * t;
-        float px = b0 * x0 + b1 * x1 + b2 * x2 + b3 * x3;
-        float py = b0 * y0 + b1 * y1 + b2 * y2 + b3 * y3;
-        flatLine(f, toFixed(px, f->ox), toFixed(py, f->oy));
+        fn(ctx, b0 * x0 + b1 * x1 + b2 * x2 + b3 * x3, b0 * y0 + b1 * y1 + b2 * y2 + b3 * y3);
     }
-    flatLine(f, toFixed(x3, f->ox), toFixed(y3, f->oy));
+    fn(ctx, x3, y3);
+}
+
+static void flatPoint(void *ctx, float x, float y) {
+    Flat *f = ctx;
+    flatLine(f, toFixed(x, f->ox), toFixed(y, f->oy));
+}
+
+static void flatCubic(Flat *f, float x0, float y0, float x1, float y1, float x2, float y2, float x3,
+                      float y3) {
+    gfxSubdivideCubic(x0, y0, x1, y1, x2, y2, x3, y3, flatPoint, f);
 }
 
 Status gfxFlattenPath(const GfxPath *p, int32_t originX, int32_t originY, GfxEdgeList *l) {
