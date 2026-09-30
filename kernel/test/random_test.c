@@ -9,7 +9,9 @@
 #include "ktest.h"
 #include "random-core.h"
 #include "random.h"
+#include "vmalloc.h"
 
+#include <arch/trap.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -94,6 +96,41 @@ KTEST(random_drbg_fast_key_erasure) {
     KTEST_ASSERT(bytesEqual(before, s.key, 32));
     randomCoreGenerate(&s, out, 1);
     KTEST_ASSERT(!bytesEqual(before, s.key, 32));
+}
+
+typedef struct {
+    RandomState *s;
+    uint8_t *out;
+    size_t n;
+} RandomGenerateArgs;
+
+static void randomGenerateTrigger(void *arg) {
+    RandomGenerateArgs *a = (RandomGenerateArgs *)arg;
+    randomCoreGenerate(a->s, a->out, a->n);
+}
+
+/* Fast key erasure means the key is gone before any output leaves the generator: a step whose
+ * output copy faults part-way (here: the caller's buffer runs into a vmalloc guard page, caught
+ * with archTrapCatch) must already have replaced the key, or the next call would hand out the very
+ * bytes the first caller already received. */
+KTEST(random_drbg_key_erased_before_output) {
+    uint8_t *page = (uint8_t *)vmalloc(4096, 0);
+    KTEST_ASSERT(page != NULL);
+    RandomState s;
+    setKeyTo0to31(&s);
+    RandomGenerateArgs args = {&s, page + 4096 - 16, 64}; /* 16 bytes fit, byte 17 faults */
+    TrapCatchInfo info;
+    bool caught = archTrapCatch(TRAP_CATCH_VEC(14), randomGenerateTrigger, &args, &info);
+    KTEST_ASSERT(caught);
+    KTEST_ASSERT_EQ(info.cr2, (uint64_t)(uintptr_t)(page + 4096));
+    KTEST_ASSERT(bytesEqual(page + 4096 - 16, drbgVectorOut64, 16)); /* what the caller got */
+    KTEST_ASSERT(bytesEqual(s.key, drbgVectorNewKey, sizeof(s.key)));
+
+    /* And so the retry is fresh output, not a replay of those 16 bytes. */
+    uint8_t again[16];
+    randomCoreGenerate(&s, again, sizeof(again));
+    KTEST_ASSERT(!bytesEqual(again, drbgVectorOut64, sizeof(again)));
+    vfree(page);
 }
 
 /* Entropy added to the live RNG is picked up by a reseed: randomGeneration() moves exactly when

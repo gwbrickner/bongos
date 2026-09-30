@@ -97,7 +97,8 @@ endif
 M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad kaslr_slide_consistent \
                        kaslr_relocs_applied chacha20_rfc8439_block chacha20_rfc8439_encrypt \
                        sha256_fips180_vectors random_drbg_fast_key_erasure \
-                       random_add_entropy_reseeds random_sanity
+                       random_add_entropy_reseeds random_sanity \
+                       random_drbg_key_erased_before_output
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus mem; do \

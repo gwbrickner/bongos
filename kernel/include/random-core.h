@@ -51,10 +51,12 @@ void randomCoreReseed(RandomState *s);
 /* Writes `n` pseudo-random bytes to `out` using fast key erasure. Each step of up to
  * RANDOM_STEP_MAX bytes computes ceil((32 + m) / 64) ChaCha20 blocks (counters 0.., zero nonce)
  * under the current key FIRST; bytes [0, 32) of the keystream become the next key and the m bytes
- * after them are the output; only then is the key replaced and the keystream wiped. So a later
- * compromise of the state reveals nothing about earlier output. `n` == 0 writes nothing and does
- * not step. The state must have been seeded (generation > 0) -- the core does not check; random.c
- * does. `out` must not overlap `s`. No locks, may not sleep, IRQ-safe, cannot fail. */
+ * after them are the output. The key is replaced before any output byte is written to `out`
+ * (a fault part-way through that copy cannot make the same bytes come out again), then the
+ * keystream is wiped. So a later compromise of the state reveals nothing about earlier output. `n`
+ * == 0 writes nothing and does not step. The state must have been seeded (generation > 0) -- the
+ * core does not check; random.c does. `out` must not overlap `s`. No locks, may not sleep,
+ * IRQ-safe, cannot fail. */
 void randomCoreGenerate(RandomState *s, void *out, size_t n);
 
 #endif

@@ -74,8 +74,11 @@ static void generateStep(RandomState *s, uint8_t *out, size_t m) {
     for (size_t b = 1; b < blocks; b++) {
         chacha20Block(s->key, (uint32_t)b, zeroNonce, ks + b * CHACHA20_BLOCK_SIZE);
     }
-    copyBytes(out, ks + CHACHA20_KEY_SIZE, m);
+    /* The key is replaced BEFORE a single output byte reaches the caller's buffer: if that copy
+     * faults part-way (and the fault is ever recovered), the state has still moved on, so the
+     * bytes the caller already got can never be produced again. */
     copyBytes(s->key, ks, CHACHA20_KEY_SIZE);
+    copyBytes(out, ks + CHACHA20_KEY_SIZE, m);
     cryptoWipe(ks, sizeof(ks));
 }
 
