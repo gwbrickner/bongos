@@ -6,12 +6,15 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-09-30 (M2.6: steps 1-6 done and swept; only the finish gate remains)
 
 ## Next step
-**M2.6 finish gate** (`needs-owner`; branch `claude/amazing-cray-tovyk0`), CLAUDE.md "Finishing a
-milestone": (1) `qemu-tester`: `make format-check`, `host-tests`, `test`, `test-full` on HEAD;
-(2) `bug-sweeper` finish mode vs `origin/main`, until `SWEEP: PASS`; (3) `reviewer` on
-`git diff origin/main...HEAD`; (4) `make screenshot SHOT=docs/screenshots/M2.6.png` and the `FW=bios`
-`M2.6-bios.png`, open both; (5) tick M2.6 in ROADMAP.md, write the log's Summary/Verification,
-update this file; (6) PR from the template (`needs-owner: yes`). Then M3.1 ACPI tables.
+**M2.6 finish gate** (`needs-owner`; branch `claude/bold-hawking-dzmwlg`, which carries the M2.6 work
+merged with `origin/main`), CLAUDE.md "Finishing a milestone". Gate step 1 is done: `qemu-tester`
+reported `make format-check`, `host-tests` (503/503), `test` and `test-full` passing on the merge
+commit. Step 2 is in progress: `bug-sweeper` finish mode was cut off by a rate limit and resumed; it
+had committed `044b502` (random_get_bytes_long_request) and `a66c5b7` (RFC 8439 vectors
+cross-checked). Remaining: (2) wait for `SWEEP: PASS` in `docs/sweeps/M2.6.md` (rerun until it
+does); (3) `reviewer` on `git diff origin/main...HEAD`; (4) `make screenshot SHOT=docs/screenshots/M2.6.png`
+and the `FW=bios` `M2.6-bios.png`, open both; (5) tick M2.6 in ROADMAP.md, write the log's
+Summary/Verification, update this file; (6) PR from the template (`needs-owner: yes`). Then M3.1.
 
 ## Current milestone
 **M2.6 KASLR + kernel RNG**, log `docs/logs/M2.6.md`, decisions D-120..D-126. Steps 1-6 (loader
