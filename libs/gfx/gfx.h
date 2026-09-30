@@ -99,7 +99,8 @@ void gfxFillRect(GfxCanvas *c, GfxRect r, GfxColor col, GfxOp op);
 void gfxBlit(GfxCanvas *c, int32_t dx, int32_t dy, const GfxSurface *src, GfxRect srcRect, GfxOp op,
              uint8_t alpha);
 
-/* SRC_OVER of `col` through the mask's coverage, with the mask's (0,0) at (dx, dy). */
+/* SRC_OVER of `col` through the mask's coverage, with the mask's (0,0) at (dx, dy). An invalid mask
+ * (NULL data, non-positive size, stride < width) draws nothing. */
 void gfxFillMask(GfxCanvas *c, int32_t dx, int32_t dy, const GfxMask *m, GfxColor col);
 
 #endif

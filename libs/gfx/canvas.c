@@ -180,7 +180,7 @@ void gfxBlit(GfxCanvas *c, int32_t dx, int32_t dy, const GfxSurface *src, GfxRec
 }
 
 void gfxFillMask(GfxCanvas *c, int32_t dx, int32_t dy, const GfxMask *m, GfxColor col) {
-    if (m == NULL || m->data == NULL || m->width <= 0 || m->height <= 0) {
+    if (m == NULL || m->data == NULL || m->width <= 0 || m->height <= 0 || m->stride < m->width) {
         return;
     }
     int64_t ddx = (int64_t)dx + c->originX, ddy = (int64_t)dy + c->originY;

@@ -559,3 +559,22 @@ TEST(gfxEntryPointsSanitizeExactly) {
     ASSERT_EQ(fixturePx(&f, 0, 0), 0u);
     fixtureFree(&f);
 }
+
+/* A mask whose stride is below its width is invalid (as gfxFillPathMask already says) and draws
+ * nothing, instead of reading past the end of its last row. */
+TEST(gfxFillMaskRejectsShortStride) {
+    uint8_t *md = malloc(4 * 3); /* stride 3 x height 4, but width 5 */
+    ASSERT_TRUE(md != NULL);
+    memset(md, 255, 4 * 3);
+    GfxMask m = {md, 5, 4, 3};
+    Fixture f;
+    ASSERT_TRUE(fixtureInit(&f, 8, 8, 0xFF000000u));
+    gfxFillMask(&f.c, 0, 0, &m, 0xFFFFFFFFu);
+    for (int32_t y = 0; y < 8; y++) {
+        for (int32_t x = 0; x < 8; x++) {
+            ASSERT_EQ(fixturePx(&f, x, y), 0xFF000000u);
+        }
+    }
+    fixtureFree(&f);
+    free(md);
+}
