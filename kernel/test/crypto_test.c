@@ -33,7 +33,12 @@ KTEST(chacha20_rfc8439_encrypt) {
     static uint8_t out[512];
     for (size_t i = 0; i < CHACHA20_XOR_VECTOR_COUNT; i++) {
         const ChaCha20XorVector *v = &chacha20XorVectors[i];
-        KTEST_ASSERT(v->len <= sizeof(out));
+        /* The tail after `len` (up to a whole block) must stay untouched: a final partial block
+         * written out in full would otherwise go unnoticed in this oversized buffer. */
+        KTEST_ASSERT(v->len + CHACHA20_BLOCK_SIZE <= sizeof(out));
+        for (size_t j = 0; j < sizeof(out); j++) {
+            out[j] = 0xEE;
+        }
         KTEST_ASSERT(chacha20Xor(v->key, v->counter, v->nonce, v->plaintext, out, v->len) ==
                      STATUS_OK);
         if (!bytesEqual(out, v->ciphertext, v->len)) {
@@ -44,6 +49,13 @@ KTEST(chacha20_rfc8439_encrypt) {
         if (!bytesEqual(out, v->plaintext, v->len)) {
             ktestFail(ktestCtx, __FILE__, __LINE__, "in-place decrypt %s differs", v->name);
             return;
+        }
+        for (size_t j = v->len; j < v->len + CHACHA20_BLOCK_SIZE; j++) {
+            if (out[j] != 0xEE) {
+                ktestFail(ktestCtx, __FILE__, __LINE__, "vector %s: byte %u past the end written",
+                          v->name, (unsigned)(j - v->len));
+                return;
+            }
         }
     }
     const ChaCha20XorVector *v = &chacha20XorVectors[0];
