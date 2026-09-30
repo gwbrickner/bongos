@@ -90,8 +90,11 @@ endif
 # (tests/harness/ktest-boot.cfg) leaves KASLR at its default (on), so a loader that fell back
 # ("kaslr: disabled") or stopped sliding fails here (tests/harness/kaslr-check.sh, run by `make
 # test`/`test-full` after the matrix, checks the slide values across several boots and kaslr=off).
+# The crypto primitives' vector ktests (kernel/test/crypto_test.c, vectors in
+# libs/crypto/test/crypto-vectors.h) are required too: they are the CSPRNG's foundation.
 M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad kaslr_slide_consistent \
-                       kaslr_relocs_applied
+                       kaslr_relocs_applied chacha20_rfc8439_block chacha20_rfc8439_encrypt \
+                       sha256_fips180_vectors
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus mem; do \

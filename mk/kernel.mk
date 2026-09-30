@@ -11,13 +11,15 @@ KERNEL_AS := nasm
 # -I order: kernel/include (portable headers, ktest/klog/panic/uapi/sections/arch interface),
 # kernel/arch/x86_64/include (the x86 arch backend behind kernel/include/arch/*.h, D-062),
 # kernel (so e.g. "drivers/serial/uart16550.h" resolves without a relative path), and
-# boot/common/include (the shared BootInfo ABI struct, ARCHITECTURE §5.3).
+# boot/common/include (the shared BootInfo ABI struct, ARCHITECTURE §5.3), libs/crypto/include
+# ("crypto/chacha20.h" etc., M2.6) and libs/crypto/test (crypto-vectors.h, shared with the host
+# tests; only kernel/test/crypto_test.c includes it).
 KERNEL_CFLAGS := --target=x86_64-unknown-elf -std=c17 -ffreestanding -nostdlib -mno-red-zone \
                  -mgeneral-regs-only -mcmodel=kernel -fno-pic -fno-omit-frame-pointer \
                  -fstack-protector-strong -fno-asynchronous-unwind-tables -fno-unwind-tables \
                  -mstack-protector-guard=global \
                  -Ikernel/include -Ikernel/arch/x86_64/include -Ikernel -Iboot/common/include \
-                 -I$(BUILD)/include -MMD -MP \
+                 -Ilibs/crypto/include -Ilibs/crypto/test -I$(BUILD)/include -MMD -MP \
                  -Wall -Wextra -Werror
 # Debug (default, RELEASE=0): -O1 + UBSan. Release: -O2, no UBSan (ARCHITECTURE §3).
 KERNEL_CFLAGS += $(if $(filter 1,$(RELEASE)),-O2,-O1)
@@ -47,7 +49,7 @@ KERNEL_UBSAN_FLAGS := $(if $(filter 1,$(RELEASE)),,-fsanitize=$(KERNEL_UBSAN_CHE
 KERNEL_C_SOURCES := $(sort $(wildcard kernel/core/*.c) $(wildcard kernel/drivers/serial/*.c) \
                            $(wildcard kernel/drivers/fbcon/*.c) $(wildcard kernel/test/*.c) \
                            $(wildcard kernel/arch/x86_64/*.c) $(wildcard kernel/arch/x86_64/test/*.c) \
-                           $(wildcard kernel/mm/*.c) \
+                           $(wildcard kernel/mm/*.c) $(wildcard libs/crypto/*.c) \
                            boot/common/fbtext.c boot/common/boot-status.c) $(CONSOLE_FONT_C)
 KERNEL_ASM_SOURCES := $(sort $(wildcard kernel/arch/x86_64/*.asm))
 
