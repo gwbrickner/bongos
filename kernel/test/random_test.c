@@ -203,11 +203,15 @@ KTEST(random_add_entropy_reseeds) {
     KTEST_ASSERT_EQ(s.generation, 2);
 }
 
-/* 64 KiB from the live RNG in 256-byte chunks: monobit, bit transitions and a byte chi-square,
- * all in integers, plus "consecutive 64-byte outputs differ". */
+/* 64 KiB from the live RNG: monobit, bit transitions and a byte chi-square, all in integers, plus
+ * "consecutive 64-byte outputs differ". The requests are 1300 bytes (steps of 512, 512 and 276
+ * inside randomGetBytes; the last one 536) into a buffer zeroed first, so a step randomGetBytes
+ * never writes shows up as a run of zero bytes, and a sentinel after each request catches an
+ * overrun (M2.6 finish sweep: with 256-byte requests, randomGetBytes' multi-step loop was never
+ * run by any test, and a loop that stopped advancing `p` passed). */
 KTEST(random_sanity) {
-    enum { TOTAL = 65536, CHUNK = 256 };
-    uint8_t buf[CHUNK];
+    enum { TOTAL = 65536, CHUNK = 1300, TAIL = 16 };
+    static uint8_t buf[CHUNK + TAIL];
     uint32_t hist[256];
     for (int i = 0; i < 256; i++) {
         hist[i] = 0;
@@ -216,9 +220,17 @@ KTEST(random_sanity) {
     int64_t transitions = 0;
     int prevBit = -1;
 
-    for (size_t got = 0; got < TOTAL; got += CHUNK) {
-        randomGetBytes(buf, CHUNK);
-        for (size_t i = 0; i < CHUNK; i++) {
+    for (size_t got = 0; got < TOTAL;) {
+        size_t req = TOTAL - got < CHUNK ? TOTAL - got : CHUNK;
+        for (size_t i = 0; i < sizeof(buf); i++) {
+            buf[i] = i < req ? 0x00 : 0xA5;
+        }
+        randomGetBytes(buf, req);
+        for (size_t i = req; i < sizeof(buf); i++) {
+            KTEST_ASSERT_EQ(buf[i], 0xA5); /* nothing written past the request */
+        }
+        got += req;
+        for (size_t i = 0; i < req; i++) {
             uint8_t b = buf[i];
             hist[b]++;
             for (int bit = 0; bit < 8; bit++) {
