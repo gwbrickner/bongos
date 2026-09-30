@@ -43,4 +43,12 @@ void fontKernResolve(GfxFont *f, uint32_t kernOff, uint32_t kernLen);
  * non-monotonic. `*start` and `*end` are relative to glyfOff; equal means an empty glyph. */
 Status fontGlyphRange(const GfxFont *f, uint16_t glyph, uint32_t *start, uint32_t *end);
 
+/* font-cache.c: the glyph cache key (face < 8, bin < 4, sizeQ6 <= 32768, so never 0 for a valid
+ * key: sizeQ6 >= 64) and its pure hash (splitmix64's finalizer, truncated; no seed, no pointers).
+ * Shared with the host tests so they can build colliding key sets. */
+static inline uint64_t fontCacheKey(uint32_t face, uint16_t glyph, uint32_t sizeQ6, uint32_t bin) {
+    return ((uint64_t)face << 34) | ((uint64_t)bin << 32) | ((uint64_t)sizeQ6 << 16) | glyph;
+}
+uint32_t fontCacheHash(uint64_t key);
+
 #endif

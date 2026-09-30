@@ -13,8 +13,8 @@
  * Bounded memory (no byte-budget wrapper is needed, every allocation has a static bound): an
  * outline is at most ~164 KB once built (~238 KB peak while it grows), a glyph path 65536
  * verbs, the raster edges 8192 x 20 B, a mask 4 MiB (2048 x 2048), the cache its budget plus
- * ~200 KB of tables, a layout at most 24 B per codepoint plus 28 B per line with the input
- * capped at 1 MiB. */
+ * ~310 KB of tables plus one temp mask, a layout at most 24 B per codepoint plus 28 B per line with
+ * the input capped at 1 MiB. */
 #ifndef LIBS_GFX_FONT_H
 #define LIBS_GFX_FONT_H
 
@@ -39,6 +39,7 @@
 #define GFX_FONT_MAX_SIZE_Q6          (512u * 64u) /* 512 px per em */
 #define GFX_GLYPH_CACHE_DEFAULT_BYTES (2u << 20)
 #define GFX_GLYPH_CACHE_MIN_BYTES     (64u << 10)
+#define GFX_GLYPH_CACHE_MAX_BYTES     (256u << 20)
 #define GFX_GLYPH_CACHE_MAX_ENTRIES   4096u
 #define GFX_GLYPH_CACHE_ENTRY_COST    64u
 
@@ -148,11 +149,15 @@ void gfxGlyphImageFree(GfxGlyphImage *g); /* NULL-safe and idempotent */
 
 typedef struct {
     uint64_t key;
-    int32_t lruPrev, lruNext, hashNext;
+    int32_t lruPrev, lruNext, hashNext; /* indices into entries, -1 = none */
+    uint32_t cost;                      /* w*h + GFX_GLYPH_CACHE_ENTRY_COST */
     GfxGlyphImage img;
-    uint32_t cost;
 } GfxGlyphCacheEntry;
 
+/* hits: lookups served from the cache (a negative entry counts). misses: renders attempted
+ * (NO_MEMORY included). bad: misses whose render gave INVALID or UNSUPPORTED. evictions: entries
+ * removed to make room (not temp frees, not Destroy). bytes: the sum of `cost` over the cached
+ * entries (the temp image and the tables are not counted). */
 typedef struct {
     uint64_t hits, misses, evictions, bad;
     uint32_t entries;
@@ -168,28 +173,33 @@ typedef struct {
     GfxGlyphScratch scratch;
     GfxGlyphCacheEntry *entries;
     int32_t *buckets;
-    uint32_t bucketMask;
+    uint32_t bucketMask, capacity; /* capacity = entries allocated */
     int32_t lruHead, lruTail, freeHead;
     size_t budget;
     GfxGlyphCacheStats stats;
     GfxGlyphImage temp; /* an oversized glyph, freed at the next Glyph call / Destroy */
 } GfxFontStack;
 
-/* `cacheBytes` 0 = default, otherwise clamped to at least GFX_GLYPH_CACHE_MIN_BYTES. INVALID for
- * nFaces 0 or > GFX_FONT_STACK_MAX_FACES or a NULL face; NO_MEMORY if the tables can't be
- * allocated. `a` may be NULL and must outlive the stack. On failure the stack owns nothing. */
+/* `cacheBytes` 0 = default, otherwise clamped to [GFX_GLYPH_CACHE_MIN_BYTES,
+ * GFX_GLYPH_CACHE_MAX_BYTES]. INVALID for a NULL `s`, nFaces 0 or > GFX_FONT_STACK_MAX_FACES, or a
+ * NULL or uninitialized (data == NULL) face; NO_MEMORY if the two tables can't be allocated. `a`
+ * may be NULL and must outlive the stack. On failure the stack is zeroed and owns nothing. Init on
+ * a live stack leaks it: Destroy first. */
 Status gfxFontStackInit(GfxFontStack *s, const GfxFont *const *faces, uint32_t nFaces,
                         size_t cacheBytes, const GfxAllocator *a);
-void gfxFontStackDestroy(GfxFontStack *s); /* frees everything; safe after a failed Init */
+/* NULL-safe; frees everything and zeroes *s. Safe after a failed Init and when called twice, not
+ * on a struct that was never initialized or zeroed. */
+void gfxFontStackDestroy(GfxFontStack *s);
 
 /* The first face (in stack order) with a nonzero glyph for `cp`; if none has one, face 0 and
  * glyph 0 (.notdef). Never fails. */
 void gfxFontStackPick(const GfxFontStack *s, uint32_t cp, uint32_t *face, uint16_t *glyph);
 
-/* The cached image for (face, glyph, sizeQ6, bin); *out stays valid until the next gfxFontStack*
- * call on `s`. A glyph that is INVALID or UNSUPPORTED is negatively cached and returns OK with an
- * empty image (stats.bad++). INVALID for a bad face, bin or size; NO_MEMORY is returned and not
- * cached. Never sleeps. */
+/* The cached image for (face, glyph, sizeQ6, bin); *out stays valid until the next
+ * gfxFontStackGlyph or gfxFontStackDestroy on `s`. A mask over an eighth of the budget is not
+ * cached: it is returned from a temp slot. A glyph that is INVALID or UNSUPPORTED is negatively
+ * cached and returns OK with an empty image (stats.bad++). INVALID for a bad face, bin or size;
+ * NO_MEMORY is returned and not cached. Never sleeps. */
 Status gfxFontStackGlyph(GfxFontStack *s, uint32_t face, uint16_t glyph, uint32_t sizeQ6,
                          uint32_t bin, const GfxGlyphImage **out);
 
