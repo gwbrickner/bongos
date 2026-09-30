@@ -787,7 +787,7 @@ your network, `ping` your router, and resolve and ping a public hostname.
 
 **Done when:** the screenshot test passes on the GOP framebuffer and on virtio-gpu.
 
-### [ ] M12.2 libs/gfx `[parallel-ok]`
+### [x] M12.2 libs/gfx `[parallel-ok]`
 **Needs:** M1.1
 1. Rasterizer: antialiased paths, lines, rects, rounded rects, box blur for shadows, alpha compositing, clipping, and damage-region utilities.
 2. Decoders: PNG and BMP. PNG needs inflate: create `libs/compress` (deflate/inflate) here if it doesn't exist yet. M11.4 then reuses it instead of writing its own.
