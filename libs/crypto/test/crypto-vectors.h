@@ -5,12 +5,17 @@
  * by the build sandbox's egress policy), so the RFC/FIPS text could not be copied. The inputs
  * (keys, counters, nonces, plaintexts) follow the RFC 8439 section 2.3.2 / 2.4.2 / A.1 / A.2 and
  * FIPS 180-4 example definitions; every expected output below was computed by two independent
- * implementations (OpenSSL via python `cryptography`, and a from-scratch Python reference) that
- * agreed byte for byte, and each set was checked against the leading bytes of the published
- * vectors that are well known (RFC 8439 2.1.1 quarter round, 2.3.2 block "10 f1 e7 e4 d1 3b 59
- * 15 ...", 2.4.2 ciphertext "6e 2e 35 9a 25 68 f9 80 ...", A.1 #1 keystream "76 b8 e0 ad a0 f1
- * 3d 90 ...", FIPS 180-4 SHA-256 digests of "", "abc", the 448-bit message and 1,000,000 'a').
- * Diff them against the RFC text when network is available. */
+ * implementations (the `openssl enc -chacha20` CLI of OpenSSL 3.0.13, and a from-scratch Python
+ * reference; python hashlib for SHA-256) that agreed byte for byte, and each set was checked
+ * against the leading bytes of the published vectors that are well known (RFC 8439 2.1.1
+ * quarter round, 2.3.2 block "10 f1 e7 e4 d1 3b 59 15 ...", 2.4.2 ciphertext "6e 2e 35 9a 25 68
+ * f9 80 ...", A.1 #1 keystream "76 b8 e0 ad a0 f1 3d 90 ...", FIPS 180-4 SHA-256 digests of "",
+ * "abc", the 448-bit message and 1,000,000 'a'). The M2.6 step-4 sweep re-derived every output
+ * the same way (all agree) and found them consistent with its own recollection of the RFC
+ * vectors, but that is still not a copy of the RFC text: the vectors named rfc8439_* / a1_* /
+ * a2_* are UNVERIFIED against the published RFC until someone diffs them against RFC 8439
+ * sections 2.3.2, 2.4.2, A.1 and A.2 (TODO, needs network). The SHA-256 padding-boundary set
+ * further down is not from any standard (see its comment). */
 #ifndef CRYPTO_TEST_VECTORS_H
 #define CRYPTO_TEST_VECTORS_H
 

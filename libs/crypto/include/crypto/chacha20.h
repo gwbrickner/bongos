@@ -21,12 +21,14 @@ void chacha20Block(const uint8_t key[CHACHA20_KEY_SIZE], uint32_t counter,
                    const uint8_t nonce[CHACHA20_NONCE_SIZE], uint8_t out[CHACHA20_BLOCK_SIZE]);
 
 /* out[i] = in[i] ^ keystream[i] for i < `len`, starting at block `counter` (RFC 8439 2.4). Encrypt
- * and decrypt are the same operation. `in` == `out` (in place) is fine; any other overlap is not
- * supported. Fails with STATUS_ERR_INVALID (writing nothing) if the message would need a block
- * number above 0xFFFFFFFF (the 32-bit counter must never wrap, or the keystream would repeat), or
- * if `len` > 0 and `key`, `nonce`, `in` or `out` is NULL. `len` == 0 succeeds for any
- * `counter`, and then `in` and `out` are not touched (may be NULL). Wipes the keystream before
- * returning. No locks, may not sleep, IRQ-safe. */
+ * and decrypt are the same operation. `in` == `out` (in place) is fine; any other overlap of `in`
+ * and `out` is not supported, and `out` must not overlap `key` or `nonce` (they are re-read for
+ * every block, so the keystream after the first block would silently be wrong). Fails with
+ * STATUS_ERR_INVALID (writing nothing) if the message would need a block number above 0xFFFFFFFF
+ * (the 32-bit counter must never wrap, or the keystream would repeat), or if `len` > 0 and `key`,
+ * `nonce`, `in` or `out` is NULL. `len` == 0 succeeds for any `counter`, and then `in` and `out`
+ * are not touched (may be NULL). Wipes the keystream before returning. No locks, may not sleep,
+ * IRQ-safe. */
 Status chacha20Xor(const uint8_t key[CHACHA20_KEY_SIZE], uint32_t counter,
                    const uint8_t nonce[CHACHA20_NONCE_SIZE], const uint8_t *in, uint8_t *out,
                    size_t len);
