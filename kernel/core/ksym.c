@@ -217,3 +217,19 @@ Status ksymDecodeLookup(const uint8_t *blob, size_t size, uint64_t addr, char *n
     *symAddrOut = bestAddr;
     return STATUS_OK;
 }
+
+Status ksymDecodeLookupSlid(const uint8_t *blob, size_t size, uint64_t addr, uint64_t slide,
+                            char *nameOut, size_t nameCap, uint64_t *symAddrOut) {
+    if (addr < slide) {
+        return STATUS_ERR_NOT_FOUND;
+    }
+    uint64_t linkSymAddr = 0;
+    Status st = ksymDecodeLookup(blob, size, addr - slide, nameOut, nameCap, &linkSymAddr);
+    if (st != STATUS_OK) {
+        return st;
+    }
+    if (symAddrOut != NULL) {
+        *symAddrOut = linkSymAddr + slide;
+    }
+    return STATUS_OK;
+}

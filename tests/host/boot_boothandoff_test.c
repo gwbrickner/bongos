@@ -71,6 +71,28 @@ TEST(bootHandoffFillInfoSetsFixedFields) {
     }
 }
 
+TEST(bootHandoffFillInfoCopiesKaslrSlide) {
+    uint8_t seed[64] = {0};
+    BootHandoffFields fields = {
+        .bootMethod = BOOT_METHOD_UEFI,
+        .kernelPhys = 0x200000,
+        .kernelVirtBase = 0xFFFFFFFF80000000ULL + 0x1E00000ULL,
+        .kernelSize = 0x4000,
+        .kaslrSlide = 0x1E00000ULL,
+        .hhdmBase = BOOTINFO_HHDM_BASE,
+        .randomSeed = seed,
+    };
+    BootInfo bi;
+    for (size_t i = 0; i < sizeof(bi); i++) {
+        ((uint8_t *)&bi)[i] = 0xAA;
+    }
+    bootHandoffFillInfo(&bi, &fields);
+    ASSERT_EQ(bi.kaslrSlide, 0x1E00000ULL);
+    ASSERT_EQ(bi.kernelVirtBase, 0xFFFFFFFF81E00000ULL);
+    ASSERT_EQ(bi.kernelPhysBase, 0x200000ULL); /* physical placement is independent of the slide */
+    ASSERT_EQ(bi.kernelVirtBase - bi.kaslrSlide, (uint64_t)BOOTINFO_KERNEL_WINDOW_BASE);
+}
+
 TEST(bootHandoffFinalMapMergesFirmwareInputsAndAllocs) {
     MemMapInput fw[2] = {
         {0x0, 0x2000, BOOT_MEM_USABLE},
@@ -185,5 +207,93 @@ TEST(bootHandoffMapAllZeroesFramebufferWhenPatNotUncacheable) {
     ASSERT_EQ(fb.phys, 0ULL); /* zeroed: not provided */
     ASSERT_EQ(allocs.count, 0u);
 
+    freePoolPhys(poolPhys);
+}
+
+/* KASLR (M2.6): a plan with a slide maps every kernel page at linkBase + slide (same physical
+ * pages as an unslid plan) and nothing at the link address; the self-check must be given the
+ * slid entry, and fails for an entry the plan did not map. */
+TEST(bootHandoffMapAllMapsTheImageAtTheSlide) {
+    const uint64_t linkBase = 0xFFFFFFFF80000000ULL;
+    const uint64_t slide = 0x1E00000ULL;
+    uint64_t poolPhys = allocPoolPhys();
+    ASSERT_TRUE(poolPhys != 0);
+    PtBuilder pt;
+    ASSERT_EQ(ptInit(&pt, poolPhys, POOL_PAGES, false), BOOT_OK);
+
+    BootMemRegion hhdmRuns[1] = {{0x0, 0x10000, BOOT_MEM_USABLE, 0}};
+    ElfImage img;
+    makeIdentityElfImage(&img, linkBase, 0x3000);
+    BootPtPlan plan = {
+        .hhdmRuns = hhdmRuns,
+        .hhdmRunCount = 1,
+        .elfImage = &img,
+        .kernelPhys = 0x100000,
+        .slide = slide,
+        .trampPhys = 0x8000,
+        .patEntry2Uncacheable = true,
+    };
+    BootFramebuffer fb = {0};
+    BootAllocList allocs = {0};
+    const char *fbNote = NULL;
+    ASSERT_EQ(bootHandoffMapAll(&pt, &plan, &fb, &allocs, &fbNote), BOOT_OK);
+
+    uint64_t pa, flags;
+    for (uint64_t off = 0; off < 0x3000; off += 0x1000) {
+        ASSERT_EQ(ptLookup(&pt, linkBase + slide + off, &pa, &flags), BOOT_OK);
+        ASSERT_EQ(pa, 0x100000 + off);
+        ASSERT_TRUE((flags & PT_W) == 0 && (flags & PT_NX) == 0); /* still R-X */
+        ASSERT_EQ(ptLookup(&pt, linkBase + off, &pa, &flags), BOOT_ERR_NOT_MAPPED);
+    }
+    ASSERT_EQ(ptLookup(&pt, linkBase + slide + 0x3000, &pa, &flags), BOOT_ERR_NOT_MAPPED);
+
+    uint64_t bootInfoVa = BOOTINFO_HHDM_BASE + 0x1000;
+    uint64_t cmdlineVa = BOOTINFO_HHDM_BASE + 0x2000;
+    uint64_t memMapVa = BOOTINFO_HHDM_BASE + 0x3000;
+    uint64_t stackTopVa = BOOTINFO_HHDM_BASE + 0x9000;
+    /* The entry the loader hands the trampoline is elf entry + slide. */
+    ASSERT_TRUE(bootHandoffSelfCheck(&pt, img.entry + slide, stackTopVa, bootInfoVa, cmdlineVa,
+                                     memMapVa, 0x8000, &fb));
+    /* The unslid entry is not mapped by a slid plan. */
+    ASSERT_TRUE(!bootHandoffSelfCheck(&pt, img.entry, stackTopVa, bootInfoVa, cmdlineVa, memMapVa,
+                                      0x8000, &fb));
+    freePoolPhys(poolPhys);
+}
+
+/* The other direction: a plan that was never slid (slide 0, e.g. kaslr off or the relocation
+ * fell back) fails the self-check for a slid entry, so a loader that computed entry + slide but
+ * forgot BootPtPlan.slide cannot jump into unmapped memory. */
+TEST(bootHandoffSelfCheckFailsWhenThePlanIsNotSlid) {
+    const uint64_t linkBase = 0xFFFFFFFF80000000ULL;
+    uint64_t poolPhys = allocPoolPhys();
+    ASSERT_TRUE(poolPhys != 0);
+    PtBuilder pt;
+    ASSERT_EQ(ptInit(&pt, poolPhys, POOL_PAGES, false), BOOT_OK);
+
+    BootMemRegion hhdmRuns[1] = {{0x0, 0x10000, BOOT_MEM_USABLE, 0}};
+    ElfImage img;
+    makeIdentityElfImage(&img, linkBase, 0x1000);
+    BootPtPlan plan = {
+        .hhdmRuns = hhdmRuns,
+        .hhdmRunCount = 1,
+        .elfImage = &img,
+        .kernelPhys = 0x100000,
+        .slide = 0,
+        .trampPhys = 0x8000,
+        .patEntry2Uncacheable = true,
+    };
+    BootFramebuffer fb = {0};
+    BootAllocList allocs = {0};
+    const char *fbNote = NULL;
+    ASSERT_EQ(bootHandoffMapAll(&pt, &plan, &fb, &allocs, &fbNote), BOOT_OK);
+
+    uint64_t bootInfoVa = BOOTINFO_HHDM_BASE + 0x1000;
+    uint64_t cmdlineVa = BOOTINFO_HHDM_BASE + 0x2000;
+    uint64_t memMapVa = BOOTINFO_HHDM_BASE + 0x3000;
+    uint64_t stackTopVa = BOOTINFO_HHDM_BASE + 0x9000;
+    ASSERT_TRUE(bootHandoffSelfCheck(&pt, img.entry, stackTopVa, bootInfoVa, cmdlineVa, memMapVa,
+                                     0x8000, &fb));
+    ASSERT_TRUE(!bootHandoffSelfCheck(&pt, img.entry + 0x200000ULL, stackTopVa, bootInfoVa,
+                                      cmdlineVa, memMapVa, 0x8000, &fb));
     freePoolPhys(poolPhys);
 }

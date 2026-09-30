@@ -68,8 +68,10 @@ BootStatus ptMapRange(PtBuilder *b, uint64_t va, uint64_t pa, uint64_t size, uin
 
 /* Maps every PT_LOAD segment of `img` at `img->segs[i].vaddr + slide`, backed by the contiguous
  * physical block starting at `physBase` (`phys(va) = physBase + (va - img->linkBase)`), always as
- * 4 KiB pages, with per-segment R-X/R--/RW- flags picked from ElfSegment.flags. `slide` is 0 until
- * M2.6 adds KASLR relocation. No locks, boot-time or host-test only. */
+ * 4 KiB pages, with per-segment R-X/R--/RW- flags picked from ElfSegment.flags. `slide` is the
+ * KASLR slide the loader relocated the image by (0 when KASLR is off or fell back); it is not
+ * validated here (bootKaslrPickSlide/elfRelocate already did). No locks, boot-time or host-test
+ * only. */
 BootStatus ptMapElfImage(PtBuilder *b, const ElfImage *img, uint64_t physBase, uint64_t slide);
 
 /* Walks the page tables for `va` and reports the physical address and the leaf entry's raw flag

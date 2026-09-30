@@ -34,9 +34,15 @@ const char *kernelCmdline(void);
  * need this directly. No locks; read-only. */
 const BootMemRegion *kernelBootMemMap(uint32_t *outCount);
 
-/* The physical address of the one BootInfo-sized page pmmReclaimLoaderMemory() deliberately keeps
- * out of the buddy allocator (still PAGE_STATE_RESERVED after reclaim) -- M2.6 reads the (by then
- * consumed) random seed from it and frees it. No locks; read-only. */
+/* The physical address (4 KiB-aligned) of the loader's original BootInfo page. Since M2.6 (D-123,
+ * superseding D-089's carve-out) pmmReclaimLoaderMemory() frees and zeroes that page like any other
+ * LOADER_RECLAIM page (when it lies at or above 1 MiB), so this is only an identity for ktests:
+ * never dereference it. No locks; read-only. */
 uint64_t kernelBootInfoPagePhys(void);
+
+/* The OR of the 64 BootInfo.randomSeed bytes on the loader's live BootInfo page, read back
+ * (volatile) right after kernelMain wiped them (D-123): 0 when the wipe happened. For the
+ * random_boot_seed_wiped ktest only. No locks; read-only. */
+uint8_t kernelBootSeedResidue(void);
 
 #endif

@@ -100,3 +100,10 @@ void loaderSerialWriteUint(uint32_t v) {
         serialWriteByte(digits[--n]);
     }
 }
+
+void loaderSerialWriteHex64(uint64_t v) {
+    for (int shift = 60; shift >= 0; shift -= 4) {
+        uint32_t nibble = (uint32_t)((v >> shift) & 0xFu);
+        serialWriteByte((char)(nibble < 10u ? '0' + nibble : 'a' + (nibble - 10u)));
+    }
+}

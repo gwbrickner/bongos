@@ -6,6 +6,8 @@
 #include "klog.h"
 #include "ktest.h"
 #include "panic.h"
+#include "random.h"
+#include "sections.h"
 #include "stack-protector.h"
 
 #include <arch/cpu-init.h>
@@ -13,6 +15,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "crypto/wipe.h"
 #include "drivers/fbcon/fbcon.h"
 #include "drivers/serial/uart16550.h"
 #include "kmalloc.h"
@@ -33,9 +36,14 @@ static char cmdlineCopy[BOOTINFO_CMDLINE_MAX];
  * that gets freed. */
 static BootMemRegion *memMapSnapshot;
 static uint32_t memMapSnapshotCount;
-/* The physical address of the original BootInfo page -- kept out of the buddy allocator by
- * pmmReclaimLoaderMemory() (M2.6 reads the consumed random seed from it and frees it then). */
+/* The physical address of the original BootInfo page (page-aligned). pmmReclaimLoaderMemory() frees
+ * and zeroes that page like any other LOADER_RECLAIM page (M2.6, D-123; D-089 used to keep it), so
+ * this is only an identity for ktests (loader_reclaimed) -- never dereference it. */
 static uint64_t bootInfoPagePhysValue;
+/* The OR of the live BootInfo seed bytes, read back right after kernelMain wiped them: 0 unless the
+ * wipe is missing. Only for the random_boot_seed_wiped ktest (the page itself is zeroed by the
+ * reclaim moments later, so nothing else could tell). */
+static uint8_t bootSeedResidueValue;
 
 const BootInfo *kernelBootInfo(void) {
     return &bootInfoCopy;
@@ -52,6 +60,10 @@ const BootMemRegion *kernelBootMemMap(uint32_t *outCount) {
 
 uint64_t kernelBootInfoPagePhys(void) {
     return bootInfoPagePhysValue;
+}
+
+uint8_t kernelBootSeedResidue(void) {
+    return bootSeedResidueValue;
 }
 
 /* Copies `bi`'s memory-map array (still live loader memory at this point -- called before
@@ -133,14 +145,39 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
      * should run with a canary an attacker could predict from source (D-077). */
     stackGuardInit(bi);
 
-    bootInfoPagePhysValue = (uint64_t)(uintptr_t)bi - bi->hhdmBase;
+    /* M2.6: greppable by tests/harness and mk/test.mk. `virtBase` is the loader's report and the
+     * slide is recomputed from the linker symbol; bootInfoValidate() already required them to
+     * agree (kernelVirtBase - kaslrSlide == the link base). */
+    klogWrite(KLOG_INFO, "kaslr", "virtBase=0x%016llx slide=0x%016llx",
+              (unsigned long long)bi->kernelVirtBase, (unsigned long long)kernelSlide());
+
+    /* M2.6, D-122/D-123: the RNG hashes the loader's seed into its pool (stackGuardInit() above
+     * already folded it into the canary, which D-077 leaves alone), and then the live seed is
+     * wiped from the loader's BootInfo page right away, well before vmmInit() and the reclaim
+     * that zeroes the whole page: the seed never outlives the two consumers. The pointer is to
+     * the loader's own writable page (still on the loader's page tables here). */
+    randomInit(bi->randomSeed);
+    cryptoWipe((void *)(uintptr_t)bi->randomSeed, sizeof(bi->randomSeed));
+    {
+        /* Volatile read-back, OR-accumulated (no branch on seed bytes), for the ktest. */
+        const volatile uint8_t *liveSeed = bi->randomSeed;
+        uint8_t residue = 0;
+        for (size_t k = 0; k < sizeof(bi->randomSeed); k++) {
+            residue |= liveSeed[k];
+        }
+        bootSeedResidueValue = residue;
+    }
+
+    /* The page, not the struct: bootInfoValidate() only requires 8-byte alignment. */
+    bootInfoPagePhysValue = ((uint64_t)(uintptr_t)bi - bi->hhdmBase) & ~(uint64_t)0xFFF;
     bootInfoCopy = *bi;
-    /* Nothing reads randomSeed out of bootInfoCopy: the only consumer so far, stackGuardInit()
-     * above, already read it from the live `bi` pointer before this copy was even made, and
-     * M2.6's CSPRNG init will do the same from the live page later. Don't keep a second permanent
-     * copy of key material sitting around in kernel .data. A plain write here would be a dead
-     * store an optimizing compiler is free to elide (nothing ever reads the field back), so this
-     * goes through a volatile pointer the same way the loader wipes its own stack copy. */
+    /* Nothing reads randomSeed out of bootInfoCopy: both consumers (stackGuardInit() and
+     * randomInit(), above) read it from the live `bi` pointer, which was wiped right after, so
+     * the copy above already holds zeros. This second wipe stays anyway as defence in depth (it
+     * costs nothing, and keeps the invariant local: "bootInfoCopy never holds seed bytes"
+     * without depending on the ordering of the wipe above). A plain write would be a dead store an
+     * optimizing compiler is free to elide (nothing ever reads the field back), so this goes
+     * through a volatile pointer the same way the loader wipes its own stack copy. */
     volatile uint8_t *seedWipe = bootInfoCopy.randomSeed;
     for (size_t i = 0; i < sizeof(bootInfoCopy.randomSeed); i++) {
         seedWipe[i] = 0;
@@ -181,7 +218,7 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
      * `bootInfoCopy.memMapPhys` points at the snapshot, not the (now-reclaimed) original array. */
     kernelSnapshotMemMap(&bootInfoCopy);
     vmmInit(&bootInfoCopy, memMapSnapshot, memMapSnapshotCount);
-    pmmReclaimLoaderMemory(bootInfoPagePhysValue);
+    pmmReclaimLoaderMemory(); /* D-123: also zeroes and frees the original BootInfo page */
     pmmPrintMeminfo(); /* shows the post-reclaim totals; panics internally if the check fails */
 
     slabInit();    /* M2.4, D-092..D-096: slab caches + kmalloc's 12 size classes */

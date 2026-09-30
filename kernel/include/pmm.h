@@ -132,15 +132,17 @@ void pmmPrintMeminfo(void);
 
 /* Hands every LOADER_RECLAIM range the pmm recorded during pmmInit() (its own `PmmMap.
  * loaderReclaim[]`, ROADMAP M2.3 step 6, D-089) to the buddy allocator via pmmAddFreeRange() --
- * clipped to >= 1 MiB (D-080's low-memory withholding still applies) and with `keepPagePhys`'s
- * page (the BootInfo page, still needed until M2.6) carved out and left RESERVED. Every reclaimed
- * byte is zeroed through the HHDM first (a loader stack or its page-table pool can hold RNG/seed
- * residue or other loader-controlled data). Panics if vmmKernelTablesActive() is false (the loader
- * page tables -- and, on real hardware, its identity-mapped trampoline page -- are part of what
- * gets reclaimed, so this would otherwise free memory the CPU is still using for address
- * translation) or if `keepPagePhys` isn't 4 KiB-aligned. Boot-time only, BSP, IF=0; called once,
- * from kernelMain after vmmInit(). Locks: pmmLock. IRQ-safe: yes. May sleep: no. */
-void pmmReclaimLoaderMemory(uint64_t keepPagePhys);
+ * clipped to >= 1 MiB (D-080's low-memory withholding still applies, so anything below 1 MiB stays
+ * RESERVED, BootInfo page included if it lives there). That includes the original BootInfo page
+ * (D-123 supersedes D-089's carve-out: kernelMain wipes the live random seed before vmmInit, so
+ * nothing needs the page afterwards). Every reclaimed byte is zeroed through the HHDM first (a
+ * loader stack, its page-table pool or the BootInfo page can hold RNG/seed residue or other
+ * loader-controlled data). Panics if vmmKernelTablesActive() is false (the loader page tables --
+ * and, on real hardware, its identity-mapped trampoline page -- are part of what gets reclaimed,
+ * so this would otherwise free memory the CPU is still using for address translation). Boot-time
+ * only, BSP, IF=0; called once, from kernelMain after vmmInit(). After it returns the loader's
+ * BootInfo pointer must not be dereferenced again. Locks: pmmLock. IRQ-safe: yes. May sleep: no. */
+void pmmReclaimLoaderMemory(void);
 
 /* The kind of the most recent pmmBug() call, for ktests that catch it via archTrapCatch
  * (TRAP_CATCH_KERNEL_BUG) to assert what actually happened. PMM_BUG_NONE if none has happened yet.

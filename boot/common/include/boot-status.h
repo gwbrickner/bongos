@@ -37,6 +37,11 @@ typedef enum {
     BOOT_ERR_FAT = -17,
     BOOT_ERR_NOT_FOUND = -18,
     BOOT_ERR_TOO_LARGE = -19,
+    /* M2.6 (KASLR, D-120) addition: elfRelocate() found a relocation table it cannot apply
+     * safely (unsupported type, out-of-image location, malformed section/symbol table, no
+     * relocations in code, overflow). Distinct from BOOT_ERR_ELF_SEGMENT: the segments were fine.
+     */
+    BOOT_ERR_ELF_RELOC = -20,
 } BootStatus;
 
 /* Returns a static, human-readable string for `s` (never NULL, even for an unrecognized value).

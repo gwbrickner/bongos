@@ -66,11 +66,15 @@ typedef struct {
     uint32_t hhdmRunCount;
     const ElfImage *elfImage;
     uint64_t kernelPhys;
+    uint64_t
+        slide; /* KASLR slide (M2.6): the image is mapped at segment vaddr + slide; 0 = unslid */
     uint64_t trampPhys;
     bool patEntry2Uncacheable;
 } BootPtPlan;
 
-/* Maps the HHDM run set, the kernel ELF image, and the identity trampoline page into `pt`, then
+/* Maps the HHDM run set, the kernel ELF image (at each segment's link address plus `plan->slide`;
+ * the physical placement `kernelPhys + (vaddr - linkBase)` does not depend on the slide), and the
+ * identity trampoline page into `pt`, then
  * attempts the framebuffer mapping (D-068: 4 KiB pages only, PT_FLAGS_FRAMEBUFFER, checked
  * against the HHDM window and against every page it would cover already being unmapped). A
  * framebuffer problem (PAT entry 2 not UC/UC-, bad geometry, beyond the HHDM window, overlapping
@@ -84,12 +88,14 @@ typedef struct {
 BootStatus bootHandoffMapAll(PtBuilder *pt, const BootPtPlan *plan, BootFramebuffer *fb,
                              BootAllocList *allocs, const char **fbNote);
 
-/* Self-check (ARCHITECTURE §5.5 step 10 / §5.6 step 8): true iff the kernel entry point (R-X,
- * non-writable/executable... i.e. executable and not NX, not writable), the top of the boot stack
- * (RW, NX), and the whole handoff block (BootInfo/cmdline/memory-map pages, all present) resolve
- * as expected, the trampoline page resolves present and not NX, and -- if `fb->phys != 0` -- both
- * the first and last page of the mapped framebuffer range resolve to the right physical address
- * with PT_PCD/PT_NX/PT_W set. Pure; read-only. No locks, boot-time or host-test only. */
+/* Self-check (ARCHITECTURE §5.5 step 10 / §5.6 step 8): `entryVa` is the slid entry (elf entry +
+ * BootPtPlan.slide), so a plan whose slide was not applied to the mapping fails it. True iff the
+ * kernel entry point (R-X, non-writable/executable... i.e. executable and not NX, not writable),
+ * the top of the boot stack (RW, NX), and the whole handoff block (BootInfo/cmdline/memory-map
+ * pages, all present) resolve as expected, the trampoline page resolves present and not NX, and --
+ * if `fb->phys != 0` -- both the first and last page of the mapped framebuffer range resolve to the
+ * right physical address with PT_PCD/PT_NX/PT_W set. Pure; read-only. No locks, boot-time or
+ * host-test only. */
 bool bootHandoffSelfCheck(const PtBuilder *pt, uint64_t entryVa, uint64_t stackTopVa,
                           uint64_t bootInfoVa, uint64_t cmdlineVa, uint64_t memMapVa,
                           uint64_t trampPhys, const BootFramebuffer *fb);
@@ -102,6 +108,7 @@ typedef struct {
     BootFramebuffer fb;
     uint64_t rsdpPhys;
     uint64_t kernelPhys, kernelVirtBase, kernelSize;
+    uint64_t kaslrSlide; /* kernelVirtBase - link base; 0 when KASLR is off or fell back */
     uint64_t cmdlinePhys;
     uint64_t hhdmBase;
     uint64_t loaderTsc;
@@ -110,7 +117,7 @@ typedef struct {
 } BootHandoffFields;
 
 /* Zeroes `*bi` and fills every fixed field from `fields` (magic/version/size/bootMethod/fb/
- * rsdpPhys/kernel fields/kaslrSlide=0/cmdlinePhys/hhdmBase/loaderTsc/efiSystemTablePhys/
+ * rsdpPhys/kernel fields/kaslrSlide/cmdlinePhys/hhdmBase/loaderTsc/efiSystemTablePhys/
  * randomSeed).
  * Does not touch `memMapPhys`/`memMapCount` (the caller's memory-map array physical address is
  * known before this runs but its count only after -- the caller sets both itself). Pure. No
