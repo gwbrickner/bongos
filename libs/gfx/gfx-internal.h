@@ -2,6 +2,7 @@
 #ifndef LIBS_GFX_INTERNAL_H
 #define LIBS_GFX_INTERNAL_H
 
+#include "gfx/gfx-image.h"
 #include "gfx/gfx-path.h"
 #include "gfx/gfx.h"
 
@@ -68,5 +69,24 @@ typedef void (*GfxSpanFn)(void *ctx, int32_t y, int32_t x, const uint8_t *cov, i
 Status gfxRasterFill(const GfxAllocator *a, void **scratch, size_t *scratchSize,
                      const GfxEdge *edges, uint32_t nEdges, GfxRect clip, GfxFillRule rule,
                      GfxSpanFn fn, void *ctx);
+
+/* Decoder allocation accounting: every decoder allocation goes through here so `maxTotalBytes`
+ * bounds the PEAK of all live temporaries plus the output. */
+typedef struct {
+    const GfxAllocator *a;
+    GfxDecodeLimits lim;
+    uint64_t live;
+    bool limitHit; /* the last failed gfxDecAlloc was the byte budget, not the allocator */
+} GfxDecodeCtx;
+
+void gfxDecodeCtxInit(GfxDecodeCtx *d, const GfxDecodeLimits *lim, const GfxAllocator *a);
+void *gfxDecAlloc(GfxDecodeCtx *d, size_t n); /* NULL if over budget (limitHit) or on failure */
+void gfxDecFree(GfxDecodeCtx *d, void *p, size_t n);
+/* NO_MEMORY or (after a budget hit) UNSUPPORTED, for a NULL from gfxDecAlloc. */
+Status gfxDecAllocStatus(const GfxDecodeCtx *d);
+/* UNSUPPORTED if w or h is zero-or-over-limit or w*h exceeds maxPixels; INVALID for zero. */
+Status gfxDecCheckDims(const GfxDecodeCtx *d, uint64_t w, uint64_t h);
+/* Allocates out->pixels (w*h*4 bytes, uninitialized) through the accounting; fills the fields. */
+Status gfxDecAllocImage(GfxDecodeCtx *d, uint32_t w, uint32_t h, GfxImage *out);
 
 #endif
