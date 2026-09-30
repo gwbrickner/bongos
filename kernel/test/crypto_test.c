@@ -52,8 +52,9 @@ KTEST(chacha20_rfc8439_encrypt) {
     KTEST_ASSERT(chacha20Xor(v->key, 0xFFFFFFFFu, v->nonce, v->plaintext, out, 64) == STATUS_OK);
 }
 
-/* FIPS 180-4 examples: "", "abc", the 448-bit message, 1,000,000 x 'a' (streamed), and one
- * split-update case across a block boundary. */
+/* FIPS 180-4 examples: "", "abc", the 448-bit message, 1,000,000 x 'a' (streamed), plus the
+ * padding-boundary digests of crypto-vectors.h, each also split into two updates at every offset.
+ */
 KTEST(sha256_fips180_vectors) {
     uint8_t d[SHA256_DIGEST_SIZE];
     Sha256Ctx ctx;
@@ -93,6 +94,21 @@ KTEST(sha256_fips180_vectors) {
             ktestFail(ktestCtx, __FILE__, __LINE__, "sha256 boundary len %u differs",
                       (unsigned)v->len);
             return;
+        }
+        /* Every split point: a partial first update leaves bytes buffered, so a second update
+         * of >= 64 bytes must go through the buffer, not compress the caller's data directly.
+         * The million-'a' message can't catch that (every alignment of it looks the same), and
+         * the FIPS messages above are too short to reach it. */
+        for (size_t s = 0; s <= v->len; s++) {
+            sha256Init(&ctx);
+            sha256Update(&ctx, msg, s);
+            sha256Update(&ctx, msg + s, v->len - s);
+            sha256Final(&ctx, d);
+            if (!bytesEqual(d, v->digest, sizeof(d))) {
+                ktestFail(ktestCtx, __FILE__, __LINE__, "sha256 boundary len %u split %u differs",
+                          (unsigned)v->len, (unsigned)s);
+                return;
+            }
         }
     }
 
