@@ -234,6 +234,35 @@ TEST(sha256PaddingBoundaryVectors) {
     }
 }
 
+/* The 64-bit length field's high word, which no feasible message reaches (it needs >= 512 MiB):
+ * white-box, `totalBytes` is preset as if 2^32 (then 2^61 - 4) bytes had already been absorbed,
+ * then "abc" is hashed. Expected digests are the compression of the single padded block with
+ * bit length 0x0000000800000018 (0xFFFFFFFFFFFFFFF8, the largest supported), computed by a
+ * from-scratch Python SHA-256 that matches hashlib on real messages. Catches a length stored as
+ * 32 bits or a dropped/garbled high word. */
+TEST(sha256LengthFieldHighWord) {
+    static const struct {
+        uint64_t preset;
+        uint8_t digest[32];
+    } cases[] = {
+        {0x100000000ULL, {0x82, 0x67, 0xcd, 0x2a, 0xbf, 0xac, 0xc0, 0x72, 0x81, 0x63, 0xd6,
+                          0xfb, 0x04, 0x59, 0x3e, 0x11, 0x25, 0x7a, 0x93, 0x5c, 0x59, 0xb4,
+                          0x4d, 0x4f, 0x65, 0x71, 0x45, 0xc3, 0xea, 0xef, 0x6f, 0xf1}},
+        {0x1FFFFFFFFFFFFFFCULL, {0xd7, 0x2a, 0xad, 0xe5, 0xe7, 0x79, 0x2d, 0xb1, 0xa7, 0xb9, 0x6e,
+                                 0x5b, 0x65, 0x2c, 0xab, 0x5b, 0x8e, 0xd0, 0x25, 0x82, 0xf3, 0xa7,
+                                 0x92, 0x74, 0xd9, 0x41, 0xa6, 0x84, 0xc5, 0x37, 0xaf, 0xc9}},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        Sha256Ctx ctx;
+        uint8_t d[32];
+        sha256Init(&ctx);
+        ctx.totalBytes = cases[i].preset;
+        sha256Update(&ctx, "abc", 3);
+        sha256Final(&ctx, d);
+        ASSERT_TRUE(memcmp(d, cases[i].digest, 32) == 0);
+    }
+}
+
 TEST(sha256UnalignedInputAndZeroLengthUpdate) {
     uint8_t raw[80 + 8];
     for (size_t i = 0; i < sizeof(raw); i++) {
