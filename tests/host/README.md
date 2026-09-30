@@ -16,3 +16,6 @@ bitstream, and comparison is exact. `jg_<group>__<variant>` fixtures of one grou
 coefficients (different scan scripts, tables, restarts, marker noise) and must decode identically.
 If the decoder and a fixture disagree, the specification (T.81 / GIF89a) decides which is wrong.
 `gfx_decode_testutil.{h,c}` holds the shared counting/failing allocator and the container loader.
+`gfx_gif_diff_test.c` (random GIFs against a second, explicit-string LZW and 64-bit compositor
+model) and `gfx_jpeg_fuzz_test.c` (random JPEGs built from parts, checked for leaks, opacity,
+determinism and the exact budget) were added by the M12.7 bug-sweeper (`docs/sweeps/M12.7.md`).
