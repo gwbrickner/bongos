@@ -95,7 +95,8 @@ void gfxFillRect(GfxCanvas *c, GfxRect r, GfxColor col, GfxOp op);
  * global `alpha` (255 = opaque). `src` may be the canvas surface itself (the same `pixels` and
  * `stride`): the copy direction is chosen so an overlapping move reads every source pixel before
  * overwriting it, for either op. A different GfxSurface viewing the same memory (a sub-rect view)
- * is not detected and must not overlap the destination. */
+ * is not detected and must not overlap the destination. An invalid `src` (NULL, non-positive size,
+ * stride < width) draws nothing. */
 void gfxBlit(GfxCanvas *c, int32_t dx, int32_t dy, const GfxSurface *src, GfxRect srcRect, GfxOp op,
              uint8_t alpha);
 

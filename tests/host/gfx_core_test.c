@@ -578,3 +578,25 @@ TEST(gfxFillMaskRejectsShortStride) {
     fixtureFree(&f);
     free(md);
 }
+
+/* Likewise a blit source with stride < width (gfxCanvasInit rejects such a surface) is ignored
+ * instead of read past its end. */
+TEST(gfxBlitRejectsShortStrideSource) {
+    uint32_t *sp = malloc(3 * 4 * sizeof(uint32_t)); /* stride 3 x height 4, but width 5 */
+    ASSERT_TRUE(sp != NULL);
+    for (int i = 0; i < 12; i++) {
+        sp[i] = 0xFFFFFFFFu;
+    }
+    GfxSurface src = {sp, 5, 4, 3};
+    Fixture f;
+    ASSERT_TRUE(fixtureInit(&f, 8, 8, 0xFF000000u));
+    gfxBlit(&f.c, 0, 0, &src, (GfxRect){0, 0, 5, 4}, GFX_OP_SRC, 255);
+    gfxBlit(&f.c, 0, 0, &src, (GfxRect){0, 0, 5, 4}, GFX_OP_SRC_OVER, 200);
+    for (int32_t y = 0; y < 8; y++) {
+        for (int32_t x = 0; x < 8; x++) {
+            ASSERT_EQ(fixturePx(&f, x, y), 0xFF000000u);
+        }
+    }
+    fixtureFree(&f);
+    free(sp);
+}

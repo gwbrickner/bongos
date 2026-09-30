@@ -135,7 +135,7 @@ void gfxFillRect(GfxCanvas *c, GfxRect r, GfxColor col, GfxOp op) {
 void gfxBlit(GfxCanvas *c, int32_t dx, int32_t dy, const GfxSurface *src, GfxRect srcRect, GfxOp op,
              uint8_t alpha) {
     if (src == NULL || src->pixels == NULL || src->width <= 0 || src->height <= 0 ||
-        (alpha == 0 && op == GFX_OP_SRC_OVER)) {
+        src->stride < src->width || (alpha == 0 && op == GFX_OP_SRC_OVER)) {
         return;
     }
     /* Clamp the source rect to the source surface, in 64-bit so nothing wraps. */
