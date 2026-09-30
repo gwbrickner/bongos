@@ -2,7 +2,12 @@
  * (SHA-256) feeding a ChaCha20 generator with fast key erasure. EXPERIMENTAL, unaudited crypto
  * (ARCHITECTURE §17). Every function here is IRQ-safe and never sleeps (the lock is IRQ-disable
  * only, like the pmm's, until M3.4 brings spinlocks), and none may be called before randomInit
- * except randomInit itself. */
+ * except randomInit itself. Not reentrant: IRQ-disable keeps maskable interrupts out of a lock
+ * holder, but an NMI, #MC or exception handler that interrupts one and calls in here would
+ * corrupt the state, so none of them may call these functions (none does; panic and backtrace
+ * never use the RNG). Buffers (`data`, `out`) must be mapped kernel memory: they are read/written
+ * with the lock held, so a fault there would leave IRQs disabled (copy user buffers through a
+ * kernel one). */
 #ifndef KERNEL_RANDOM_H
 #define KERNEL_RANDOM_H
 

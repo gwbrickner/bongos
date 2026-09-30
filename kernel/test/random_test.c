@@ -1,9 +1,11 @@
 /* ktests for the kernel RNG (M2.6 step 5, ARCHITECTURE §6.6, D-122): the generator's known
  * answers on a private state (same vectors as the host tests), the reseed machinery of the live
  * global RNG, and a cheap statistical sanity check of its output. Integers only -- the kernel
- * never uses the FPU. The sanity thresholds are ten standard deviations wide, so a healthy RNG
- * fails with probability ~1e-23 per boot, while constants, counters, short cycles and other gross
- * faults fail every time. */
+ * never uses the FPU. False-failure odds per boot for a truly random source (computed exactly
+ * with a chi-square / normal tail, 2026-09-30 sweep): monobit and transitions are 10 standard
+ * deviations wide (~1.5e-23 each); byte chi-square (255 df) below 100 is 3.8e-20, above 600 is
+ * 7.5e-30; the two randomU64() values colliding is 2^-64 = 5.4e-20; so ~1e-19 in total. Constants,
+ * counters, short cycles and other gross faults fail every time. */
 #include "crypto/chacha20.h"
 #include "drbg-vectors.h"
 #include "kernel-boot.h"
