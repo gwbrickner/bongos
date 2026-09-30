@@ -5,6 +5,7 @@
 #include "gfx/gfx.h"
 #include "gfx_golden.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -320,4 +321,41 @@ TEST(gfxGoldenStrokes) {
     gfxPathFree(&e);
     ASSERT_TRUE(goldenCheck("gfx_strokes", &cv.c.surf));
     cvFree(&cv);
+}
+
+/* Far from the origin the shoelace products are ~x^2 and their float rounding can swamp the area
+ * of a thin piece and flip its winding, which under the nonzero fill would cancel it: strokes must
+ * come out the same wherever they are (drawn here via the canvas origin). */
+TEST(gfxStrokeFarFromOriginIsSolid) {
+    float bases[] = {0.0f, 1000.0f, 65536.0f, 300000.0f, 1000000.0f};
+    for (size_t i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
+        Cv cv;
+        ASSERT_TRUE(cvInit(&cv, 40, 24, 0xFF000000u));
+        gfxCanvasSetOrigin(&cv.c, -(int32_t)bases[i], -(int32_t)bases[i]);
+        GfxPath p;
+        gfxPathInit(&p, NULL);
+        gfxPathMoveTo(&p, bases[i] + 5.0f, bases[i] + 5.5f);
+        gfxPathLineTo(&p, bases[i] + 30.0f, bases[i] + 9.5f);
+        gfxPathLineTo(&p, bases[i] + 12.0f, bases[i] + 19.5f);
+        ASSERT_EQ(strokeWhite(&cv, &p, GFX_CAP_ROUND, GFX_JOIN_ROUND, 1.5f, 4.0f), STATUS_OK);
+        /* the same shape at the origin, for reference */
+        Cv ref;
+        ASSERT_TRUE(cvInit(&ref, 40, 24, 0xFF000000u));
+        GfxPath q;
+        gfxPathInit(&q, NULL);
+        gfxPathMoveTo(&q, 5.0f, 5.5f);
+        gfxPathLineTo(&q, 30.0f, 9.5f);
+        gfxPathLineTo(&q, 12.0f, 19.5f);
+        ASSERT_EQ(strokeWhite(&ref, &q, GFX_CAP_ROUND, GFX_JOIN_ROUND, 1.5f, 4.0f), STATUS_OK);
+        double a = sumCov(&cv), r = sumCov(&ref);
+        if (a < r * 0.97 || a > r * 1.03) {
+            fprintf(stderr, "  base %.0f: coverage %.2f vs %.2f at the origin\n", (double)bases[i],
+                    a, r);
+        }
+        ASSERT_TRUE(a > r * 0.97 && a < r * 1.03);
+        gfxPathFree(&p);
+        gfxPathFree(&q);
+        cvFree(&cv);
+        cvFree(&ref);
+    }
 }

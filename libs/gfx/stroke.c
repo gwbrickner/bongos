@@ -101,10 +101,13 @@ static void polyPoint(void *ctx, float x, float y) {
 /* Appends the polygon as a closed subpath, reversed if needed so its winding is positive. A
  * zero-area polygon is dropped. */
 static void emit(GfxPath *out, const float *xy, int n) {
+    /* Shoelace relative to the first vertex: with absolute coordinates the products are ~x^2 and
+     * their rounding swamps the area of a thin piece far from the origin, flipping its sign. */
     float area2 = 0.0f;
-    for (int i = 0; i < n; i++) {
-        int j = (i + 1) % n;
-        area2 += xy[2 * i] * xy[2 * j + 1] - xy[2 * j] * xy[2 * i + 1];
+    for (int i = 1; i + 1 < n; i++) {
+        float ax = xy[2 * i] - xy[0], ay = xy[2 * i + 1] - xy[1];
+        float bx = xy[2 * i + 2] - xy[0], by = xy[2 * i + 3] - xy[1];
+        area2 += ax * by - bx * ay;
     }
     if (!(area2 > 0.0f || area2 < 0.0f)) {
         return;
