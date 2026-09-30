@@ -748,6 +748,141 @@ TEST(gfxJpegEntropyEdgeCases) {
     ASSERT_TRUE(img.pixels == NULL);
 }
 
+static const JFix *findJFix(const JFixSet *fs, const char *name) {
+    for (int i = 0; i < fs->n; i++) {
+        if (strcmp(fs->fx[i].name, name) == 0) {
+            return &fs->fx[i];
+        }
+    }
+    return NULL;
+}
+
+/* Restarts must be exactly RSTn in order (no resync, D-160); extraneous bytes are skipped; a stray
+ * RST after the last MCU is ignored. */
+TEST(gfxJpegRestartHandling) {
+    JFixSet fs;
+    ASSERT_TRUE(loadJFix(&fs));
+    static const char *const NAMES[] = {"jg_var_c444__ri2", "jg_var_c420__split_ri1",
+                                        "jg_var_c444__prog_default_ri7"};
+    for (size_t t = 0; t < sizeof(NAMES) / sizeof(NAMES[0]); t++) {
+        const JFix *x = findJFix(&fs, NAMES[t]);
+        ASSERT_TRUE(x != NULL);
+        size_t sos = 0;
+        while (!(x->data[sos] == 0xFF && x->data[sos + 1] == 0xDA)) {
+            sos++;
+        }
+        size_t first = sos + 2, n = x->dataLen;
+        while (
+            !(x->data[first] == 0xFF && x->data[first + 1] >= 0xD0 && x->data[first + 1] <= 0xD7)) {
+            first++;
+            ASSERT_TRUE(first + 1 < n);
+        }
+        uint8_t *m = malloc(n + 8);
+        GfxImage img;
+        memcpy(m, x->data, n);
+        m[first + 1] = (uint8_t)(0xD0 + ((x->data[first + 1] - 0xD0 + 1) & 7)); /* wrong number */
+        ASSERT_EQ(decodeDefault(m, n, &img), STATUS_ERR_INVALID);
+        ASSERT_TRUE(img.pixels == NULL);
+        memcpy(m, x->data, first); /* the RST is missing */
+        memcpy(m + first, x->data + first + 2, n - first - 2);
+        ASSERT_EQ(decodeDefault(m, n - 2, &img), STATUS_ERR_INVALID);
+        memcpy(m, x->data, n); /* a stray RST after the last MCU, before the EOI, is skipped */
+        memcpy(m + n - 2, "\xFF\xD5\xFF\xD9", 4);
+        ASSERT_EQ(decodeDefault(m, n + 2, &img), STATUS_OK);
+        ASSERT_TRUE(pixelsMatch(x, &img));
+        gfxImageFree(&img);
+        free(m);
+    }
+    freeJFix(&fs);
+}
+
+/* Offset of the next SOS marker at or after `from` (encoder output never has FF DA elsewhere). */
+static size_t nextSos(const uint8_t *d, size_t n, size_t from) {
+    for (size_t p = from; p + 1 < n; p++) {
+        if (d[p] == 0xFF && d[p + 1] == 0xDA) {
+            return p;
+        }
+    }
+    return SIZE_MAX;
+}
+
+/* SOS field offsets: FF DA len(2) Ns [id sel]*Ns Ss Se AhAl. */
+static size_t sosSs(const uint8_t *d, size_t sos) {
+    return sos + 5 + 2 * (size_t)d[sos + 4];
+}
+
+static Status decodeMutated(const JFix *x, size_t at, uint8_t v) {
+    uint8_t *m = malloc(x->dataLen);
+    memcpy(m, x->data, x->dataLen);
+    m[at] = v;
+    GfxImage img;
+    Status s = decodeDefault(m, x->dataLen, &img);
+    if (s == STATUS_OK) {
+        gfxImageFree(&img);
+    } else if (img.pixels != NULL) {
+        s = 1000;
+    }
+    free(m);
+    return s;
+}
+
+/* Every progression rule of T.81 G.1.1.1.1 broken on its own, by editing SOS fields of real
+ * progressive files (gray: bands and the default script), plus tolerance of sequential SOS fields.
+ */
+TEST(gfxJpegProgressionRules) {
+    JFixSet fs;
+    ASSERT_TRUE(loadJFix(&fs));
+    const JFix *bands = findJFix(&fs, "jg_var_gray1__prog_bands");
+    const JFix *def = findJFix(&fs, "jg_var_gray1__prog_default");
+    const JFix *seq = findJFix(&fs, "jg_var_gray1__inter_opt");
+    ASSERT_TRUE(bands != NULL && def != NULL && seq != NULL);
+    /* bands: scans are DC(0,0,0,0) AC(1,1) AC(2,9) AC(10,63) */
+    size_t s0 = nextSos(bands->data, bands->dataLen, 0);
+    size_t s1 = nextSos(bands->data, bands->dataLen, s0 + 2);
+    size_t s2 = nextSos(bands->data, bands->dataLen, s1 + 2);
+    ASSERT_TRUE(s0 != SIZE_MAX && s1 != SIZE_MAX && s2 != SIZE_MAX);
+    const uint8_t *d = bands->data;
+    ASSERT_EQ(decodeMutated(bands, 0, d[0]), STATUS_OK); /* unmodified */
+    ASSERT_EQ(decodeMutated(bands, sosSs(d, s0) + 1, 1),
+              STATUS_ERR_INVALID);                                        /* DC scan with Se = 1 */
+    ASSERT_EQ(decodeMutated(bands, sosSs(d, s0), 1), STATUS_ERR_INVALID); /* AC scan before DC */
+    ASSERT_EQ(decodeMutated(bands, sosSs(d, s1), 0), STATUS_ERR_INVALID); /* DC scan Ss=0, Se=1 */
+    ASSERT_EQ(decodeMutated(bands, sosSs(d, s2), 1), STATUS_ERR_INVALID); /* band overlaps scan 1 */
+    ASSERT_EQ(decodeMutated(bands, sosSs(d, s2) + 1, 1), STATUS_ERR_INVALID);    /* Se < Ss */
+    ASSERT_EQ(decodeMutated(bands, sosSs(d, s2) + 1, 64), STATUS_ERR_INVALID);   /* Se > 63 */
+    ASSERT_EQ(decodeMutated(bands, sosSs(d, s1) + 2, 0xE0), STATUS_ERR_INVALID); /* Ah = 14 */
+    ASSERT_EQ(decodeMutated(bands, sosSs(d, s1) + 2, 0x0E), STATUS_ERR_INVALID); /* Al = 14 */
+    ASSERT_EQ(decodeMutated(bands, sosSs(d, s1) + 2, 0x10),
+              STATUS_ERR_INVALID); /* refine of nothing */
+    /* default: DC(al 1) AC(1-5, al 2) AC(6-63, al 2) AC refine(1-63, 2 -> 1) DC refine, AC refine
+     */
+    size_t r = nextSos(def->data, def->dataLen, 0);
+    for (int i = 0; i < 3; i++) {
+        r = nextSos(def->data, def->dataLen, r + 2);
+    }
+    ASSERT_TRUE(r != SIZE_MAX);
+    ASSERT_EQ(def->data[sosSs(def->data, r) + 2], 0x21);
+    ASSERT_EQ(decodeMutated(def, sosSs(def->data, r) + 2, 0x20),
+              STATUS_ERR_INVALID); /* Al != Ah-1 */
+    ASSERT_EQ(decodeMutated(def, sosSs(def->data, r) + 2, 0x10), STATUS_ERR_INVALID); /* wrong Ah */
+    ASSERT_EQ(decodeMutated(def, sosSs(def->data, r) + 2, 0x32), STATUS_ERR_INVALID); /* wrong Ah */
+    /* sequential SOS: Ss/Se/Ah/Al are ignored */
+    size_t q = nextSos(seq->data, seq->dataLen, 0);
+    ASSERT_TRUE(q != SIZE_MAX);
+    size_t f = sosSs(seq->data, q);
+    uint8_t *m = malloc(seq->dataLen);
+    memcpy(m, seq->data, seq->dataLen);
+    m[f] = 5;
+    m[f + 1] = 9;
+    m[f + 2] = 0x32;
+    GfxImage img;
+    ASSERT_EQ(decodeDefault(m, seq->dataLen, &img), STATUS_OK);
+    ASSERT_TRUE(pixelsMatch(seq, &img));
+    gfxImageFree(&img);
+    free(m);
+    freeJFix(&fs);
+}
+
 /* FF FF 00 inside entropy data is a data 0xFF (fill bytes), like FF 00. */
 TEST(gfxJpegFillBytesInEntropyAreData) {
     JFixSet fs;

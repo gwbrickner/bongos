@@ -715,6 +715,183 @@ def seq_scans(f, script, dctab=None, actab=None):
              "dctab": {ci: dctab[ci] for ci in g}, "actab": {ci: actab[ci] for ci in g}} for g in groups]
 
 
+
+# ------------------------------------------------------------------ progressive scans ----------
+
+
+class EobState:
+    def __init__(self):
+        self.run = 0
+        self.be = []  # buffered correction bits belonging to the pending EOB run
+
+
+def flush_eobrun(st, ev, at):
+    if st.run > 0:
+        nb = st.run.bit_length() - 1
+        ev.append(("h", 1, at, nb << 4))
+        if nb:
+            ev.append(("b", st.run & ((1 << nb) - 1), nb))
+        for bit in st.be:
+            ev.append(("b", bit, 1))
+        st.run = 0
+        st.be = []
+
+
+def ac_first_block(blk, ss, se, al, at, st, ev):
+    r = 0
+    for k in range(ss, se + 1):
+        v = blk[ZZ[k]]
+        temp = ((-v) >> al) if v < 0 else (v >> al)
+        if temp == 0:
+            r += 1
+            continue
+        flush_eobrun(st, ev, at)
+        while r > 15:
+            ev.append(("h", 1, at, 0xF0))
+            r -= 16
+        nb = temp.bit_length()
+        assert nb <= 10
+        ev.append(("h", 1, at, (r << 4) | nb))
+        ev.append(("b", temp if v >= 0 else (~temp) & ((1 << nb) - 1), nb))
+        r = 0
+    if r > 0:
+        st.run += 1
+        if st.run == 0x7FFF:
+            flush_eobrun(st, ev, at)
+
+
+def ac_refine_block(blk, ss, se, al, at, st, ev):
+    absv = {}
+    eob = 0
+    for k in range(ss, se + 1):
+        temp = abs(blk[ZZ[k]]) >> al
+        absv[k] = temp
+        if temp == 1:
+            eob = k
+    r = 0
+    br = []
+    for k in range(ss, se + 1):
+        temp = absv[k]
+        if temp == 0:
+            r += 1
+            continue
+        while r > 15 and k <= eob:
+            flush_eobrun(st, ev, at)
+            ev.append(("h", 1, at, 0xF0))
+            r -= 16
+            for bit in br:
+                ev.append(("b", bit, 1))
+            br = []
+        if temp > 1:
+            br.append(temp & 1)
+            continue
+        flush_eobrun(st, ev, at)
+        ev.append(("h", 1, at, (r << 4) | 1))
+        ev.append(("b", 1 if blk[ZZ[k]] >= 0 else 0, 1))
+        for bit in br:
+            ev.append(("b", bit, 1))
+        br = []
+        r = 0
+    if r > 0 or br:
+        st.run += 1
+        st.be.extend(br)
+        if st.run == 0x7FFF:
+            flush_eobrun(st, ev, at)
+
+
+def progressive_events(f, scan, ri):
+    ss, se, ah, al = scan["ss"], scan["se"], scan["ah"], scan["al"]
+    ev = []
+    if ss == 0:  # DC scan (may be interleaved)
+        pred = {ci: 0 for ci in scan["comps"]}
+        for n, mcu in enumerate(scan_mcus(f, scan["comps"])):
+            if ri and n and n % ri == 0:
+                ev.append(("rst",))
+                pred = {ci: 0 for ci in scan["comps"]}
+            for ci, bx, by in mcu:
+                v = f.coefs[ci][by][bx][0]
+                if ah == 0:
+                    sv = v >> al
+                    diff = sv - pred[ci]
+                    pred[ci] = sv
+                    t = category(diff)
+                    assert t <= 11
+                    ev.append(("h", 0, scan["dctab"][ci], t))
+                    if t:
+                        ev.append(("b", extra_bits(diff, t), t))
+                else:
+                    ev.append(("b", (v >> al) & 1, 1))
+    else:
+        assert len(scan["comps"]) == 1
+        ci = scan["comps"][0]
+        at = scan["actab"][ci]
+        st = EobState()
+        for n, mcu in enumerate(scan_mcus(f, scan["comps"])):
+            if ri and n and n % ri == 0:
+                flush_eobrun(st, ev, at)
+                ev.append(("rst",))
+            _, bx, by = mcu[0]
+            blk = f.coefs[ci][by][bx]
+            (ac_first_block if ah == 0 else ac_refine_block)(blk, ss, se, al, at, st, ev)
+        flush_eobrun(st, ev, at)
+    return ev
+
+
+def prog_scans(f, script, ids=None):
+    n = len(f.comps)
+    ids = ids or {ci: (0 if ci == 0 else 1) for ci in range(n)}
+
+    def sc(comps, ss, se, ah, al):
+        return {"comps": comps, "ss": ss, "se": se, "ah": ah, "al": al, "events": progressive_events,
+                "dctab": {ci: ids[ci] for ci in comps}, "actab": {ci: ids[ci] for ci in comps}}
+
+    allc = list(range(n))
+    blocks = sum(c["h"] * c["v"] for c in f.comps)
+    dcgroups = [allc] if blocks <= 10 else [[ci] for ci in allc]
+    out = []
+    if script == "default":  # libjpeg's simple progression
+        for g in dcgroups:
+            out.append(sc(g, 0, 0, 0, 1))
+        out.append(sc([0], 1, 5, 0, 2))
+        for ci in reversed(allc[1:]):
+            out.append(sc([ci], 1, 63, 0, 1))
+        out.append(sc([0], 6, 63, 0, 2))
+        out.append(sc([0], 1, 63, 2, 1))
+        for g in dcgroups:
+            out.append(sc(g, 0, 0, 1, 0))
+        for ci in reversed(allc[1:]):
+            out.append(sc([ci], 1, 63, 1, 0))
+        out.append(sc([0], 1, 63, 1, 0))
+    elif script == "deep":  # successive approximation 3 -> 2 -> 1 -> 0, DC per component
+        for ci in allc:
+            out.append(sc([ci], 0, 0, 0, 3))
+        for ci in allc:
+            out.append(sc([ci], 1, 63, 0, 3))
+        for a in (3, 2, 1):
+            for ci in allc:
+                out.append(sc([ci], 0, 0, a, a - 1))
+            for ci in allc:
+                out.append(sc([ci], 1, 63, a, a - 1))
+    elif script == "bands":  # spectral selection only, odd bands
+        for g in dcgroups:
+            out.append(sc(g, 0, 0, 0, 0))
+        for ci in allc:
+            for lo, hi in ((1, 1), (2, 9), (10, 63)):
+                out.append(sc([ci], lo, hi, 0, 0))
+    else:
+        raise ValueError(script)
+    return out
+
+
+def prog_variants(f, grp, lname, scripts=("default", "deep", "bands"), extra=()):
+    for sc in scripts:
+        data, lat = encode(f, prog_scans(f, sc), {"sof": 2, "jfif": True})
+        add_record("jg_%s__prog_%s" % (grp, sc), data, STATUS_OK, f)
+    for ri in extra:
+        data, lat = encode(f, prog_scans(f, "default"), {"sof": 2, "ri": ri})
+        add_record("jg_%s__prog_default_ri%d" % (grp, ri), data, STATUS_OK, f)
+
+
 # ------------------------------------------------------------------ fixtures -------------------
 
 records = []
@@ -762,6 +939,7 @@ def sequential_fixtures():
             for sc in scripts:
                 data, lat = encode(f, seq_scans(f, sc), {"jfif": True})
                 add_record("jg_%s__seq_%s" % (grp, sc), data, STATUS_OK, f)
+            prog_variants(f, grp, lname, scripts=("default",))
     # a group with many script/table/marker variants on one image (per layout)
     for lname in ("c444", "c420", "gray1", "c411"):
         cs, layout = LAYOUTS[lname]
@@ -790,6 +968,7 @@ def sequential_fixtures():
                 scans = seq_scans(f, sc, dt, dt)
             data, lat = encode(f, scans, opt)
             add_record("jg_%s__%s" % (grp, vname), data, STATUS_OK, f)
+        prog_variants(f, grp, lname, extra=(1, 2, 7, 1000))
     # random coefficients: DC categories, AC sizes, ZRL, k = 63, 16-bit codes
     for lname, sizes in (("gray1", [(16, 16), (17, 13)]), ("c444", [(16, 16), (17, 13)]),
                          ("c420", [(33, 31)]), ("gray2x2", [(17, 13)])):
@@ -802,6 +981,9 @@ def sequential_fixtures():
                                    ("split_skew", "split", {"tabmode": "skew"})):
                 data, lat = encode(f, seq_scans(f, sc), opt)
                 add_record("jg_%s__%s" % (grp, vname), data, STATUS_OK, f)
+            prog_variants(f, grp, lname, scripts=("default", "deep"), extra=(3,))
+            data, lat = encode(f, prog_scans(f, "default"), {"sof": 2, "tabmode": "skew"})
+            add_record("jg_%s__prog_default_skew" % grp, data, STATUS_OK, f)
     # colour-space marker rules
     for vname, cs, opt, ids in (
             ("jfif", "ycc", {"jfif": True}, None),
@@ -832,11 +1014,87 @@ def sequential_fixtures():
     add_record("jg_latch__dqt_redefined_after_first_scan", data, STATUS_OK, f)
 
 
+def dc_only_frame(w, h, tq=0):
+    """A gray frame whose AC coefficients are all zero and whose DC values vary (fast to model)."""
+    f = Frame(w, h, [{"id": 1, "h": 1, "v": 1, "tq": tq}], {tq: flat_q(1)}, "gray")
+    c = f.comps[0]
+    f.coefs = [[[[((bx * 3 + by * 5) % 64) - 32] + [0] * 63 for bx in range(c["bw"])]
+                for by in range(c["bh"])]]
+    return f
+
+
+def special_fixtures():
+    # EOB runs at the size limits: 16384 blocks of zero AC = one EOB14 run; 32768 blocks hit the
+    # 0x7FFF flush and leave a run of 1. Expected pixels stored as a CRC-32.
+    for (w, h, name) in ((1024, 1024, "eob14"), (1024, 2048, "eob_flush")):
+        f = dc_only_frame(w, h)
+        data, lat = encode(f, prog_scans(f, "default"), {"sof": 2})
+        add_record("jg_big_%s__prog_default" % name, data, STATUS_OK, f, crc=True)
+        data, lat = encode(f, seq_scans(f, "inter"), {})
+        add_record("jg_big_%s__seq" % name, data, STATUS_OK, f, crc=True)
+    # scan limit: exactly 128 scans decode, 129 are UNSUPPORTED
+    cs, layout = LAYOUTS["c444"]
+    f = make_random(16, 16, layout, cs, flat_q(3), seed=99)
+    for ci in (1, 2):  # chroma: DC only, so the scan scripts below are complete
+        for row in f.coefs[ci]:
+            for blk in row:
+                for i in range(1, 64):
+                    blk[i] = 0
+
+    def sc(comps, ss, se, ah, al):
+        return {"comps": comps, "ss": ss, "se": se, "ah": ah, "al": al, "events": progressive_events,
+                "dctab": {ci: (0 if ci == 0 else 1) for ci in comps},
+                "actab": {ci: (0 if ci == 0 else 1) for ci in comps}}
+
+    scans = [sc([0, 1, 2], 0, 0, 0, 1), sc([0, 1, 2], 0, 0, 1, 0)]
+    for k in range(1, 64):
+        scans.append(sc([0], k, k, 0, 1))
+    for k in range(1, 64):
+        scans.append(sc([0], k, k, 1, 0))
+    assert len(scans) == 128
+    data, lat = encode(f, scans, {"sof": 2})
+    add_record("jg_scans__128", data, STATUS_OK, f)
+    scans.append(sc([1], 1, 63, 0, 0))
+    data, lat = encode(f, scans, {"sof": 2})
+    add_record("jg_scans__129", data, STATUS_UNSUPPORTED, wh=(16, 16))
+
+    # An EOB run that claims to extend past a restart: the decoder resets the run at the restart
+    # (D-160), so blocks 0-1 are the zero-AC run's and block 2 onwards are coded afresh.
+    f = dc_only_frame(32, 8)
+    rng = Rng(4242)
+    for bx in (2, 3):
+        blk = f.coefs[0][0][bx]
+        for _ in range(6):
+            blk[ZZ[rng.range(1, 63)]] = rng.range(-9, 9)
+
+    def run_across_restart(fr, scan, ri):
+        ev = []
+        at = scan["actab"][0]
+        ev.append(("h", 1, at, 2 << 4))  # EOBRUN of 4 blocks, but only 2 blocks fit before the RST
+        ev.append(("b", 0, 2))
+        ev.append(("rst",))
+        st = EobState()
+        for bx in (2, 3):
+            ac_first_block(fr.coefs[0][0][bx], 1, 63, 0, at, st, ev)
+        flush_eobrun(st, ev, at)
+        return ev
+
+    dcs = prog_scans(f, "bands")[0]
+    ac = dict(dcs, ss=1, se=63, events=run_across_restart)
+    data, lat = encode(f, [dict(dcs), ac], {"sof": 2, "ri": 2})
+    add_record("jg_eobrun_across_restart__prog", data, STATUS_OK, f)
+
+    # a progressive file in which component 2 never gets any scan: INVALID at the EOI
+    cs, layout = LAYOUTS["c444"]
+    f = make_natural(16, 16, layout, cs, std_q(1), seed=11)
+    scans = [sc for sc in prog_scans(f, "deep") if 2 not in sc["comps"]]
+    data, lat = encode(f, scans, {"sof": 2})
+    add_record("jg_prog_missing_component__invalid", data, STATUS_INVALID, wh=(16, 16))
+
+
 def main():
     sequential_fixtures()
-    progressive_fixtures = globals().get("progressive_fixtures")
-    if progressive_fixtures:
-        progressive_fixtures()
+    special_fixtures()
     raw = b"".join(records)
     blob = struct.pack("<I", len(raw)) + zlib.compress(raw, 9)
     path = os.path.join(HERE, "jpeg-fixtures.z")

@@ -58,9 +58,6 @@ static Status parseDht(JpegDec *j, const uint8_t *p, size_t n) {
 }
 
 static Status parseSof(JpegDec *j, int type, const uint8_t *p, size_t n) {
-    if (type == 2) {
-        return STATUS_ERR_UNSUPPORTED; /* progressive: added in M12.7 step 5 */
-    }
     if (j->haveFrame || n < 6) {
         return STATUS_ERR_INVALID;
     }
@@ -182,6 +179,29 @@ static Status parseSos(JpegDec *j, const uint8_t *p, size_t n, JpegScan *s) {
     s->se = p[2 + 2 * ns];
     s->ah = p[3 + 2 * ns] >> 4;
     s->al = p[3 + 2 * ns] & 15;
+    bool needDc = true, needAc = true;
+    if (j->sofType == 2) {
+        /* T.81 G.1.1.1.1: DC scans (Ss = 0) may be interleaved, AC scans are single-component */
+        if (s->ss == 0 ? s->se != 0 : (s->se < s->ss || s->se > 63 || ns != 1)) {
+            return STATUS_ERR_INVALID;
+        }
+        if (s->ah > 13 || s->al > 13 || (s->ah != 0 && s->al != s->ah - 1)) {
+            return STATUS_ERR_INVALID;
+        }
+        needDc = s->ss == 0 && s->ah == 0;
+        needAc = s->ss != 0;
+        for (uint32_t i = 0; i < ns; i++) {
+            JpegComp *c = &j->comp[s->comp[i]];
+            if (s->ss != 0 && c->coefBits[0] < 0) {
+                return STATUS_ERR_INVALID; /* an AC scan before the component's DC first scan */
+            }
+            for (uint32_t k = s->ss; k <= s->se; k++) {
+                if (c->coefBits[k] != (s->ah == 0 ? -1 : (int8_t)s->ah)) {
+                    return STATUS_ERR_INVALID; /* not the next refinement of this coefficient */
+                }
+            }
+        }
+    }
     for (uint32_t i = 0; i < ns; i++) {
         JpegComp *c = &j->comp[s->comp[i]];
         if (j->sofType != 2 && c->coded) {
@@ -194,8 +214,16 @@ static Status parseSos(JpegDec *j, const uint8_t *p, size_t n, JpegScan *s) {
             memcpy(c->q, j->qt[c->tq], sizeof(c->q));
             c->latched = true;
         }
-        if (!j->dcTab[s->dcSel[i]].defined || !j->acTab[s->acSel[i]].defined) {
+        if ((needDc && !j->dcTab[s->dcSel[i]].defined) ||
+            (needAc && !j->acTab[s->acSel[i]].defined)) {
             return STATUS_ERR_INVALID;
+        }
+    }
+    if (j->sofType == 2) {
+        for (uint32_t i = 0; i < ns; i++) {
+            for (uint32_t k = s->ss; k <= s->se; k++) {
+                j->comp[s->comp[i]].coefBits[k] = (int8_t)s->al;
+            }
         }
     }
     return STATUS_OK;
@@ -279,7 +307,8 @@ static Status jpegRun(JpegDec *j, GfxImage *out) {
         }
     }
     for (uint32_t i = 0; i < j->nComp; i++) {
-        if (!j->comp[i].coded) {
+        /* every component needs its (first) DC data: a sequential scan or a progressive DC scan */
+        if (j->sofType == 2 ? j->comp[i].coefBits[0] < 0 : !j->comp[i].coded) {
             return STATUS_ERR_INVALID;
         }
     }
