@@ -18,6 +18,7 @@ ask (see "When something isn't specified"). Don't guess.
 | `docs/logs/M<p>.<n>.md` | The running log for each milestone | While working on that milestone |
 | `docs/specs/` | Exact byte layouts and algorithms | When touching that format |
 | `docs/AGENT_TASKS.md` | Optional low-priority side tasks for extra sessions | Only when the prompt points you at it |
+| `AGENTS.md` | The rules for non-Claude agents, restricted to easy tasks the owner picks | Only if you edit it, or the owner asks about it |
 
 The root has no copies of these files. Always use the `docs/` versions.
 

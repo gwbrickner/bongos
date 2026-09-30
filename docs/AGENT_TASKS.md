@@ -1,7 +1,8 @@
 # Side-task backlog for AI agents
 _Low-priority work that can run beside the main line. Everything here is optional: none of it
-blocks a milestone. Read `CLAUDE.md` first; this file only adds to it. Where the two disagree,
-`CLAUDE.md` wins. Written 2026-09-30, when the main line was about to start M2.6._
+blocks a milestone. Claude sessions read `CLAUDE.md` first; other agents read `AGENTS.md` first (its "Your tasks"
+table is the owner's chosen subset of Tier A). This file only adds to them. Where they
+disagree, the agent's own file wins. Written 2026-09-30, when the main line was about to start M2.6._
 
 ## 1. Ground rules for every task here
 1. **Check nobody has the task.** Run `git fetch origin` and `git ls-remote --heads origin`. A
