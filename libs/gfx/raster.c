@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define BAND_ROWS      16
-#define BAND_MAX_CELLS 131072 /* caps the band buffers at 1 MiB of cover+area */
+#define BAND_MAX_CELLS 131072 /* 1 MiB of cover+area, unless one row is wider (masks only) */
 #define FULL           131072 /* coverage of a whole pixel in (acc*512 - area) units */
 
 /* floor(v / 256) for any sign, without relying on implementation-defined negative shifts. */

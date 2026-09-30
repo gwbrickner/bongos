@@ -56,7 +56,9 @@ typedef void (*GfxSpanFn)(void *ctx, int32_t y, int32_t x, const uint8_t *cov, i
 
 /* Exact-area anti-aliased scan conversion of `edges` clipped to `clip` (device pixels). Grows
  * (*scratch, *scratchSize) as needed with `a`; the caller frees it. NO_MEMORY on failure;
- * UNSUPPORTED if nEdges > GFX_RASTER_MAX_EDGES (which the cell arithmetic's int32 bound needs). */
+ * UNSUPPORTED if nEdges > GFX_RASTER_MAX_EDGES (which the cell arithmetic's int32 bound needs).
+ * Every edge coordinate must be within +-2^30 (gfxFlattenPath guarantees it), which keeps the
+ * int64 interpolation products below 2^62. */
 Status gfxRasterFill(const GfxAllocator *a, void **scratch, size_t *scratchSize,
                      const GfxEdge *edges, uint32_t nEdges, GfxRect clip, GfxFillRule rule,
                      GfxSpanFn fn, void *ctx);

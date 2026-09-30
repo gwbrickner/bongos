@@ -49,7 +49,8 @@ Status gfxPathAddEllipse(GfxPath *p, float cx, float cy, float rx, float ry);
 
 /* Fills `p` with `col` (premultiplied; sanitized on entry) using `rule`, anti-aliased, clipped to
  * the canvas clip and translated by its origin. Failure modes: the path's sticky error, NO_MEMORY
- * (scratch), UNSUPPORTED (more than GFX_RASTER_MAX_EDGES flattened edges intersect the clip).
+ * (scratch), UNSUPPORTED (more than GFX_RASTER_MAX_EDGES flattened edges are not wholly above or
+ * below the clip; edges left or right of it still count).
  * On failure nothing has been drawn. May allocate; never sleeps.
  *
  * Known limit (inherent to cover/area rasterizers, FreeType's included): where a path overlaps
@@ -59,7 +60,8 @@ Status gfxPathAddEllipse(GfxPath *p, float cx, float cy, float rx, float ry);
 Status gfxFillPath(GfxCanvas *c, const GfxPath *p, GfxFillRule rule, GfxColor col, GfxOp op);
 
 /* Composites the path's coverage into `m` (union: cov = new + old*(255-new)/255), with (0,0) at
- * the mask's top-left. Same failure modes as gfxFillPath. */
+ * the mask's top-left. Same failure modes as gfxFillPath. The mask may be wider than
+ * GFX_SURFACE_MAX_DIM; past 131072 columns the scratch is one row, 9 bytes per column. */
 Status gfxFillPathMask(GfxMask *m, const GfxPath *p, GfxFillRule rule, const GfxAllocator *a);
 
 #endif

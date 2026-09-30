@@ -92,8 +92,10 @@ GfxRect gfxCanvasClipBounds(const GfxCanvas *c); /* current clip in canvas coord
 void gfxFillRect(GfxCanvas *c, GfxRect r, GfxColor col, GfxOp op);
 
 /* Copies/composites `srcRect` of `src` (clamped to src's bounds) to (dx, dy), scaled by the
- * global `alpha` (255 = opaque). `src` may alias the canvas surface (the copy direction is chosen
- * so an overlapping move is correct for SRC; overlapping SRC_OVER blends is unspecified). */
+ * global `alpha` (255 = opaque). `src` may be the canvas surface itself (the same `pixels` and
+ * `stride`): the copy direction is chosen so an overlapping move reads every source pixel before
+ * overwriting it, for either op. A different GfxSurface viewing the same memory (a sub-rect view)
+ * is not detected and must not overlap the destination. */
 void gfxBlit(GfxCanvas *c, int32_t dx, int32_t dy, const GfxSurface *src, GfxRect srcRect, GfxOp op,
              uint8_t alpha);
 
