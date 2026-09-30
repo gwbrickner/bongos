@@ -356,7 +356,12 @@ Status gfxPngDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim
     uint64_t rawTotal = 0;
     for (uint32_t p = 0; p < passCount(pi); p++) {
         Pass ps = passOf(pi, p);
-        rawTotal += passBytes(&ps);
+        uint64_t pb = passBytes(&ps);
+        if (pb > UINT64_MAX - rawTotal) {
+            st = STATUS_ERR_UNSUPPORTED; /* only reachable with limits far above the defaults */
+            goto done;
+        }
+        rawTotal += pb;
     }
     if (rawTotal > (uint64_t)SIZE_MAX || idatTotal > (uint64_t)SIZE_MAX) {
         st = STATUS_ERR_UNSUPPORTED;
