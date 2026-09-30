@@ -576,6 +576,14 @@ TEST(fontAdvDirectoryBoundaries) {
     ASSERT_TRUE(initAndCheck(e, 12 + 16 * (size_t)maxTables, &st));
     ASSERT_TRUE(initAndCheck(e, 12 + 16 * (size_t)maxTables - 1, &st));
     ASSERT_EQ(st, STATUS_ERR_INVALID);
+    /* one record more than fits: the last record runs 1..16 bytes past the end. Every record
+     * after the real seven lies in table bytes (unknown tags), so only the directory check can
+     * reject it. */
+    memcpy(e, d, n);
+    set16(e, 4, maxTables);
+    ASSERT_EQ(gfxFontInit(&f, e, n), STATUS_OK);
+    set16(e, 4, maxTables + 1);
+    ASSERT_EQ(gfxFontInit(&f, e, n), STATUS_ERR_INVALID);
     free(e);
     free(d);
     free(c.d);
@@ -807,6 +815,12 @@ TEST(fontAdvCmapSubtableBoundaries) {
     ASSERT_EQ(gfxFontInit(&f, d, n), STATUS_ERR_INVALID);
     set16(d, off[BT_CMAP] + 12 + 6, 2); /* fewer segments are fine (the arrays shift) */
     ASSERT_TRUE(initAndCheck(d, n, NULL));
+    /* the cmap table 2 bytes shorter than the 3-segment fixed part: INVALID */
+    set16(d, off[BT_CMAP] + 12 + 6, 6);
+    set32(d, 12 + 16 * BT_CMAP - 16 + 12, (uint32_t)cm.n - 2); /* no OS/2: cmap is record 6 */
+    ASSERT_EQ(gfxFontInit(&f, d, n), STATUS_ERR_INVALID);
+    set32(d, 12 + 16 * BT_CMAP - 16 + 12, (uint32_t)cm.n);
+    ASSERT_EQ(gfxFontInit(&f, d, n), STATUS_OK);
     free(d);
     free(cm.d);
     free(sub.d);
@@ -942,6 +956,19 @@ TEST(fontAdvHmtxLocaEdges) {
     }
     ASSERT_EQ(fontGlyphRange(&f, 5, &a, &b), STATUS_ERR_INVALID);
     ASSERT_EQ(fontGlyphRange(&f, 0xFFFF, &a, &b), STATUS_ERR_INVALID);
+    free(d);
+    /* the hmtx tail reuses glyph numberOfHMetrics-1 (not glyph 0): nHM 3 of 5 */
+    s.nHM = 3;
+    d = buildFont(&s, &n, off);
+    ASSERT_EQ(gfxFontInit(&f, d, n), STATUS_OK);
+    static const int wantAdv[5] = {100, 110, 120, 120, 120};
+    for (uint16_t g = 0; g < 5; g++) {
+        ASSERT_EQ((int)gfxFontAdvanceUnits(&f, g), wantAdv[g]);
+    }
+    s.nHM = 1;
+    free(d);
+    d = buildFont(&s, &n, off);
+    ASSERT_EQ(gfxFontInit(&f, d, n), STATUS_OK);
     /* end == glyfLen is OK, one past is not; a decreasing pair is INVALID */
     set32(d, 12 + 16 * BT_GLYF + 12, 79);
     ASSERT_EQ(gfxFontInit(&f, d, n), STATUS_OK);
@@ -1277,4 +1304,29 @@ TEST(fontAdvMutationFuzz) {
     /* the fuzz must actually reach both outcomes, or it is testing nothing */
     ASSERT_TRUE(ok > 1000);
     ASSERT_TRUE(bad > 1000);
+}
+
+/* The (3,0) symbol retry applies to U+0000..U+00FF only: U+1041 must not reach U+F041 through
+ * 0xF000 | cp. */
+TEST(fontAdvSymbolRetryRange) {
+    Seg4 segs[2] = {{0xF041, 0xF041, (3u - 0xF041u) & 0xFFFFu, 0}, {0xFFFF, 0xFFFF, 1, 0}};
+    Buf sub;
+    memset(&sub, 0, sizeof sub);
+    putF4(&sub, segs, 2, NULL, 0);
+    Buf cm = cmapOne(3, 0, &sub);
+    FontSpec s = specDefault(cm.d, cm.n);
+    size_t n;
+    uint8_t *d = buildFont(&s, &n, NULL);
+    GfxFont f;
+    ASSERT_EQ(gfxFontInit(&f, d, n), STATUS_OK);
+    ASSERT_TRUE(f.cmapSymbol);
+    ASSERT_EQ((int)gfxFontGlyphIndex(&f, 0x41), 3);
+    ASSERT_EQ((int)gfxFontGlyphIndex(&f, 0xF041), 3);
+    static const uint32_t no[] = {0x141, 0x1041, 0xF141, 0x10041, 0x1F041, 0x10F041};
+    for (size_t i = 0; i < sizeof no / sizeof no[0]; i++) {
+        ASSERT_EQ((int)gfxFontGlyphIndex(&f, no[i]), 0);
+    }
+    free(d);
+    free(cm.d);
+    free(sub.d);
 }
