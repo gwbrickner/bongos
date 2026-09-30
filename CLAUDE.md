@@ -17,6 +17,7 @@ ask (see "When something isn't specified"). Don't guess.
 | `docs/BUG_HUNTING.md` | Severity levels, triage, subsystem checklists | Before any debugging or bug fix |
 | `docs/logs/M<p>.<n>.md` | The running log for each milestone | While working on that milestone |
 | `docs/specs/` | Exact byte layouts and algorithms | When touching that format |
+| `docs/AGENT_TASKS.md` | Optional low-priority side tasks for extra sessions | Only when the prompt points you at it |
 
 The root has no copies of these files. Always use the `docs/` versions.
 
