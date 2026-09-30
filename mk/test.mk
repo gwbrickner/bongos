@@ -69,10 +69,14 @@ PAGING_REQUIRED_KTESTS := paging_text_write_faults paging_data_exec_faults pagin
 # write faults -- plus the rest of kmalloc_test.c / vmalloc_test.c. Same reasoning: exit 33 alone
 # wouldn't notice a dropped test file.
 SLAB_REQUIRED_KTESTS := kmalloc_stress kmalloc_alignment kmalloc_double_free slab_ctor_dtor \
-                        kmalloc_redzone_overflow kmalloc_poison_detects_uaf \
                         vmalloc_guard_page_faults vmalloc_map_free_no_leak \
                         vmalloc_interior_free_rejected vmalloc_not_vmalloc_page_rejected \
                         vmalloc_oom_rollback
+# These two only exist in debug builds (kmalloc_test.c compiles them under KERNEL_DEBUG), so a
+# RELEASE=1 build can't be required to pass them; debug (the default, `make test`) still does.
+ifneq ($(RELEASE),1)
+SLAB_REQUIRED_KTESTS += kmalloc_redzone_overflow kmalloc_poison_detects_uaf
+endif
 # M2.6 (KASLR + kernel RNG): only the ktests that exist so far; later steps append their own
 # (bootinfo_rejects_bad carries the kernel-window bound on kaslrSlide). Every matrix log must also
 # show the kernel's kaslr line (kernelMain), so a kernel that stops reporting its slide cannot
