@@ -7,6 +7,7 @@
 #include "ktest.h"
 #include "sections.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define BOOTINFO_KASLR_ALIGN 0x200000ULL /* the slide granule: 2 MiB (ARCHITECTURE §6.6) */
