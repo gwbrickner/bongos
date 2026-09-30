@@ -883,6 +883,186 @@ TEST(gfxJpegProgressionRules) {
     freeJFix(&fs);
 }
 
+/* ---- hardening: limits, budget, truncation, fuzz, allocation failure ----------------------------
+ */
+
+static const char *const HARDEN_NAMES[] = {
+    "jg_nat_gray1_17x13__seq_inter",   "jg_nat_c420_17x13__seq_inter",
+    "jg_nat_c444_16x16__prog_default", "jg_nat_c411_17x13__seq_split",
+    "jg_var_c420__prog_deep",          "jg_var_c444__prog_default_ri7",
+    "jg_rnd_c444_16x16__inter_skew",   "jg_rnd_gray1_17x13__inter_flat_ri3",
+    "jg_var_gray1__prog_bands",        "jg_nat_frac_17x13__seq_inter",
+};
+#define N_HARDEN (sizeof(HARDEN_NAMES) / sizeof(HARDEN_NAMES[0]))
+
+/* An over-limit header is refused after touching only the small decoder state: nothing the size
+ * of the image is ever allocated (D-162). */
+TEST(gfxJpegLimitsRejectBeforeAllocating) {
+    Jb j;
+    jbBase(&j, 1);
+    j.b[j.sof + 5] = 0xFF; /* 65535 x 65535 */
+    j.b[j.sof + 6] = 0xFF;
+    j.b[j.sof + 7] = 0xFF;
+    j.b[j.sof + 8] = 0xFF;
+    DecCountAlloc st;
+    GfxAllocator al;
+    decAllocInit(&st, &al, -1);
+    GfxImage img;
+    ASSERT_EQ(gfxJpegDecode(j.b, j.n, NULL, &al, &img), STATUS_ERR_UNSUPPORTED);
+    ASSERT_TRUE(img.pixels == NULL);
+    ASSERT_TRUE(st.peakBytes <= sizeof(JpegDec) + 1024);
+    ASSERT_EQ(st.live, 0);
+    /* within the dimension limits, but the coefficients + output exceed a small byte budget */
+    static const GfxDecodeLimits lim = {8192, 8192, (uint64_t)1 << 26, (uint64_t)64 << 20};
+    j.b[j.sof + 5] = 0x10; /* 4096 x 4096 gray: 33.5 MB coefficients + 67 MB pixels */
+    j.b[j.sof + 6] = 0x00;
+    j.b[j.sof + 7] = 0x10;
+    j.b[j.sof + 8] = 0x00;
+    decAllocInit(&st, &al, -1);
+    ASSERT_EQ(gfxJpegDecode(j.b, j.n, &lim, &al, &img), STATUS_ERR_UNSUPPORTED);
+    ASSERT_TRUE(st.peakBytes <= sizeof(JpegDec) + 1024);
+    ASSERT_EQ(st.live, 0);
+    /* a limit lower than a legitimate image's size */
+    static const GfxDecodeLimits tiny = {4, 4, 16, (uint64_t)1 << 20};
+    jbBase(&j, 1); /* 8 x 8 */
+    ASSERT_EQ(gfxJpegDecode(j.b, j.n, &tiny, NULL, &img), STATUS_ERR_UNSUPPORTED);
+    ASSERT_TRUE(img.pixels == NULL);
+}
+
+/* maxTotalBytes bounds the peak of everything live: the measured peak as the budget decodes, one
+ * byte less is refused before allocating the coefficients. */
+TEST(gfxJpegBudgetIsTheExactPeak) {
+    JFixSet fs;
+    ASSERT_TRUE(loadJFix(&fs));
+    for (size_t i = 0; i < N_HARDEN; i++) {
+        const JFix *x = findJFix(&fs, HARDEN_NAMES[i]);
+        ASSERT_TRUE(x != NULL);
+        DecCountAlloc st;
+        GfxAllocator al;
+        decAllocInit(&st, &al, -1);
+        GfxImage img;
+        ASSERT_EQ(gfxJpegDecode(x->data, x->dataLen, NULL, &al, &img), STATUS_OK);
+        gfxImageFree(&img);
+        GfxDecodeLimits lim = {16384, 16384, (uint64_t)1 << 26, st.peakBytes};
+        decAllocInit(&st, &al, -1);
+        ASSERT_EQ(gfxJpegDecode(x->data, x->dataLen, &lim, &al, &img), STATUS_OK);
+        ASSERT_TRUE(pixelsMatch(x, &img));
+        gfxImageFree(&img);
+        lim.maxTotalBytes--;
+        decAllocInit(&st, &al, -1);
+        ASSERT_EQ(gfxJpegDecode(x->data, x->dataLen, &lim, &al, &img), STATUS_ERR_UNSUPPORTED);
+        ASSERT_TRUE(img.pixels == NULL);
+        ASSERT_EQ(st.live, 0);
+        ASSERT_TRUE(st.peakBytes < lim.maxTotalBytes); /* stopped before the big allocations */
+    }
+    freeJFix(&fs);
+}
+
+/* Every proper prefix of a file fails (the EOI is required), in an exact-size heap copy so
+ * ASan sees any read past the end. */
+TEST(gfxJpegTruncationEveryOffset) {
+    JFixSet fs;
+    ASSERT_TRUE(loadJFix(&fs));
+    for (size_t i = 0; i < N_HARDEN; i++) {
+        const JFix *x = findJFix(&fs, HARDEN_NAMES[i]);
+        ASSERT_TRUE(x != NULL);
+        for (size_t n = 0; n < x->dataLen; n++) {
+            uint8_t *copy = malloc(n != 0 ? n : 1);
+            memcpy(copy, x->data, n);
+            DecCountAlloc st;
+            GfxAllocator al;
+            decAllocInit(&st, &al, -1);
+            GfxImage img;
+            Status s = gfxJpegDecode(copy, n, NULL, &al, &img);
+            free(copy);
+            if (s == STATUS_OK) {
+                fprintf(stderr, "  %s truncated to %zu of %u decoded\n", x->name, n, x->dataLen);
+            }
+            ASSERT_TRUE(s != STATUS_OK);
+            ASSERT_TRUE(img.pixels == NULL);
+            ASSERT_EQ(st.live, 0);
+        }
+    }
+    freeJFix(&fs);
+}
+
+/* Random byte corruption: never a crash or leak, and anything accepted is a well-formed opaque
+ * image. Half the mutations land in the first 300 bytes (the headers). */
+TEST(gfxJpegMutationFuzz) {
+    JFixSet fs;
+    ASSERT_TRUE(loadJFix(&fs));
+    static const GfxDecodeLimits lim = {4096, 4096, (uint64_t)1 << 22, (uint64_t)64 << 20};
+    uint32_t seed = 0xC0FFEE;
+    int accepted = 0, runs = 0;
+    for (size_t i = 0; i < N_HARDEN; i++) {
+        const JFix *x = findJFix(&fs, HARDEN_NAMES[i]);
+        ASSERT_TRUE(x != NULL);
+        for (int it = 0; it < 2000; it++) {
+            uint8_t *m = malloc(x->dataLen);
+            memcpy(m, x->data, x->dataLen);
+            int nm = 1 + (int)(decRng(&seed) % 3);
+            for (int k = 0; k < nm; k++) {
+                size_t span = (it & 1) && x->dataLen > 300 ? 300 : x->dataLen;
+                size_t at = decRng(&seed) % span;
+                if (decRng(&seed) % 4 == 0) {
+                    m[at] ^= (uint8_t)(1u << (decRng(&seed) % 8));
+                } else {
+                    m[at] = (uint8_t)decRng(&seed);
+                }
+            }
+            DecCountAlloc st;
+            GfxAllocator al;
+            decAllocInit(&st, &al, -1);
+            GfxImage img;
+            Status s = gfxImageDecode(m, x->dataLen, &lim, &al, &img);
+            runs++;
+            if (s == STATUS_OK) {
+                accepted++;
+                ASSERT_TRUE(img.width >= 1 && img.width <= 4096 && img.pixels != NULL);
+                for (size_t p = 0; p < (size_t)img.width * img.height; p++) {
+                    ASSERT_TRUE((img.pixels[p] >> 24) == 0xFF);
+                }
+                gfxImageFree(&img);
+            } else {
+                ASSERT_TRUE(img.pixels == NULL);
+            }
+            ASSERT_EQ(st.live, 0);
+            free(m);
+        }
+    }
+    fprintf(stderr, "  jpeg fuzz: %d runs, %d accepted\n", runs, accepted);
+    ASSERT_TRUE(accepted > 0 && accepted < runs);
+    freeJFix(&fs);
+}
+
+/* A failing allocator at each allocation point: NO_MEMORY, nothing leaked, no pixels. A decode
+ * makes four allocations (state, coefficients, output, strips). */
+TEST(gfxJpegAllocationFailureSweep) {
+    JFixSet fs;
+    ASSERT_TRUE(loadJFix(&fs));
+    for (size_t i = 0; i < N_HARDEN; i++) {
+        const JFix *x = findJFix(&fs, HARDEN_NAMES[i]);
+        ASSERT_TRUE(x != NULL);
+        for (int failAt = 0; failAt < 8; failAt++) {
+            DecCountAlloc st;
+            GfxAllocator al;
+            decAllocInit(&st, &al, failAt);
+            GfxImage img;
+            Status s = gfxJpegDecode(x->data, x->dataLen, NULL, &al, &img);
+            ASSERT_EQ(st.live, s == STATUS_OK ? 1 : 0); /* only the returned pixels */
+            if (failAt < 4) {
+                ASSERT_EQ(s, STATUS_ERR_NO_MEMORY);
+                ASSERT_TRUE(img.pixels == NULL);
+            } else {
+                ASSERT_EQ(s, STATUS_OK);
+                gfxImageFree(&img);
+                ASSERT_EQ(st.live, 0);
+            }
+        }
+    }
+    freeJFix(&fs);
+}
+
 /* FF FF 00 inside entropy data is a data 0xFF (fill bytes), like FF 00. */
 TEST(gfxJpegFillBytesInEntropyAreData) {
     JFixSet fs;
