@@ -1,11 +1,13 @@
 # make image -> build/bongos.img: cross-compiles the UEFI loader (boot/uefi/ + boot/common/),
 # cross-compiles the kernel (mk/kernel.mk), builds tools/mkimage with the host toolchain, and runs
 # it to produce a GPT disk image (ARCHITECTURE §5.1). Also builds build/bongos-ktest.img, the same
-# image with tests/harness/ktest-boot.cfg baked in instead of boot/boot.cfg (mk/test.mk uses it).
+# image with tests/harness/ktest-boot.cfg baked in instead of boot/boot.cfg (mk/test.mk uses it),
+# and build/bongos-kaslroff.img, the ktest image with `kaslr = off` (tests/harness/kaslr-check.sh).
 # BIOS boot support (stage1/stage2) lands in M2.5; until then the BIOS boot partition is reserved
 # but empty, and `run-bios`/matrix rows stay off.
 IMAGE := $(BUILD)/bongos.img
 KTEST_IMAGE := $(BUILD)/bongos-ktest.img
+KASLROFF_IMAGE := $(BUILD)/bongos-kaslroff.img
 BOOT_UEFI_DIR := $(BUILD)/boot-uefi
 MKIMAGE_DIR := $(BUILD)/tools/mkimage
 
@@ -96,4 +98,7 @@ image: branding $(UEFI_EFI) $(MKIMAGE_BIN) $(KERNEL_ELF) $(BOOT_CFG_GENERATED) $
 		--boot-cfg $(BOOT_CFG_GENERATED) --stage1 $(BIOS_STAGE1_BIN) --stage2 $(BIOS_STAGE2_BIN)
 	$(MKIMAGE_BIN) --output $(KTEST_IMAGE) --efi $(UEFI_EFI) --kernel $(KERNEL_ELF) \
 		--boot-cfg tests/harness/ktest-boot.cfg --stage1 $(BIOS_STAGE1_BIN) \
+		--stage2 $(BIOS_STAGE2_BIN)
+	$(MKIMAGE_BIN) --output $(KASLROFF_IMAGE) --efi $(UEFI_EFI) --kernel $(KERNEL_ELF) \
+		--boot-cfg tests/harness/kaslr-off-boot.cfg --stage1 $(BIOS_STAGE1_BIN) \
 		--stage2 $(BIOS_STAGE2_BIN)

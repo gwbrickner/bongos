@@ -16,10 +16,14 @@ test: image imgdiff kaslr-reloc-check
 		--expect-serial "loader: timeout, booting default" --expect-serial "kernel: init done"
 	tests/harness/run-qemu.sh --fw bios --image $(IMAGE) --name countdown-smoke-bios --timeout 30 \
 		--expect-serial "loader: timeout, booting default" --expect-serial "kernel: init done"
+	tests/harness/kaslr-check.sh --fw uefi
+	tests/harness/kaslr-check.sh --fw bios
 
 test-full: image kaslr-reloc-check
 	tests/harness/run-matrix.sh tests/harness/matrix-full.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix-full.conf
+	tests/harness/kaslr-check.sh --fw uefi
+	tests/harness/kaslr-check.sh --fw bios
 
 # Re-runs the GUI tests alone (skips the ktest matrix and countdown smoke) -- useful while
 # iterating on a screenshot test without waiting on the rest of `make test`. FW selects the
@@ -81,8 +85,13 @@ endif
 # (bootinfo_rejects_bad carries the kernel-window bound on kaslrSlide). Every matrix log must also
 # show the kernel's kaslr line (kernelMain), so a kernel that stops reporting its slide cannot
 # pass, and the slide header backtracePrint() puts before every backtrace (ROADMAP M2.6 item 3:
-# panic output accounts for the slide; the trap ktests always print at least one backtrace).
-M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad
+# panic output accounts for the slide; the trap ktests always print at least one backtrace), and
+# the loader's own `kaslr: slide=` line: the matrix boots build/bongos-ktest.img, whose boot.cfg
+# (tests/harness/ktest-boot.cfg) leaves KASLR at its default (on), so a loader that fell back
+# ("kaslr: disabled") or stopped sliding fails here (tests/harness/kaslr-check.sh, run by `make
+# test`/`test-full` after the matrix, checks the slide values across several boots and kaslr=off).
+M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad kaslr_slide_consistent \
+                       kaslr_relocs_applied
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus mem; do \
@@ -135,6 +144,10 @@ _check-ktest-pass:
 	    done; \
 	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^\[info\] kaslr: virtBase=0x[0-9a-f]{16} slide=0x[0-9a-f]{16}$$'; then \
 	        echo "make test: $$log does not contain the kernel's 'kaslr: virtBase=... slide=...' line (ROADMAP M2.6 Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^loader: kaslr: slide=0x[0-9a-f]{16} base=0x[0-9a-f]{16} relocs=[0-9]+$$'; then \
+	        echo "make test: $$log does not contain the loader's 'kaslr: slide=... base=... relocs=...' line (ROADMAP M2.6 Done-when guarantee not met; KASLR is on by default)"; \
 	        status=1; \
 	    fi; \
 	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^  kaslr slide 0x[0-9a-f]{16} \(link address = address - slide\)$$'; then \
