@@ -39,6 +39,7 @@ typedef struct {
     bool err;
 } JpegBits;
 
+/* Starts reading at data[pos]; pure, never fails. */
 void jpegBitsInit(JpegBits *b, const uint8_t *data, size_t size, size_t pos);
 /* n in 0..16. On a pad-bit read sets b->err and returns 0. */
 uint32_t jpegGetBits(JpegBits *b, int n);

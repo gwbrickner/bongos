@@ -834,7 +834,7 @@ your network, `ping` your router, and resolve and ping a public hostname.
 **Owner hardware check:** boot the PC to the greeter at native resolution, log in, open the
 launcher, and move windows around with a USB mouse. Report whether anything is sluggish.
 
-### [ ] M12.7 JPEG + GIF decoders `[parallel-ok]`
+### [x] M12.7 JPEG + GIF decoders `[parallel-ok]`
 **Needs:** M12.2
 1. Baseline and progressive JPEG (including chroma subsampling), and GIF (including animation frames).
 2. Host golden tests.

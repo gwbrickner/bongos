@@ -1121,9 +1121,8 @@ against tables dumped from the reference PC (`acpidump` from a Linux live USB, s
   and even-odd), strokes, A8 box blur and drop shadows, damage regions, and the PNG and BMP
   decoders (D-141..D-147). M12.7 added the JPEG decoder (SOF0/1/2, Huffman, 8-bit gray/YCbCr/RGB,
   exact integer pipeline) and the GIF decoder (87a/89a, streaming animation compositor)
-  (D-160..D-165). It is userland/host only (never linked
-  into the kernel), uses float only for path geometry, and takes an allocator hook so it has no
-  hidden libc dependency. The DEFLATE/zlib codec it uses lives in `libs/compress` (D-140).
+  (D-160..D-165). It is userland/host only (never linked into the kernel), uses float only for
+  path geometry, and takes an allocator hook so it has no hidden libc dependency. The DEFLATE/zlib codec it uses lives in `libs/compress` (D-140).
 - **Apps:**
   - **terminal:** xterm-256color on a PTY, with tabs and scrollback
   - **files:** the file manager

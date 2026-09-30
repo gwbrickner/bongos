@@ -1,4 +1,5 @@
-/* libs/gfx image decoders (M12.2, D-146): PNG and BMP into premultiplied ARGB32 (D-141). The
+/* libs/gfx image decoders (M12.2, D-146; JPEG and GIF added in M12.7, D-160..D-164): PNG, BMP,
+ * JPEG and GIF into premultiplied ARGB32 (D-141). The
  * decoders take untrusted input: every size is computed in 64 bits and checked against the limits
  * BEFORE anything is allocated, every offset is bounds-checked, and every allocation goes through
  * an accounting wrapper that enforces `maxTotalBytes` across all live temporaries.
@@ -63,7 +64,8 @@ Status gfxImageDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *l
  * reproducible on every host: an integer "islow" IDCT, replicated chroma, libjpeg's fixed-point
  * YCbCr conversion. Output pixels are opaque, so already premultiplied.
  * Budget: whole-image int16 coefficients (about 7 bytes/pixel for 4:2:0, 10 for 4:4:4) plus the
- * output count against `maxTotalBytes`; the sum is checked before anything is allocated. */
+ * output count against `maxTotalBytes`; the sum (which includes the output pass's strips) is
+ * checked before anything image-sized is allocated. */
 Status gfxJpegDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *lim,
                      const GfxAllocator *a, GfxImage *out);
 

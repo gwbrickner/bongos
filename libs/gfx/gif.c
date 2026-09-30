@@ -531,9 +531,9 @@ Status gfxGifNextFrame(GfxGif *g, GfxGifFrame *f) {
         g->error = st;
         return st;
     }
-    uint32_t W = g->canvas.width, H = g->canvas.height;
-    uint32_t x0 = fh.x < W ? fh.x : W, y0 = fh.y < H ? fh.y : H;
-    uint32_t x1 = fh.x + fh.w < W ? fh.x + fh.w : W, y1 = fh.y + fh.h < H ? fh.y + fh.h : H;
+    uint32_t cw = g->canvas.width, ch = g->canvas.height;
+    uint32_t x0 = fh.x < cw ? fh.x : cw, y0 = fh.y < ch ? fh.y : ch;
+    uint32_t x1 = fh.x + fh.w < cw ? fh.x + fh.w : cw, y1 = fh.y + fh.h < ch ? fh.y + fh.h : ch;
     bool empty = x1 <= x0 || y1 <= y0;
     GfxRect rect = {0, 0, 0, 0};
     if (!empty) {
@@ -541,7 +541,7 @@ Status gfxGifNextFrame(GfxGif *g, GfxGifFrame *f) {
     }
     if (fh.disposal == 3 && !empty && g->save != NULL) { /* save BEFORE drawing */
         for (uint32_t y = y0; y < y1; y++) {
-            memcpy(g->save + (size_t)(y - y0) * (x1 - x0), g->canvas.pixels + (size_t)y * W + x0,
+            memcpy(g->save + (size_t)(y - y0) * (x1 - x0), g->canvas.pixels + (size_t)y * cw + x0,
                    (size_t)(x1 - x0) * 4u);
         }
     }
@@ -550,7 +550,7 @@ Status gfxGifNextFrame(GfxGif *g, GfxGifFrame *f) {
         GifPainter *p = &pt;
         memset(p, 0, sizeof(*p));
         p->canvas = g->canvas.pixels;
-        p->stride = W;
+        p->stride = cw;
         p->fx = fh.x;
         p->fy = fh.y;
         p->fw = fh.w;
