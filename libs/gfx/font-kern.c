@@ -474,6 +474,7 @@ int32_t gfxFontKernUnits(const GfxFont *f, uint16_t left, uint16_t right) {
     return 0;
 }
 
+/* Contract: pure, never sleeps, never fails; NONE for a NULL or failed font. */
 GfxFontKernSource gfxFontKernSource(const GfxFont *f) {
     if (f == NULL || f->data == NULL) {
         return GFX_FONT_KERN_NONE;

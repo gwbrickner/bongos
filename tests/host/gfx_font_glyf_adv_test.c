@@ -1132,6 +1132,36 @@ TEST(glyfAdvFreeLeavesAReusableOutline) {
     free(xy);
 }
 
+TEST(renderAdvScratchIsReusableAfterFree) {
+    size_t n;
+    const uint8_t *d = ftuFont(FTU_SANS, &n);
+    GfxFont f;
+    ASSERT_EQ(gfxFontInit(&f, d, n), STATUS_OK);
+    const uint16_t gid = gfxFontGlyphIndex(&f, 'g');
+    Strict st;
+    GfxAllocator a;
+    strictInit(&st, &a, -1);
+    GfxGlyphScratch sc;
+    gfxGlyphScratchInit(&sc, &a);
+    GfxGlyphImage img[2];
+    for (int k = 0; k < 2; k++) {
+        ASSERT_EQ(gfxFontRenderGlyph(&f, gid, 30 * 64, 1, &sc, &a, &img[k]), STATUS_OK);
+        gfxGlyphScratchFree(&sc); /* between the renders: the second one starts from nothing */
+        gfxGlyphScratchFree(&sc);
+    }
+    ASSERT_EQ(img[0].mask.width, img[1].mask.width);
+    ASSERT_EQ(img[0].mask.height, img[1].mask.height);
+    ASSERT_TRUE(img[0].left == img[1].left && img[0].top == img[1].top);
+    ASSERT_TRUE(memcmp(img[0].mask.data, img[1].mask.data, img[0].allocSize) == 0);
+    gfxGlyphImageFree(&img[0]);
+    gfxGlyphImageFree(&img[1]);
+    gfxGlyphImageFree(&img[1]); /* idempotent */
+    gfxGlyphScratchFree(NULL);
+    gfxGlyphImageFree(NULL);
+    ASSERT_EQ(st.live, (size_t)0);
+    ASSERT_EQ(st.bad, 0);
+}
+
 TEST(glyfAdvOutlineToPathAllOffStartsAtTheMidpoint) {
     /* all off-curve, with first and last differing in both x and y */
     float xy[] = {0, 0, 10, 2, 4, 8};

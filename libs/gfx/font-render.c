@@ -14,6 +14,7 @@ void gfxGlyphScratchInit(GfxGlyphScratch *s, const GfxAllocator *a) {
     gfxPathInit(&s->path, a);
 }
 
+/* Contract: NULL-safe; frees the outline and path, leaving the scratch empty and reusable. */
 void gfxGlyphScratchFree(GfxGlyphScratch *s) {
     if (s == NULL) {
         return;
