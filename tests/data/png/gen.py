@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generates tests/data/png/*.png fixtures for tools/imgdiff's host tests (ARCHITECTURE §23/
 D-070), using Python's stdlib `zlib` -- a host tool, ARCHITECTURE §0's host-tool exception, and
-independent of bongOS's own from-scratch PNG/DEFLATE codec (tools/imgdiff/{png,zlib_wrap,inflate,
-deflate}.c). Decoding these fixtures with our own decoder is therefore a real cross-check against
+independent of our own from-scratch PNG/DEFLATE codec (tools/imgdiff/png.c on top of
+libs/compress/{zlib,inflate,deflate}.c). Decoding these fixtures with our own decoder is therefore a real cross-check against
 an independent implementation, not just a round trip through code that wrote them.
 
 Run manually (`python3 tests/data/png/gen.py`) when adding or changing fixtures; the output PNGs

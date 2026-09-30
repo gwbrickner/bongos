@@ -15,8 +15,9 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # $(CONSOLE_FONT_C) (mk/font.mk): fbtext.c links against the generated font data (fontConsolePsf),
 # not a wildcard match under boot/common/*.c, so it's listed explicitly; Make builds it first since
 # it's its own target with its own rule. tools/imgdiff/*.c minus main.c (which defines its own
-# `main`, conflicting with tests/host/main.c's): imgdiff's PPM/PNG/DEFLATE codec is host-testable
-# logic living outside tests/host/, same reasoning as gpt.c/bootcfg.c below. kernel/drivers/fbcon/
+# `main`, conflicting with tests/host/main.c's): imgdiff's PPM/PNG reader/writer (its DEFLATE
+# codec is in libs/compress, below) is host-testable logic living outside tests/host/, same
+# reasoning as gpt.c/bootcfg.c below. kernel/drivers/fbcon/
 # fbcon.c: pure C on top of fbtext.c's primitive (no hardware I/O, no locks yet), so it's just as
 # host-testable as fbtext.c itself -- only needs kernel/include on the path for uapi/status.h.
 # kernel/core/ksym.c: the KSYM v1 decoder (D-075) is deliberately pure (no sections.h/ksnprintf
@@ -50,6 +51,13 @@ HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
                             -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms \
                             -Ikernel/mm
+
+# libs/compress and libs/gfx (M12.2, D-140..D-147): pure portable libraries, one wildcard each so a
+# new source file needs no edit here. `-Ilibs` lets code and tests say "compress/compress.h" and
+# "gfx/gfx.h" (bare basenames would collide with tools/imgdiff's image.h/png.h on the path).
+HOST_TEST_EXTRA_SRCS += $(wildcard libs/compress/*.c) $(wildcard libs/gfx/*.c)
+HOST_TEST_EXTRA_HDRS += $(wildcard libs/compress/*.h) $(wildcard libs/gfx/*.h)
+HOST_TEST_EXTRA_INCLUDES += -Ilibs
 
 .PHONY: host-tests
 host-tests: $(HOST_TEST_BIN)

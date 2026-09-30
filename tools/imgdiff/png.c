@@ -8,8 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "crc32.h"
-#include "zlib_wrap.h"
+#include "compress/compress.h"
 
 static const uint8_t PNG_SIGNATURE[8] = {137, 80, 78, 71, 13, 10, 26, 10};
 
@@ -165,7 +164,7 @@ bool pngRead(const char *path, Image *out, char *errbuf, size_t errbufCap) {
         if (chunkLen > 0) {
             memcpy(crcInput + 4, chunkData, chunkLen);
         }
-        uint32_t computedCrc = crc32Compute(crcInput, (size_t)chunkLen + 4);
+        uint32_t computedCrc = compressCrc32(0, crcInput, (size_t)chunkLen + 4);
         free(crcInput);
         if (computedCrc != readBE32(crcBuf)) {
             setErr(errbuf, errbufCap, "chunk CRC mismatch");
@@ -233,7 +232,8 @@ bool pngRead(const char *path, Image *out, char *errbuf, size_t errbufCap) {
         goto failNoFile;
     }
     size_t inflatedLen = 0;
-    if (!zlibInflate(idat.data, idat.len, raw, rawLen, &inflatedLen) || inflatedLen != rawLen) {
+    if (compressZlibInflate(idat.data, idat.len, raw, rawLen, &inflatedLen, NULL) != STATUS_OK ||
+        inflatedLen != rawLen) {
         setErr(errbuf, errbufCap, "corrupt or truncated PNG image data");
         free(raw);
         goto failNoFile;
@@ -301,7 +301,7 @@ static bool writeChunk(FILE *f, const char *type, const uint8_t *data, uint32_t 
     if (len > 0) {
         memcpy(crcInput + 4, data, len);
     }
-    uint32_t crc = crc32Compute(crcInput, (size_t)len + 4);
+    uint32_t crc = compressCrc32(0, crcInput, (size_t)len + 4);
     free(crcInput);
     uint8_t crcBuf[4];
     writeBE32(crcBuf, crc);
@@ -335,7 +335,7 @@ bool pngWrite(const char *path, const Image *img, char *errbuf, size_t errbufCap
         return false;
     }
     size_t zlibLen = 0;
-    if (!zlibDeflate(raw, rawLen, stride, zlibBuf, zlibCap, &zlibLen)) {
+    if (compressZlibDeflate(raw, rawLen, stride, zlibBuf, zlibCap, &zlibLen) != STATUS_OK) {
         setErr(errbuf, errbufCap, "compression failed (image too large?)");
         free(raw);
         free(zlibBuf);

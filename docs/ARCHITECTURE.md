@@ -113,6 +113,7 @@ libs/
   libc/            custom libc: native API wrappers, C17 standard library, POSIX layer
   crypto/          crypto primitives (also compiled into the kernel)
   bongfs/          bongfs core logic shared by kernel, mkfs, and fsck
+  compress/        deflate/inflate, zlib wrapper, Adler-32/CRC-32 (shared by gfx, imgdiff, pkg)
   gfx/             2D rasterizer, image decoders (PNG/JPEG/BMP/GIF), font engine
   ui/              GUI toolkit
   net/             DHCP, DNS, TLS 1.3, HTTP/1.1, SSH protocol libraries
@@ -1083,7 +1084,8 @@ against tables dumped from the reference PC (`acpidump` from a Linux live USB, s
   - `InputDevice` objects: keyboard (scancode to keycode) and pointer.
 - **`compositor` (userspace):**
   - Clients create **surfaces** over a channel protocol and share pixel buffers as `VmObject`
-    handles.
+    handles. Buffers are premultiplied ARGB32, one `uint32_t` `0xAARRGGBB` per pixel (B,G,R,A
+    in memory), the `libs/gfx` format (D-141); the compositor treats client buffers as untrusted.
   - On commit, a client sends its damage rectangles. The compositor composites only the
     damaged regions into a back buffer, then blits to the framebuffer.
   - Frames are paced to 60 Hz. Input handling runs on a realtime-class thread, so the cursor
@@ -1114,7 +1116,12 @@ against tables dumped from the reference PC (`acpidump` from a Linux live USB, s
   - **Later:** full GSUB/GPOS shaping, bidi, and color emoji (COLR/CPAL).
   - Fonts: an OFL-licensed UI sans-serif and monospace font in `data/fonts/`.
 - **`libs/gfx`:** 2D rasterization (antialiased paths, rounded rects, blur for shadows) and
-  image decoders for PNG, JPEG (baseline and progressive), BMP, and GIF.
+  image decoders for PNG, JPEG (baseline and progressive), BMP, and GIF. Implemented so far
+  (M12.2): premultiplied ARGB32 canvas with a clip stack, exact-area anti-aliased fills (nonzero
+  and even-odd), strokes, A8 box blur and drop shadows, damage regions, and the PNG and BMP
+  decoders (D-141..D-147); JPEG and GIF arrive in M12.7. It is userland/host only (never linked
+  into the kernel), uses float only for path geometry, and takes an allocator hook so it has no
+  hidden libc dependency. The DEFLATE/zlib codec it uses lives in `libs/compress` (D-140).
 - **Apps:**
   - **terminal:** xterm-256color on a PTY, with tabs and scrollback
   - **files:** the file manager
