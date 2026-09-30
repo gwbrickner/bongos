@@ -84,7 +84,7 @@ void *gfxDecAlloc(GfxDecodeCtx *d, size_t n); /* NULL if over budget (limitHit) 
 void gfxDecFree(GfxDecodeCtx *d, void *p, size_t n);
 /* NO_MEMORY or (after a budget hit) UNSUPPORTED, for a NULL from gfxDecAlloc. */
 Status gfxDecAllocStatus(const GfxDecodeCtx *d);
-/* UNSUPPORTED if w or h is zero-or-over-limit or w*h exceeds maxPixels; INVALID for zero. */
+/* INVALID if w or h is zero; UNSUPPORTED if either is over its limit or w*h exceeds maxPixels. */
 Status gfxDecCheckDims(const GfxDecodeCtx *d, uint64_t w, uint64_t h);
 /* Allocates out->pixels (w*h*4 bytes, uninitialized) through the accounting; fills the fields. */
 Status gfxDecAllocImage(GfxDecodeCtx *d, uint32_t w, uint32_t h, GfxImage *out);

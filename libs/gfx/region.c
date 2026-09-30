@@ -28,7 +28,7 @@ static bool contains(GfxRect outer, GfxRect inner) {
            outer.y1 >= inner.y1;
 }
 
-/* Rect area, saturating at UINT64_MAX (extents can reach 2^32 each). */
+/* Rect area. Extents are below 2^32 each, so the product fits; the saturation is only a guard. */
 static uint64_t area(GfxRect r) {
     uint64_t w = (uint64_t)((int64_t)r.x1 - r.x0), h = (uint64_t)((int64_t)r.y1 - r.y0);
     if (w != 0 && h > UINT64_MAX / w) {
@@ -150,7 +150,8 @@ void gfxRegionTranslate(GfxRegion *g, int32_t dx, int32_t dy) {
         }
     }
     g->count = n;
-    /* Saturating shifts can push distinct rects onto each other at the extremes. */
+    /* Saturation is monotone, so disjoint rects stay disjoint (at most touching); this is only a
+     * guard. */
     resolveOverlaps(g);
 }
 

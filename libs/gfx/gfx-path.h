@@ -77,10 +77,13 @@ typedef struct {
 /* Builds the outline of stroking `in` into `out` (which is reset first): one closed polygon per
  * segment, join and cap, ALL WOUND THE SAME WAY, to be filled together with GFX_FILL_NONZERO so
  * shared edges cancel and no seams appear (D-143). Curves are flattened to 0.1 px. Round joins
- * and caps are short arc fans, not full circles, to keep the edge count down. A subpath with no
- * length draws a dot for round caps, a square for square caps, and nothing for butt caps.
- * Failure modes: `in`'s sticky error, INVALID (a non-finite stroke width or miter limit),
- * NO_MEMORY. */
+ * and caps are short arc fans, not full circles, to keep the edge count down; their chords stay
+ * within 0.1 px of the arc up to a half-width of about 889 px (past that the 0.03 rad step floor
+ * lets the error grow as 1.1e-4 * half-width). A subpath with no length draws a dot for round
+ * caps, a square for square caps, and nothing for butt caps. `in` and `out` must be different
+ * paths. Coordinates and the half-width are clamped to +-GFX_COORD_MAX. Failure modes: `in`'s
+ * sticky error, INVALID (a non-finite stroke width or miter limit), NO_MEMORY (including a subpath
+ * that flattens to more than GFX_PATH_MAX_VERBS points). */
 Status gfxStrokeToPath(const GfxPath *in, const GfxStroke *s, GfxPath *out);
 
 /* gfxStrokeToPath + gfxFillPath (nonzero, SRC_OVER). Same failure modes as both. */
