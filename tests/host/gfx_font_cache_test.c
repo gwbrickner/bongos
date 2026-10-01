@@ -360,6 +360,116 @@ TEST(cacheCollisions) {
     gfxFontStackDestroy(&s);
 }
 
+/* Two keys that differ in exactly one field and share a bucket must still be two entries: the
+ * lookup compares the whole key, not only the bits that pick the bucket. One pair per field. */
+TEST(cacheKeyFieldsAllCompared) {
+    const GfxFont *faces[3];
+    ASSERT_TRUE(stdFaces(faces));
+    GfxFontStack s;
+    ASSERT_EQ(gfxFontStackInit(&s, faces, 3, 0, NULL), STATUS_OK);
+    const uint32_t mask = s.bucketMask;
+    enum { PAIRS = 3 }; /* per field */
+    static Op ops[4 * PAIRS * 4];
+    uint32_t nOps = 0;
+    for (uint32_t field = 0; field < 4; field++) {
+        uint32_t found = 0;
+        /* glyphs 3..400 exist in both Liberations (Sans and Mono share indices, not outlines) */
+        for (uint32_t g = 3; g < 400 && found < PAIRS; g++) {
+            for (uint32_t size = 10 * 64; size < 40 * 64 && found < PAIRS; size += 7) {
+                const uint32_t bin = g % 4;
+                Op a = {0, size, bin, (uint16_t)g}, b = a;
+                if (field == 0) {
+                    b.face = 1;
+                } else if (field == 1) {
+                    b.bin = (bin + 1 + size % 3) % 4;
+                } else if (field == 2) {
+                    b.size = size + 1 + g % 13;
+                } else {
+                    b.glyph = (uint16_t)(g + 1 + size % 5);
+                }
+                if ((fontCacheHash(fontCacheKey(a.face, a.glyph, a.size, a.bin)) & mask) !=
+                    (fontCacheHash(fontCacheKey(b.face, b.glyph, b.size, b.bin)) & mask)) {
+                    continue;
+                }
+                /* a, b, a, b: two misses, then two hits on the right entries */
+                ops[nOps++] = a;
+                ops[nOps++] = b;
+                ops[nOps++] = a;
+                ops[nOps++] = b;
+                found++;
+            }
+        }
+        ASSERT_EQ(found, (uint32_t)PAIRS);
+    }
+    /* the model (whole-key compare) checks every hit and miss, and the pixels must match */
+    ASSERT_TRUE(runOps(&s, ops, nOps, 1, 1));
+    ASSERT_TRUE(s.stats.misses >= 4 * PAIRS && s.stats.hits >= 4 * PAIRS);
+    gfxFontStackDestroy(&s);
+}
+
+/* A budget whose entry capacity is not a power of two (100000 / 64 = 1562 entries, 2048
+ * buckets): every bucket index has to come from the mask, never from the capacity. Keys are
+ * forced into buckets at and above the capacity, then churned past the entry limit. */
+TEST(cacheNonPowerOfTwoCapacity) {
+    const GfxFont *faces[3];
+    ASSERT_TRUE(stdFaces(faces));
+    GfxFontStack s;
+    ASSERT_EQ(gfxFontStackInit(&s, faces, 3, 100000, NULL), STATUS_OK);
+    ASSERT_EQ(s.capacity, 1562u);
+    ASSERT_EQ(s.bucketMask, 2047u);
+    enum { HIGH = 300, LOW = 4000, N = 12000 };
+    static Op uni[HIGH + LOW], ops[N];
+    uint32_t nHigh = 0, nLow = 0;
+    /* negative keys (glyph past the end, cost 64) so the cache is entry-bound: 1562 * 64 <= 100000
+     */
+    for (uint32_t g = 5000; g < 65000 && (nHigh < HIGH || nLow < LOW); g++) {
+        for (uint32_t face = 0; face < 3; face++) {
+            const uint32_t b = fontCacheHash(fontCacheKey(face, (uint16_t)g, 64, 0)) & s.bucketMask;
+            if (b >= s.capacity && nHigh < HIGH) {
+                uni[nHigh++] = (Op){face, 64, 0, (uint16_t)g};
+            } else if (b < s.capacity && nLow < LOW) {
+                uni[HIGH + nLow++] = (Op){face, 64, 0, (uint16_t)g};
+            }
+        }
+    }
+    ASSERT_TRUE(nHigh == HIGH && nLow == LOW);
+    rngState = 0x5EED5EED12345678ull;
+    for (uint32_t i = 0; i < N; i++) {
+        const uint32_t r = rnd();
+        /* half the traffic to the high buckets so they are hit, evicted and reused */
+        ops[i] = r % 2 == 0 ? uni[r / 2 % HIGH] : uni[HIGH + r / 2 % LOW];
+    }
+    ASSERT_TRUE(runOps(&s, ops, N, 0, 0));
+    ASSERT_TRUE(s.stats.evictions > 1000 && s.stats.hits > 1000);
+    ASSERT_EQ(s.stats.entries, 1562u);
+    ASSERT_TRUE(checkInvariants(&s));
+    /* real glyphs on top: the same budget, now byte-bound */
+    static Op real[3000];
+    rngState = 0xABCDEF0123456789ull;
+    makeRandomOps(real, 3000, &s);
+    Model *m = calloc(1, sizeof *m);
+    ASSERT_TRUE(m != NULL);
+    /* carry the cache's current state into a fresh model: replay the LRU order, oldest first */
+    int32_t order[1562];
+    uint32_t n = 0;
+    for (int32_t j = s.lruHead; j != -1; j = s.entries[j].lruNext) {
+        order[n++] = j;
+    }
+    for (uint32_t k = n; k-- > 0;) {
+        memmove(&m->e[1], &m->e[0], m->n * sizeof m->e[0]);
+        m->e[0].key = s.entries[order[k]].key;
+        m->e[0].cost = s.entries[order[k]].cost;
+        m->n++;
+        m->bytes += s.entries[order[k]].cost;
+    }
+    m->hits = s.stats.hits;
+    m->misses = s.stats.misses;
+    m->evictions = s.stats.evictions;
+    ASSERT_TRUE(runOpsWith(m, &s, real, 3000, 1, 0));
+    free(m);
+    gfxFontStackDestroy(&s);
+}
+
 TEST(cacheBudgetExact) {
     const GfxFont *faces[3];
     ASSERT_TRUE(stdFaces(faces));
@@ -540,6 +650,7 @@ TEST(cacheAllocSweep) {
         GfxAllocator al;
         ftuAllocInit(&fa, &al, failAt);
         GfxFontStack s;
+        memset(&s, 0xA5, sizeof s); /* a failed Init must zero the struct, not find it zeroed */
         const Status st = gfxFontStackInit(&s, faces, 3, 64u << 10, &al);
         if (st != STATUS_OK) {
             ASSERT_EQ(st, STATUS_ERR_NO_MEMORY);
@@ -607,22 +718,29 @@ TEST(cacheArgs) {
     gfxFontStackPick(&s, 'A', NULL, NULL);
     gfxFontStackDestroy(NULL);
 
-    /* Init argument checks (each leaves the struct zeroed) */
+    /* Init argument checks (each leaves the struct zeroed, whatever it held before) */
     GfxFont zeroFont;
     memset(&zeroFont, 0, sizeof zeroFont);
     const GfxFont *bad[9] = {faces[0], faces[0], faces[0], faces[0], faces[0],
                              faces[0], faces[0], faces[0], faces[0]};
-    ASSERT_EQ(gfxFontStackInit(&s, faces, 0, 0, NULL), STATUS_ERR_INVALID);
-    ASSERT_EQ(gfxFontStackInit(&s, bad, 9, 0, NULL), STATUS_ERR_INVALID);
+    const GfxFont *withNull[2] = {faces[0], NULL};
+    const GfxFont *withZero[2] = {faces[0], &zeroFont};
+    GfxFontStack zero;
+    memset(&zero, 0, sizeof zero);
+    for (int k = 0; k < 5; k++) {
+        memset(&s, 0xA5, sizeof s);
+        const GfxFont *const *fs = k == 0   ? faces
+                                   : k == 1 ? bad
+                                   : k == 2 ? NULL
+                                   : k == 3 ? withNull
+                                            : withZero;
+        const uint32_t nf = k == 0 ? 0 : k == 1 ? 9 : k == 2 ? 3 : 2;
+        ASSERT_EQ(gfxFontStackInit(&s, fs, nf, 0, NULL), STATUS_ERR_INVALID);
+        ASSERT_TRUE(memcmp(&s, &zero, sizeof s) == 0);
+    }
     ASSERT_EQ(gfxFontStackInit(&s, bad, 8, 0, NULL), STATUS_OK);
     gfxFontStackDestroy(&s);
     ASSERT_EQ(gfxFontStackInit(NULL, faces, 3, 0, NULL), STATUS_ERR_INVALID);
-    ASSERT_EQ(gfxFontStackInit(&s, NULL, 3, 0, NULL), STATUS_ERR_INVALID);
-    const GfxFont *withNull[2] = {faces[0], NULL};
-    ASSERT_EQ(gfxFontStackInit(&s, withNull, 2, 0, NULL), STATUS_ERR_INVALID);
-    const GfxFont *withZero[2] = {faces[0], &zeroFont};
-    ASSERT_EQ(gfxFontStackInit(&s, withZero, 2, 0, NULL), STATUS_ERR_INVALID);
-    ASSERT_TRUE(s.entries == NULL && s.nFaces == 0);
 
     /* budget clamps */
     ASSERT_EQ(gfxFontStackInit(&s, faces, 3, 1, NULL), STATUS_OK);
@@ -646,6 +764,29 @@ TEST(cacheArgs) {
               STATUS_OK);
     ASSERT_EQ(fa.count, count);
     ASSERT_EQ(s.stats.hits, 1u);
+    gfxFontStackDestroy(&s);
+    ASSERT_EQ(fa.live, 0);
+
+    /* the scratch grows through the stack's allocator too: the first miss makes exactly the
+     * allocations of a direct render with fresh scratch (outline, path, edges, then the mask) */
+    FtuAlloc fd;
+    GfxAllocator ald;
+    ftuAllocInit(&fd, &ald, -1);
+    GfxGlyphScratch sc;
+    gfxGlyphScratchInit(&sc, &ald);
+    GfxGlyphImage ref;
+    ASSERT_EQ(
+        gfxFontRenderGlyph(faces[0], gfxFontGlyphIndex(faces[0], 'g'), 14 * 64, 1, &sc, &ald, &ref),
+        STATUS_OK);
+    ASSERT_TRUE(fd.count > 1);
+    gfxGlyphImageFree(&ref);
+    gfxGlyphScratchFree(&sc);
+    ASSERT_EQ(fd.live, 0);
+    ftuAllocInit(&fa, &al, -1);
+    ASSERT_EQ(gfxFontStackInit(&s, faces, 3, 0, &al), STATUS_OK);
+    ASSERT_EQ(gfxFontStackGlyph(&s, 0, gfxFontGlyphIndex(faces[0], 'g'), 14 * 64, 1, &img),
+              STATUS_OK);
+    ASSERT_EQ(fa.count, 2 + fd.count);
     gfxFontStackDestroy(&s);
     ASSERT_EQ(fa.live, 0);
 }
