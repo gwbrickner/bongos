@@ -5,10 +5,12 @@
 #include "ktest.h"
 #include "page.h"
 #include "pmm.h"
+#include "vmalloc.h"
 #include "vmm.h"
 
 #include <arch/paging.h>
 #include <arch/trap.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 static void vmmReadTrigger(void *arg) {
@@ -157,4 +159,72 @@ KTEST(vmm_map_uc) {
     KTEST_ASSERT(vmmMapKernel(kva, pa, 4096, VMM_WRITE | (3u << 2)) == STATUS_ERR_INVALID);
     vmmKvaFree(kva, 4096);
     pmmFreePages(page, 0);
+}
+
+typedef struct {
+    volatile void *va;
+    uint64_t size;
+} MmioUnmapArgs;
+static void mmioUnmapTrigger(void *arg) {
+    const MmioUnmapArgs *a = (const MmioUnmapArgs *)arg;
+    vmmUnmapMmio(a->va, a->size);
+}
+
+/* True if every page of `[va & ~0xFFF, va + size)` is still mapped RW UC (vmmMapMmio's own leaf
+ * flags). Used to prove a rejected vmmUnmapMmio() left the mapping untouched. */
+static bool mmioStillMapped(uint64_t va, uint64_t size) {
+    uint64_t base = va & ~0xFFFULL;
+    uint64_t end = (va + size + 0xFFF) & ~0xFFFULL;
+    for (uint64_t p = base; p < end; p += 4096) {
+        VmmFlags f;
+        if (vmmLookupKernel(p, NULL, &f) != STATUS_OK || f != (VMM_WRITE | VMM_CACHE_UC)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* vmmUnmapMmio()'s contract (vmm.h): a pointer or size vmmMapMmio() did not hand out is a kernel
+ * bug and panics via panicBug() -- before anything is unmapped or freed, so a caught misuse leaves
+ * the real mapping intact. Covers a too-small size, an interior pointer, a too-large size, a
+ * vmalloc() pointer (a KVA mapping that is not UC MMIO), a pointer outside the KVA region, and a
+ * double unmap. */
+KTEST(vmm_mmio_unmap_misuse) {
+    const AcpiInfo *a = acpiGetInfo();
+    KTEST_ASSERT(a != NULL && a->madtStatus == STATUS_OK && a->madt.ioapicCount >= 1);
+    uint64_t pa = a->madt.ioapics[0].address;
+
+    volatile void *mmio;
+    KTEST_ASSERT(vmmMapMmio(pa, 2 * 4096, &mmio) == STATUS_OK);
+    uint64_t va = (uint64_t)(uintptr_t)mmio;
+    KTEST_ASSERT(mmioStillMapped(va, 2 * 4096));
+
+    MmioUnmapArgs cases[] = {
+        {mmio, 4},                                           /* too small: drops page 2 */
+        {(volatile void *)(uintptr_t)(va + 4096), 4},        /* interior pointer */
+        {mmio, 3 * 4096},                                    /* too large: runs into the guard */
+        {(volatile void *)(uintptr_t)(va + 4096), 2 * 4096}, /* shifted by a page */
+        {(volatile void *)(uintptr_t)pmmHhdmBase(), 4096},   /* not in the KVA region */
+    };
+    for (uint32_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        TrapCatchInfo info;
+        bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, mmioUnmapTrigger, &cases[i], &info);
+        KTEST_ASSERT_EQ(caught ? 0xFFu : i, 0xFFu); /* on failure, prints the uncaught case */
+        KTEST_ASSERT(mmioStillMapped(va, 2 * 4096));
+    }
+
+    /* A vmalloc() area is a live KVA mapping, but WB RAM, not UC MMIO. */
+    void *v = vmalloc(4096, 0);
+    KTEST_ASSERT(v != NULL);
+    MmioUnmapArgs vm = {(volatile void *)v, 4096};
+    TrapCatchInfo info;
+    KTEST_ASSERT(archTrapCatch(TRAP_CATCH_KERNEL_BUG, mmioUnmapTrigger, &vm, &info));
+    KTEST_ASSERT(vmmLookupKernel((uint64_t)(uintptr_t)v, NULL, NULL) == STATUS_OK);
+    vfree(v);
+
+    vmmUnmapMmio(mmio, 2 * 4096);
+    KTEST_ASSERT(vmmLookupKernel(va, NULL, NULL) == STATUS_ERR_NOT_FOUND);
+    KTEST_ASSERT(vmmLookupKernel(va + 4096, NULL, NULL) == STATUS_ERR_NOT_FOUND);
+    MmioUnmapArgs twice = {mmio, 2 * 4096};
+    KTEST_ASSERT(archTrapCatch(TRAP_CATCH_KERNEL_BUG, mmioUnmapTrigger, &twice, &info));
 }

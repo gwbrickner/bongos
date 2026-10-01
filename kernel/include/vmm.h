@@ -79,8 +79,11 @@ Status vmmUnmapKernel(uint64_t va, uint64_t size);
 Status vmmMapMmio(uint64_t pa, uint64_t size, volatile void **outVa);
 
 /* Undoes vmmMapMmio(): `va` is the pointer it returned and `size` the size it was given. Unmaps
- * the pages and frees the KVA range. Misuse (a pointer or size that vmmMapMmio did not hand out)
- * is a kernel bug and panics via panicBug(). Locks: vmmLock. IRQ-safe: yes. May sleep: no. */
+ * the pages and frees the KVA range. Misuse (a pointer or size that vmmMapMmio did not hand out:
+ * an interior pointer, a size covering more or fewer pages, a non-UC KVA mapping, a double unmap)
+ * is a kernel bug and panics via panicBug() before anything is unmapped; a size that rounds out to
+ * the same pages is indistinguishable and accepted. Locks: vmmLock (in callees). IRQ-safe: yes.
+ * May sleep: no. */
 void vmmUnmapMmio(volatile void *va, uint64_t size);
 
 /* Looks up the current 4 KiB-leaf mapping at `va` (must itself be 4 KiB-aligned). On success,

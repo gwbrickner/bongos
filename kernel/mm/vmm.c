@@ -9,6 +9,7 @@
 
 #include <arch/cpu.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 static KvaState kvaState;
@@ -153,6 +154,26 @@ void vmmUnmapMmio(volatile void *va, uint64_t size) {
                  (unsigned long long)size);
     }
     uint64_t len = ((end + KVA_PAGE_SIZE - 1) & ~(uint64_t)(KVA_PAGE_SIZE - 1)) - base;
+    /* vmmUnmapKernel()/vmmKvaFree() alone cannot tell a too-small size or an interior pointer from
+     * the real thing: every page is mapped and kvaFree() records no allocation sizes (D-088), so
+     * both would "succeed", leaving pages mapped inside KVA the allocator now believes is free.
+     * A genuine vmmMapMmio() range is exactly one KVA reservation, bracketed by kvaAlloc()'s
+     * unmapped guard pages, with every page RW|UC -- check all of that before changing anything.
+     * The UC check is also what rejects a vmalloc()/ACPI (WB) mapping of the right shape. */
+    if (!vmmRangeInKva(base, len) || base - KVA_GUARD_SIZE < VM_KVA_BASE ||
+        base + len + KVA_GUARD_SIZE > VM_KVA_END ||
+        vmmLookupKernel(base - KVA_GUARD_SIZE, NULL, NULL) != STATUS_ERR_NOT_FOUND ||
+        vmmLookupKernel(base + len, NULL, NULL) != STATUS_ERR_NOT_FOUND) {
+        panicBug("vmm: vmmUnmapMmio: not a vmmMapMmio range va=0x%llx size=0x%llx",
+                 (unsigned long long)a, (unsigned long long)size);
+    }
+    for (uint64_t off = 0; off < len; off += KVA_PAGE_SIZE) {
+        VmmFlags f;
+        if (vmmLookupKernel(base + off, NULL, &f) != STATUS_OK || f != (VMM_WRITE | VMM_CACHE_UC)) {
+            panicBug("vmm: vmmUnmapMmio: page 0x%llx is not a mapped UC MMIO page",
+                     (unsigned long long)(base + off));
+        }
+    }
     Status st = vmmUnmapKernel(base, len);
     if (st != STATUS_OK) {
         panicBug("vmm: vmmUnmapMmio: not a vmmMapMmio mapping va=0x%llx size=0x%llx",
