@@ -6,13 +6,12 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-01 (M2.6 merged; M3.1 in progress)
 
 ## Next step
-**M3.1 step 7: the finish gate** (CLAUDE.md "Finishing a milestone", see `docs/logs/M3.1.md`): qemu-tester runs
-format-check/host-tests/test/test-full; `bug-sweeper` finish mode vs `origin/main` (loop until `SWEEP: PASS`);
-`reviewer` on `git diff origin/main...HEAD`; screenshots (`docs/screenshots/M3.1.png`, plus `-bios`); paperwork;
-PR with `needs-owner: yes`.
+**M3.1 finish gate, remaining** (see `docs/logs/M3.1.md`): tests green and sweep PASS are done; read the `reviewer`
+verdict and fix its Critical/Should-fix items, then screenshots (`docs/screenshots/M3.1.png`, `M3.1-bios.png`),
+paperwork (ROADMAP box, log Summary/Verification, STATUS), and the PR with `needs-owner: yes`.
 
 ## Current milestone
-M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-6 of 7 done; finish gate next).
+M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-6 done; step 7 finish gate: tests and sweep PASS, review pending).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
