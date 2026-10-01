@@ -167,6 +167,7 @@ KTEST(irq_self_ipi_delivered) {
     KTEST_ASSERT(irqAllocVector(&v) == STATUS_OK);
     KTEST_ASSERT(irqRegister(v, recordHandler, &seen) == STATUS_OK);
     KTEST_ASSERT(archInterruptsEnabled());
+    uint64_t count0 = irqVectorCount(v); /* cumulative: earlier tests may have used v */
 
     lapicSendSelfIpi((uint8_t)v);
     KTEST_ASSERT(waitCount(&seen.count, 1));
@@ -179,7 +180,7 @@ KTEST(irq_self_ipi_delivered) {
 
     lapicSendSelfIpi((uint8_t)v); /* a missing EOI would block this second delivery */
     KTEST_ASSERT(waitCount(&seen.count, 2));
-    KTEST_ASSERT_EQ(irqVectorCount(v), 2);
+    KTEST_ASSERT_EQ(irqVectorCount(v), count0 + 2);
 
     KTEST_ASSERT(irqUnregister(v) == STATUS_OK);
     KTEST_ASSERT(irqFreeVector(v) == STATUS_OK);
