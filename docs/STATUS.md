@@ -3,16 +3,14 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-01 (M3.1 finished and awaiting owner merge; M3.2 is next)
+**Last updated:** 2026-10-01 (M3.1 merged; M3.2 started)
 
 ## Next step
-Start **M3.2 Interrupt controllers** (its Need, M3.1, is done), after the owner merges the M3.1 PR (`needs-owner`).
-1. `git fetch origin main && git switch -c m3-2-interrupt-controllers origin/main`
-2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M3.2.md` and write its Plan from ROADMAP.md. Use `acpiGetInfo()->madt`
-   (CPUs, I/O APICs, interrupt source overrides, LAPIC address) from M3.1; consult `architect` first (interrupts).
+**M3.2 Interrupt controllers** is in progress on branch `claude/nifty-bell-wrb444`; the plan and the architect's
+design are in `docs/logs/M3.2.md`. Do step 1 (the UC mapping type and `vmmMapMmio`): see the log's Next step.
 
 ## Current milestone
-None in progress (M3.1 is awaiting owner merge).
+M3.2 Interrupt controllers (M3.1 is merged, PR #19).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
