@@ -33,7 +33,7 @@ static const bool slabDebugBuild = false;
 
 /* --- lock: one coarse IRQ-disable-only lock for the whole subsystem (registry + every cache +
  * every magazine) -- D-094's deliberate simplification of the architect's proposed three-tier
- * lock split, for M2.4's honest single-CPU/IF=0 scope (same D-081/D-088 justification). Safe to
+ * lock split, for M2.4's honest single-CPU scope (same D-081/D-088 justification). Safe to
  * call into pmmAllocPages()/pmmFreePages() while held: archIrqSave()/archIrqRestore() already
  * nest correctly (vmm.c calls into the pmm while vmmLock is held today, the same pattern). */
 static uint64_t slabLock(void) {
@@ -463,11 +463,11 @@ void *slabAlloc(SlabCache *cache, KmallocFlags flags) {
 
 /* The double-free check (below) and the actual push onto the magazine are deliberately two
  * separate slabLock() critical sections, with the KERNEL_DEBUG redzone check/poison fill
- * unlocked in between (matching the pmm's own "validate, then mutate" pattern). Single-CPU/IF=0
- * today, so nothing else can run in the gap. Once real concurrency exists (M3.4/M3.5), two CPUs
- * racing to free the exact same pointer could both pass the check before either pushes -- either
- * merge these back into one critical section then, or give the bufctl a third, transient "being
- * freed" state to close the window. */
+ * unlocked in between (matching the pmm's own "validate, then mutate" pattern). Single-CPU today,
+ * and interrupt handlers never allocate or free (D-173), so nothing else can run in the gap. Once
+ * real concurrency exists (M3.4/M3.5), two CPUs racing to free the exact same pointer could both
+ * pass the check before either pushes -- either merge these back into one critical section then, or
+ * give the bufctl a third, transient "being freed" state to close the window. */
 static void slabFreeCommon(SlabCache *cache, const SlabResolved *r, void *ptr) {
     uint16_t *bufctl = slabBufctl(r->slab);
     SlabMagazine *mag = &cache->bspMag;

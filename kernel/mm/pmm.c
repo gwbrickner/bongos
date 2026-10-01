@@ -45,8 +45,9 @@ static void pmmCacheInitAll(void) {
     }
 }
 
-/* --- lock: IRQ-disable only (M2.2: single CPU, IF stays 0 anyway per ARCHITECTURE §7.1 until
- * M3.2) -- a real spinlock arrives with SMP (M3.4/M3.5). Every entry point below still follows the
+/* --- lock: IRQ-disable only (single CPU; since M3.2 IF=1 after irqInit(), D-173, so this is real
+ * exclusion against handlers, which in any case never allocate) -- a real spinlock arrives with
+ * SMP (M3.4/M3.5). Every entry point below still follows the
  * IRQ-safe contract now so that later upgrade needs no rewrite. */
 static uint64_t pmmLock(void) {
     return archIrqSave();

@@ -227,7 +227,7 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
 
     /* M3.1, D-166: copy every ACPI table out of firmware memory (through temporary KVA mappings,
      * since the HHDM does not map RESERVED) and parse them. A failure is logged and boot goes on
-     * without ACPI: nothing in the kernel depends on it until M3.2. */
+     * without ACPI: irqInit() falls back to a local APIC only. */
     Status acpiSt = acpiInit(&bootInfoCopy, memMapSnapshot, memMapSnapshotCount, cmdlineCopy);
     if (acpiSt == STATUS_OK && acpiGetTables()->dropped == 0) {
         /* D-168: every table is now a kernel copy, so ACPI_RECLAIM may be freed. Never on a

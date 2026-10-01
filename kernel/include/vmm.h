@@ -54,7 +54,7 @@ bool vmmKernelTablesActive(void);
  * 3A §11.12.4: mapping one physical page with two memory types is unsupported). Returns
  * STATUS_ERR_NO_MEMORY if a table page can't be allocated, after rolling back any leaves this call
  * already wrote. Locks: vmmLock
- * (IRQ-disable only, D-088 -- mirrors the pmm's D-081 lock, same single-CPU/IF=0 justification).
+ * (IRQ-disable only, D-088 -- mirrors the pmm's D-081 lock, same single-CPU justification, D-173).
  * Lock order: vmmLock -> pmmLock. IRQ-safe: yes. May sleep: no. Panics if called before vmmInit().
  */
 Status vmmMapKernel(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags);

@@ -15,7 +15,7 @@
 static KvaState kvaState;
 static bool vmmActive = false;
 
-/* --- lock: IRQ-disable only, same D-081/D-088 single-CPU/IF=0 justification as the pmm's lock
+/* --- lock: IRQ-disable only, same D-081/D-088 single-CPU justification (D-173) as the pmm's lock
  * (kernel/mm/pmm.c) -- a real spinlock arrives with SMP (M3.4/M3.5). Lock order: vmmLock ->
  * pmmLock (archMapPages/archUnmapPages call into the pmm for table-page allocation while vmmLock
  * is held; nothing here is ever called with pmmLock already held). */

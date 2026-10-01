@@ -578,7 +578,9 @@ copies these 256 entries by value rather than syncing individual mappings into t
   (`kernel/include/vmm.h`) hand out 4 KiB RW/RO, WB/WC mappings within `[VM_KVA_BASE,
   VM_KVA_END)` (§6.1), backed by a pure, host-tested first-fit extent allocator
   (`kernel/mm/kva.c`) that reserves an unmapped guard page on each side of every allocation.
-  `VMM_EXEC` is rejected until a module loader needs it. A WC request over a physical page the
+  `VMM_EXEC` is rejected until a module loader needs it. `VMM_CACHE_UC` (PCD|PWT, PAT index 3,
+  M3.2, D-171) and `vmmMapMmio`/`vmmUnmapMmio` map device registers (LAPIC, IOAPIC, later HPET and
+  PCI BARs); UC over RAM is rejected by the same exact-type alias check. A WC request over a physical page the
   pmm already manages (and so already maps WB via the HHDM) is rejected too (SDM Vol 3A §11.12.4:
   one physical page can't have two memory types at once). The extent allocator admits at most
   `KVA_MAX_EXTENTS-1` (511) concurrent reservations (M2.4, D-098): since removing `k` disjoint
@@ -692,7 +694,8 @@ does not feed the canary) -- never reseeded afterward.
   diagnosable #GP/#DF chain instead of a triple fault off a not-present gate. Each CPU gets three
   16 KiB IST stacks, each behind its own unmapped guard page (D-073, superseding D-061's
   "exactly four `PT_LOAD`s"): IST1 for #DF, IST2 for NMI, IST3 for #MC. Every other vector uses
-  the normal kernel stack. IF stays 0 until the first IRQ source is wired up (M3.2).
+  the normal kernel stack. IF is 0 until `irqInit()` has run; `kernelMain` then executes `sti` (D-173, M3.2), so the rest
+  of boot and every ktest run with interrupts enabled.
 
 ### 7.2 Interrupt vectors
 All 256 IDT gates are populated (interrupt gates, DPL0 except vector 3's DPL3); an unregistered
@@ -714,13 +717,25 @@ set until M3.6.
 | 0xFE | LAPIC timer |
 | 0xFF | spurious |
 
+**Dispatch policy (M3.2, D-173).** `trapDispatch` hands every vector >= 32 to `irqDispatch`: the
+registered handler runs with IF=0, then the LAPIC EOI is sent. Vector 0xFF (spurious) is counted
+with no EOI. After the 8259 remap only a spurious IRQ7/15 (vectors 39/47, told apart by the 8259
+in-service register) or a software `int` can reach 32-47; anything else there panics. A vector with
+no handler is counted, logged once, EOI'd, and is not fatal. Handlers are never nested, must not
+sleep, and must not allocate until real locks exist (M3.4). `archTrapCatch` refuses inside a
+handler. `kernelMain` enables interrupts right after `irqInit()`.
+
 ### 7.3 Interrupt controllers
-- **Local APIC:** x2APIC (MSR interface) when supported, otherwise xAPIC over MMIO.
+- **8259:** remapped to 0x20-0x2F and fully masked at `irqInit()`; never used for delivery.
+- **Local APIC:** x2APIC (MSR interface) when supported, otherwise xAPIC over a UC MMIO mapping.
+  SVR=0x1FF, all LVTs masked except an NMI pin the MADT describes (an NMI still panics, D-074);
+  physical destination and Fixed delivery only (D-172).
 - **IOAPIC:** configured from the MADT, including interrupt source overrides and
-  polarity/trigger flags.
+  polarity/trigger flags. Every pin starts masked; routes are created masked.
 - **PCIe devices:** use **MSI/MSI-X** by default. Legacy INTx goes through `_PRT` routing.
-- **API:** `irqAllocVector`, `irqRegister(vector, handler, ctx)`, and MSI programming helpers.
-  Device IRQs are spread across CPUs.
+- **API (`kernel/include/irq.h`, D-174):** `irqAllocVector`, `irqRegister(vector, handler, ctx)`,
+  `irqRouteIsa`/`irqRouteGsi` with `irqUnmaskGsi`/`irqMaskGsi`/`irqUnrouteGsi`, and (later) MSI
+  programming helpers. Device IRQs are spread across CPUs once SMP exists (M3.5).
 
 ### 7.4 SMP bring-up (multi-core from day one)
 1. The MADT lists the CPUs (Local APIC and x2APIC entries, respecting the enabled and
@@ -1332,6 +1347,9 @@ way, `*info` is filled in with what was caught. One-shot, non-nesting, ktest-onl
 itself panics if called outside a ktest run), and it can never catch NMI/#DF/#MC or #BP -- those
 stay always-fatal, or (#BP) already resume unconditionally before archTrapCatch ever sees them
 (§7.2).
+Since M3.2 (D-173) interrupts are enabled during ktests: `archTrapCatch` refuses a fault taken inside an
+interrupt handler (resuming would strand the handler's ISR bit), restores IF after a caught fault, and the
+runner fails a test that returns with IF=0 (a leaked IRQ-disable).
 
 ---
 
