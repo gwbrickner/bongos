@@ -804,7 +804,7 @@ your network, `ping` your router, and resolve and ping a public hostname.
 
 **Done when:** the host tests pass.
 
-### [ ] M12.3 Font engine `[parallel-ok]`
+### [x] M12.3 Font engine `[parallel-ok]`
 **Needs:** M1.1
 1. TrueType/OpenType: `cmap`, `glyf`, `loca`, `hmtx`, `kern`, and basic GPOS kerning. An antialiased rasterizer, a glyph cache, UTF-8 decoding, line breaking, and fallback fonts.
 2. Add the OFL fonts in `data/fonts/` (a UI sans + a monospace), with license files.
