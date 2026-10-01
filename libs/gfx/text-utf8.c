@@ -103,6 +103,7 @@ size_t gfxUtf8Count(const uint8_t *s, size_t len, size_t *nReplaced) {
     return n;
 }
 
+/* Contract: pure apart from *it; s may be NULL when len is 0. */
 void gfxUtf8IterInit(GfxUtf8Iter *it, const uint8_t *s, size_t len) {
     it->s = s;
     it->len = len;

@@ -140,6 +140,7 @@ bool gfxTextIsInvisible(uint32_t cp) {
     return findRange(INVISIBLE, COUNTOF(INVISIBLE), cp) >= 0;
 }
 
+/* Contract: pure apart from *st; see gfx-text.h. */
 void gfxTextBreakInit(GfxTextBreakState *st) {
     st->prev2 = NONE_CLASS;
     st->prev = NONE_CLASS;

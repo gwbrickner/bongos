@@ -123,8 +123,11 @@ static int oneRun(const GfxFont *const *faces, uint32_t nFaces) {
             memset(px, 0, sizeof px);
             GfxCanvas c;
             if (gfxCanvasInit(&c, (GfxSurface){px, 64, 64, 64}, &al) == STATUS_OK) {
-                const Status ds = gfxTextDraw(&c, &s, &l, (int32_t)(rnd() % 40) - 10,
-                                              (int32_t)(rnd() % 40) - 10, 0xFFFFFFFFu);
+                /* two statements: the order of evaluation of call arguments is unspecified,
+                 * and the seeded sequence must not depend on the compiler */
+                const int32_t ox = (int32_t)(rnd() % 40) - 10;
+                const int32_t oy = (int32_t)(rnd() % 40) - 10;
+                const Status ds = gfxTextDraw(&c, &s, &l, ox, oy, 0xFFFFFFFFu);
                 ok = ok && (ds == STATUS_OK || ds == STATUS_ERR_NO_MEMORY);
                 gfxCanvasDestroy(&c);
             }
