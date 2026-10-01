@@ -45,7 +45,8 @@ static size_t randomText(uint8_t *buf, size_t cap) {
     return n;
 }
 
-static int structureIsSound(const GfxTextLayout *l, const uint8_t *text, size_t len) {
+static int structureIsSound(const GfxTextLayout *l, const uint8_t *text, size_t len,
+                            int32_t maxWidthQ6) {
     if (l->nGlyphs != gfxUtf8Count(text, len, NULL) || l->nLines < 1) {
         return 0;
     }
@@ -60,6 +61,33 @@ static int structureIsSound(const GfxTextLayout *l, const uint8_t *text, size_t 
             if (l->glyphs[j].y != ln->baseline || l->glyphs[j].face >= l->stack->nFaces ||
                 l->glyphs[j].bin > 3) {
                 return 0;
+            }
+        }
+        /* the spaces before the end (looking through a hard break and zero-width invisibles)
+         * hang and nothing else does; a line over the wrap width holds one base and its marks */
+        uint32_t last = UINT32_MAX;
+        for (uint32_t j = ln->first + ln->count; j > ln->first; j--) {
+            const uint8_t f = l->glyphs[j - 1].flags;
+            const int skip = (f & GFX_TEXT_GLYPH_HARD) ||
+                             ((f & GFX_TEXT_GLYPH_INVISIBLE) && !(f & GFX_TEXT_GLYPH_TAB));
+            if (last == UINT32_MAX && (skip || (f & GFX_TEXT_GLYPH_SPACE))) {
+                if (!!(f & GFX_TEXT_GLYPH_HANGING) != !!(f & GFX_TEXT_GLYPH_SPACE)) {
+                    return 0;
+                }
+                continue;
+            }
+            if (last == UINT32_MAX) {
+                last = j - 1;
+            }
+            if (f & GFX_TEXT_GLYPH_HANGING) {
+                return 0;
+            }
+        }
+        if (maxWidthQ6 > 0 && ln->widthQ6 > maxWidthQ6) {
+            for (uint32_t j = ln->first + 1; last != UINT32_MAX && j <= last; j++) {
+                if (!(l->glyphs[j].flags & GFX_TEXT_GLYPH_CM)) {
+                    return 0;
+                }
             }
         }
         next += ln->count;
@@ -90,7 +118,7 @@ static int oneRun(const GfxFont *const *faces, uint32_t nFaces) {
         GfxTextLayout l;
         const Status ls = gfxTextLayout(&s, buf, n, &st, &al, &l);
         if (ls == STATUS_OK) {
-            ok = structureIsSound(&l, buf, n);
+            ok = structureIsSound(&l, buf, n, st.maxWidthQ6);
             uint32_t px[64 * 64];
             memset(px, 0, sizeof px);
             GfxCanvas c;

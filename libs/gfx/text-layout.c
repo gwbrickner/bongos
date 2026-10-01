@@ -49,12 +49,19 @@ static Status closeLine(const Ctx *c, GfxTextLine *lines, uint32_t k, uint32_t f
     if (baseline > (int64_t)1 << 24) {
         return STATUS_ERR_UNSUPPORTED;
     }
+    /* The width stops at the last record that is not a space, a break character (CR LF) or a
+     * zero-width invisible; the spaces after it hang. Looking through zero-width invisibles keeps
+     * spaces followed by a ZWSP, SHY or LRM from widening the line past maxWidthQ6 (none of the
+     * three can trigger an overflow either). */
     uint32_t e = end;
-    while (e > first && (g[e - 1].flags & GFX_TEXT_GLYPH_HARD)) {
-        e--; /* the break characters (CR LF) are not part of the width */
-    }
-    while (e > first && (g[e - 1].flags & GFX_TEXT_GLYPH_SPACE)) {
-        g[e - 1].flags |= GFX_TEXT_GLYPH_HANGING;
+    while (e > first) {
+        const uint8_t f = g[e - 1].flags;
+        if (f & GFX_TEXT_GLYPH_SPACE) {
+            g[e - 1].flags |= GFX_TEXT_GLYPH_HANGING;
+        } else if (!(f & GFX_TEXT_GLYPH_HARD) &&
+                   !((f & GFX_TEXT_GLYPH_INVISIBLE) && !(f & GFX_TEXT_GLYPH_TAB))) {
+            break;
+        }
         e--;
     }
     int32_t width = e > first ? g[e - 1].y : 0; /* y holds "pen after this record" until now */

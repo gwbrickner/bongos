@@ -190,6 +190,48 @@ TEST(layoutHangingSpacesAndWideGlyphs) {
     fxFree(&fx);
 }
 
+/* Trailing spaces hang even when a zero-width invisible (ZWSP, LRM, SHY, WJ) follows them: the
+ * width stops at the last record that is not a space, a hard break or a zero-width invisible, so a
+ * wrapped line is never wider than maxWidthQ6 because of its trailing spaces. */
+TEST(layoutSpacesHangThroughZeroWidthInvisibles) {
+    Fx fx;
+    ASSERT_TRUE(fxInit(&fx, GRID, 1, 0, NULL));
+    static const struct {
+        const char *text;
+        int32_t maxW;
+        uint32_t count0;           /* records on line 0 */
+        uint32_t spaceLo, spaceHi; /* the spaces that hang: [lo, hi) */
+    } cases[] = {
+        {"ab \xE2\x80\x8B"
+         "c",
+         1024, 4, 2, 3}, /* ZWSP: soft break after it */
+        {"ab \xE2\x80\x8E"
+         "c",
+         1024, 4, 2, 3}, /* LRM (CM class): emergency break */
+        {"ab  \xC2\xAD"
+         "cd",
+         1024, 5, 2, 4},                                   /* SHY between the spaces and the word */
+        {"ab \xE2\x80\x8B \xE2\x81\xA0\n", 1024, 7, 2, 5}, /* space ZWSP space WJ LF */
+        {"ab \xE2\x80\x8B", 0, 4, 2, 3},                   /* no wrapping: the width is the same */
+        {" \xE2\x80\x8B", 1024, 2, 0, 1},                  /* only a space: width 0 */
+    };
+    for (size_t k = 0; k < sizeof cases / sizeof cases[0]; k++) {
+        ASSERT_EQ(fxLay(&fx, cases[k].text, PX(16), cases[k].maxW, 0, 0), STATUS_OK);
+        ASSERT_EQ(fx.l.lines[0].count, cases[k].count0);
+        ASSERT_EQ(fx.l.lines[0].widthQ6, cases[k].spaceLo == 0 ? 0 : 1024);
+        for (uint32_t j = 0; j < cases[k].count0; j++) {
+            const int hangs = j >= cases[k].spaceLo && j < cases[k].spaceHi &&
+                              (fx.l.glyphs[j].flags & GFX_TEXT_GLYPH_SPACE);
+            ASSERT_EQ(!!(fx.l.glyphs[j].flags & GFX_TEXT_GLYPH_HANGING), hangs);
+        }
+    }
+    /* a visible combining mark after the space is drawn on it, so the space no longer trails */
+    ASSERT_EQ(fxLay(&fx, "ab \xCC\x81", PX(16), 0, 0, 0), STATUS_OK);
+    ASSERT_EQ(fx.l.lines[0].widthQ6, 2048);
+    ASSERT_TRUE(!(fx.l.glyphs[2].flags & GFX_TEXT_GLYPH_HANGING));
+    fxFree(&fx);
+}
+
 TEST(layoutCombiningMarksStayWithTheirBase) {
     Fx fx;
     ASSERT_TRUE(fxInit(&fx, GRID, 1, 0, NULL));
@@ -695,18 +737,34 @@ static int checkLayout(const GfxTextLayout *l, const uint8_t *text, size_t len,
                     !(l->glyphs[ln->first].flags & GFX_TEXT_GLYPH_HARD));
             }
         }
-        /* hanging flags only on trailing spaces */
+        /* hanging flags exactly on the trailing spaces, looking through the hard break and any
+         * zero-width invisible (spec: Line width); `last` is the last record the width counts */
         int tail = 1;
+        uint32_t last = UINT32_MAX;
         for (uint32_t j = ln->first + ln->count; j > ln->first; j--) {
             const GfxTextGlyph *r = &l->glyphs[j - 1];
-            if (r->flags & GFX_TEXT_GLYPH_HARD) {
+            const int zeroWidth =
+                (r->flags & GFX_TEXT_GLYPH_INVISIBLE) && !(r->flags & GFX_TEXT_GLYPH_TAB);
+            if (tail && ((r->flags & GFX_TEXT_GLYPH_HARD) || zeroWidth)) {
+                CHK(!(r->flags & GFX_TEXT_GLYPH_HANGING));
                 continue;
             }
             if (tail && (r->flags & GFX_TEXT_GLYPH_SPACE)) {
                 CHK(r->flags & GFX_TEXT_GLYPH_HANGING);
             } else {
+                if (tail) {
+                    last = j - 1;
+                }
                 tail = 0;
                 CHK(!(r->flags & GFX_TEXT_GLYPH_HANGING));
+            }
+        }
+        /* a line wider than the wrap width holds one base and its marks: every other record that
+         * counts was checked against the width when it was placed */
+        if (st->maxWidthQ6 > 0 && ln->widthQ6 > st->maxWidthQ6) {
+            CHK(last != UINT32_MAX);
+            for (uint32_t j = ln->first + 1; j <= last; j++) {
+                CHK(l->glyphs[j].flags & GFX_TEXT_GLYPH_CM);
             }
         }
         uint32_t prevOff = 0;

@@ -174,8 +174,12 @@ Pass 2, per line: `pen = 0` (int64, Q6), no previous glyph.
   step forward past the CM run: the marks stay on the line without further overflow checks, and the
   record after the run is then checked like any other, so a space after it hangs, a hard break
   after it ends the line as HARD, and a visible glyph after it breaks before itself).
-- Line width: `widthQ6 = max(0, pen after the last record that is not SPACE and not HARD)`. Trailing
-  SPACE records (ignoring a final HARD) are HANGING.
+- Line width: `widthQ6 = max(0, pen after the last record that is not SPACE, not HARD and not a
+  zero-width invisible)`. The SPACE records after that record are HANGING (looking through a final
+  HARD and through zero-width invisibles, so `ab ` ZWSP, SHY or LRM keeps its space hanging and the
+  line no longer than `maxWidthQ6`; none of these records can trigger an overflow either). A line
+  is wider than `maxWidthQ6` only when the last record that counts is its first record or one of
+  the combining marks directly after it.
 - Glyph position: `q = floorDiv(xQ6 + 8, 16)`, `x = floorDiv(q, 4)`, `bin = q & 3`, in int64, with
   a helper (never right-shift a negative number).
 - Vertical: `y = baseline = ascent + k*lineHeight` from face 0; above 2^24 px: UNSUPPORTED.
