@@ -119,3 +119,44 @@ void vmmKvaFree(uint64_t va, uint64_t size) {
                  (unsigned long long)size);
     }
 }
+
+Status vmmMapMmio(uint64_t pa, uint64_t size, volatile void **outVa) {
+    if (!vmmActive) {
+        panic("vmmMapMmio: called before vmmInit()");
+    }
+    uint64_t end = pa + size;
+    if (size == 0 || end < pa || end > UINT64_MAX - (KVA_PAGE_SIZE - 1)) {
+        return STATUS_ERR_INVALID;
+    }
+    uint64_t base = pa & ~(uint64_t)(KVA_PAGE_SIZE - 1);
+    uint64_t len = ((end + KVA_PAGE_SIZE - 1) & ~(uint64_t)(KVA_PAGE_SIZE - 1)) - base;
+    uint64_t va;
+    Status st = vmmKvaAlloc(len, &va);
+    if (st != STATUS_OK) {
+        return st;
+    }
+    st = vmmMapKernel(va, base, len, VMM_WRITE | VMM_CACHE_UC);
+    if (st != STATUS_OK) {
+        vmmKvaFree(va, len);
+        return st;
+    }
+    *outVa = (volatile void *)(uintptr_t)(va + (pa - base));
+    return STATUS_OK;
+}
+
+void vmmUnmapMmio(volatile void *va, uint64_t size) {
+    uint64_t a = (uint64_t)(uintptr_t)va;
+    uint64_t base = a & ~(uint64_t)(KVA_PAGE_SIZE - 1);
+    uint64_t end = a + size;
+    if (size == 0 || end < a || end > UINT64_MAX - (KVA_PAGE_SIZE - 1)) {
+        panicBug("vmm: vmmUnmapMmio: bad range va=0x%llx size=0x%llx", (unsigned long long)a,
+                 (unsigned long long)size);
+    }
+    uint64_t len = ((end + KVA_PAGE_SIZE - 1) & ~(uint64_t)(KVA_PAGE_SIZE - 1)) - base;
+    Status st = vmmUnmapKernel(base, len);
+    if (st != STATUS_OK) {
+        panicBug("vmm: vmmUnmapMmio: not a vmmMapMmio mapping va=0x%llx size=0x%llx",
+                 (unsigned long long)a, (unsigned long long)size);
+    }
+    vmmKvaFree(base, len);
+}

@@ -1,11 +1,13 @@
 /* ktests for the portable vmm layer (ARCHITECTURE §6.1/§6.3, D-086..D-090, ROADMAP M2.3):
  * vmmMapKernel/vmmUnmapKernel/the KVA allocator, and that LOADER_RECLAIM was actually reclaimed. */
+#include "acpi.h"
 #include "kernel-boot.h"
 #include "ktest.h"
 #include "page.h"
 #include "pmm.h"
 #include "vmm.h"
 
+#include <arch/paging.h>
 #include <arch/trap.h>
 #include <stdint.h>
 
@@ -107,4 +109,52 @@ KTEST(loader_reclaimed) {
     /* The BootInfo page is in LOADER_RECLAIM (bootInfoCheckRefs() requires it), so unless the
      * loader placed it below 1 MiB it must have been among the pages just checked. */
     KTEST_ASSERT(bootInfoPhys < 0x100000 || sawBootInfoPage);
+}
+
+/* M3.2, D-171: the UC mapping type and vmmMapMmio. Maps the first IOAPIC's registers (a page that
+ * is RESERVED, never in the HHDM) and checks the raw PTE is PCD|PWT without the PAT bit; checks
+ * that UC refuses RAM (HHDM-WB alias) and that the bogus cache value 3 is rejected. */
+KTEST(vmm_map_uc) {
+    const AcpiInfo *a = acpiGetInfo();
+    KTEST_ASSERT(a != NULL && a->madtStatus == STATUS_OK && a->madt.ioapicCount >= 1);
+    uint64_t pa = a->madt.ioapics[0].address;
+
+    volatile void *mmio;
+    KTEST_ASSERT(vmmMapMmio(pa + 0x10, 4, &mmio) == STATUS_OK);
+    uint64_t va = (uint64_t)(uintptr_t)mmio;
+    KTEST_ASSERT_EQ(va & 0xFFF, (pa + 0x10) & 0xFFF); /* the sub-page offset is preserved */
+
+    uint64_t outPa;
+    VmmFlags outFlags;
+    KTEST_ASSERT(vmmLookupKernel(va & ~0xFFFULL, &outPa, &outFlags) == STATUS_OK);
+    KTEST_ASSERT_EQ(outPa, pa & ~0xFFFULL);
+    KTEST_ASSERT_EQ(outFlags, VMM_WRITE | VMM_CACHE_UC);
+    uint64_t raw = archPagingRawPte(va & ~0xFFFULL);
+    KTEST_ASSERT((raw & (1ULL << 3)) != 0);  /* PWT */
+    KTEST_ASSERT((raw & (1ULL << 4)) != 0);  /* PCD */
+    KTEST_ASSERT((raw & (1ULL << 7)) == 0);  /* never the PAT bit */
+    KTEST_ASSERT((raw & (1ULL << 63)) != 0); /* NX */
+
+    /* IOAPIC register 0 (ID) reads back; the index register is writable and sticks. */
+    volatile uint32_t *regs = (volatile uint32_t *)(uintptr_t)(va - 0x10);
+    regs[0] = 1;                         /* IOREGSEL = version register */
+    KTEST_ASSERT((regs[4] & 0xFF) != 0); /* IOWIN: version byte is nonzero on any IOAPIC */
+
+    vmmUnmapMmio(mmio, 4);
+    KTEST_ASSERT(vmmLookupKernel(va & ~0xFFFULL, NULL, NULL) == STATUS_ERR_NOT_FOUND);
+
+    /* UC over RAM is refused (the HHDM alias is WB), as is size 0 and the bogus cache value. */
+    Page *page;
+    KTEST_ASSERT(pmmAllocPages(0, PMM_FLAG_ZERO, &page) == STATUS_OK);
+    uint64_t ramPa = pmmPageToPhys(page);
+    volatile void *bad;
+    KTEST_ASSERT(vmmMapMmio(ramPa, 4096, &bad) == STATUS_ERR_INVALID);
+    KTEST_ASSERT(vmmMapMmio(pa, 0, &bad) == STATUS_ERR_INVALID);
+    KTEST_ASSERT(vmmMapMmio(UINT64_MAX - 1, 4, &bad) == STATUS_ERR_INVALID);
+    uint64_t kva;
+    KTEST_ASSERT(vmmKvaAlloc(4096, &kva) == STATUS_OK);
+    KTEST_ASSERT(vmmMapKernel(kva, ramPa, 4096, VMM_WRITE | VMM_CACHE_UC) == STATUS_ERR_INVALID);
+    KTEST_ASSERT(vmmMapKernel(kva, pa, 4096, VMM_WRITE | (3u << 2)) == STATUS_ERR_INVALID);
+    vmmKvaFree(kva, 4096);
+    pmmFreePages(page, 0);
 }
