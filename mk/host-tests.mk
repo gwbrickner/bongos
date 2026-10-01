@@ -49,7 +49,8 @@ HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c tools/mkimage/
                         kernel/mm/pmm-map.c kernel/mm/buddy.c kernel/mm/kva.c \
                         kernel/mm/slab-core.c kernel/mm/slab-debug.c boot/common/hw/loader-kaslr.c \
                         $(wildcard libs/crypto/*.c) kernel/core/random-core.c \
-                        $(wildcard kernel/drivers/acpi/*.c)
+                        $(wildcard kernel/drivers/acpi/*.c) \
+                        $(filter-out tools/acpiextract/main.c,$(wildcard tools/acpiextract/*.c))
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/biosboot.h \
                         $(wildcard boot/uefi/include/efi/*.h) \
                         $(wildcard boot/common/include/*.h) $(wildcard tools/imgdiff/*.h) \
@@ -59,10 +60,11 @@ HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/
                         kernel/mm/pmm-internal.h kernel/mm/kva-internal.h \
                         kernel/include/kmalloc.h kernel/mm/slab-internal.h \
                         $(wildcard libs/crypto/include/crypto/*.h) $(wildcard libs/crypto/test/*.h) \
-                        kernel/include/random-core.h $(wildcard kernel/include/acpi*.h)
+                        kernel/include/random-core.h $(wildcard kernel/include/acpi*.h) \
+                        $(wildcard tools/acpiextract/*.h)
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
                             -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms \
-                            -Ikernel/mm -Ilibs/crypto/include -Ilibs/crypto/test
+                            -Ikernel/mm -Ilibs/crypto/include -Ilibs/crypto/test -Itools/acpiextract
 
 # libs/compress and libs/gfx (M12.2, D-140..D-147): pure portable libraries, one wildcard each so a
 # new source file needs no edit here. `-Ilibs` lets code and tests say "compress/compress.h" and

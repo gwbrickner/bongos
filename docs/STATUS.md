@@ -6,11 +6,12 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-01 (M2.6 merged; M3.1 in progress)
 
 ## Next step
-**M3.1 step 3** (see `docs/logs/M3.1.md`): `kernel/drivers/acpi/acpi-dump.c` (ACPIDUMP v1 formatter),
-`tools/acpiextract` + `mk/acpiextract.mk`, and a host round-trip test. Check with `make host-tests`.
+**M3.1 step 4** (RISKY; see `docs/logs/M3.1.md`): `kernel/drivers/acpi/acpi.c` + `acpi.h` (`acpiInit` with KVA
+`readPhys`), call from `kernelMain` after `vmallocInit()`, `kernel/test/acpi_test.c`, `acpidump=1` in
+`tests/harness/ktest-boot.cfg`, `mk/test.mk` greps. Then `make test` and `bug-sweeper` (step mode).
 
 ## Current milestone
-M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-2 of 7 done).
+M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-3 of 7 done).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
