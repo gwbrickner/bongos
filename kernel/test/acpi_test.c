@@ -144,6 +144,20 @@ static bool hhdmContains(uint64_t va, uint64_t hhdm) {
  * vmalloc buffer of its own); windows are used for everything else. */
 static uint8_t readBuf[16384];
 
+/* True if [phys, phys+len) touches an ACPI_RECLAIM region. After pmmReclaimAcpiMemory() (D-168)
+ * such memory is zeroed, freed and possibly reused -- including by the kernel's own table copies --
+ * so firmware bytes can no longer be compared against it. Everything else (RESERVED on BIOS,
+ * ACPI_NVS) still holds the firmware's bytes. */
+static bool touchesAcpiReclaim(const BootMemRegion *map, uint32_t n, uint64_t phys, uint64_t len) {
+    for (uint32_t i = 0; i < n; i++) {
+        if (map[i].type == BOOT_MEM_ACPI_RECLAIM && phys < map[i].base + map[i].length &&
+            phys + len > map[i].base) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* acpiKernelReadPhys, the kernel's only path into firmware memory, returns exactly the bytes the
  * loader kept, for every kept table and the RSDP: whole, shifted by one byte at both ends (so the
  * in-page offset is odd and the mapping covers a different page count), and as 2-byte windows over
@@ -153,13 +167,21 @@ KTEST(acpi_read_phys_matches_copies) {
     KTEST_ASSERT(s != NULL);
     uint32_t n;
     const BootMemRegion *map = kernelBootMemMap(&n);
-    KTEST_ASSERT_EQ(acpiKernelReadPhys(map, n, s->rsdpPhys, readBuf, s->rsdpLength), STATUS_OK);
-    for (uint32_t i = 0; i < s->rsdpLength; i++) {
-        KTEST_ASSERT_EQ(readBuf[i], s->rsdpRaw[i]);
+    uint32_t boundaries = 0, skipped = 0;
+    if (touchesAcpiReclaim(map, n, s->rsdpPhys, s->rsdpLength)) {
+        skipped++;
+    } else {
+        KTEST_ASSERT_EQ(acpiKernelReadPhys(map, n, s->rsdpPhys, readBuf, s->rsdpLength), STATUS_OK);
+        for (uint32_t i = 0; i < s->rsdpLength; i++) {
+            KTEST_ASSERT_EQ(readBuf[i], s->rsdpRaw[i]);
+        }
     }
-    uint32_t boundaries = 0;
     for (uint32_t ti = 0; ti < s->count; ti++) {
         const AcpiTable *t = &s->tables[ti];
+        if (touchesAcpiReclaim(map, n, t->phys, t->length)) {
+            skipped++; /* reclaimed and zeroed (UEFI); the BIOS boot checks these tables */
+            continue;
+        }
         if (t->length <= sizeof(readBuf)) {
             KTEST_ASSERT_EQ(acpiKernelReadPhys(map, n, t->phys, readBuf, t->length), STATUS_OK);
             for (uint32_t i = 0; i < t->length; i++) {
@@ -182,7 +204,9 @@ KTEST(acpi_read_phys_matches_copies) {
         KTEST_ASSERT_EQ(acpiKernelReadPhys(map, n, t->phys + t->length - 1, readBuf, 1), STATUS_OK);
         KTEST_ASSERT_EQ(readBuf[0], t->data[t->length - 1]);
     }
-    KTEST_ASSERT(boundaries >= 1);
+    /* Not vacuous: either something was compared across a page boundary (BIOS: tables stay
+     * RESERVED), or the tables really were reclaimed (UEFI), which acpi_reclaimed proves. */
+    KTEST_ASSERT(boundaries >= 1 || skipped >= 1);
 }
 
 /* Every temporary window is unmapped and its KVA range returned. The KVA allocator is first-fit
@@ -343,6 +367,23 @@ KTEST(acpi_reload_matches_and_frees) {
     const AcpiTableSet *s = acpiGetTables();
     KTEST_ASSERT(s != NULL);
     AcpiPhysOps ops = {NULL, reloadRead, reloadAlloc, reloadFree};
+    uint32_t mapCount;
+    const BootMemRegion *map = kernelBootMemMap(&mapCount);
+    if (touchesAcpiReclaim(map, mapCount, s->rsdpPhys, s->rsdpLength)) {
+        /* UEFI: the RSDP lived in ACPI_RECLAIM, now zeroed and freed (D-168), so a second load
+         * must fail cleanly (no RSDP) and leak nothing. */
+        VmallocStats vBefore, vAfter;
+        vmallocGetStats(&vBefore);
+        uint64_t kBefore = kmallocLiveForTables(s);
+        KTEST_ASSERT(acpiTablesLoad(&ops, kernelBootInfo()->rsdpPhys, &reloadSet) ==
+                     STATUS_ERR_INVALID);
+        KTEST_ASSERT_EQ(reloadSet.count, 0u);
+        vmallocGetStats(&vAfter);
+        KTEST_ASSERT_EQ(vAfter.areas, vBefore.areas);
+        KTEST_ASSERT_EQ(vAfter.pages, vBefore.pages);
+        KTEST_ASSERT_EQ(kmallocLiveForTables(s), kBefore);
+        return;
+    }
     for (int pass = 0; pass < 2; pass++) {
         VmallocStats vBefore, vAfter;
         vmallocGetStats(&vBefore);
