@@ -239,7 +239,10 @@ Status gfxTextLayout(const GfxFontStack *s, const uint8_t *text, size_t len, con
         const uint16_t sp = gfxFontGlyphIndex(f0, ' ');
         c.tabQ6 = 8 * scaled(&c, f0, (int32_t)gfxFontAdvanceUnits(f0, sp));
         if (c.tabQ6 == 0) {
-            c.tabQ6 = wholePixels((int64_t)st->sizeQ6 * 4);
+            c.tabQ6 = (int64_t)st->sizeQ6 * 4;
+            if (c.flags & GFX_TEXT_NO_SUBPIXEL) {
+                c.tabQ6 = wholePixels(c.tabQ6);
+            }
         }
     }
     if (c.tabQ6 < 64) {

@@ -523,6 +523,20 @@ TEST(layoutDefaultTabFallbacks) {
     ASSERT_EQ(l.glyphs[2].xQ6, 64);
     gfxTextLayoutFree(&l);
     free(d);
+    /* a zero-width space: the tab is sizeQ6 * 4, rounded to whole pixels only for NO_SUBPIXEL
+     * (16.27 px: 'a' is 521 Q6, the tab 4164; NO_SUBPIXEL: 512 and 4160) */
+    const Patch zero[] = {{"hmtx", 4, 0}};
+    d = patchedFont(FTU_SYNTH_GRID, zero, 1, &f);
+    ASSERT_TRUE(d != NULL);
+    ASSERT_EQ(layOne(&f, "a\tb", 3, 1041, 0, 0, &l), STATUS_OK);
+    ASSERT_EQ(l.glyphs[1].xQ6, 521);
+    ASSERT_EQ(l.glyphs[2].xQ6, 4164);
+    gfxTextLayoutFree(&l);
+    ASSERT_EQ(layOne(&f, "a\tb", 3, 1041, 0, GFX_TEXT_NO_SUBPIXEL, &l), STATUS_OK);
+    ASSERT_EQ(l.glyphs[1].xQ6, 512);
+    ASSERT_EQ(l.glyphs[2].xQ6, 4160);
+    gfxTextLayoutFree(&l);
+    free(d);
 }
 
 /* ---- the Python reference ------------------------------------------------------------------ */
