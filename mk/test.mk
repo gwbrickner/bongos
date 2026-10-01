@@ -120,7 +120,11 @@ IRQ_REQUIRED_KTESTS := vmm_map_uc irq_pic_masked irq_legacy_spurious_counted irq
                        irq_vector_alloc_exhaust irq_register_rules irq_self_ipi_delivered \
                        irq_self_ipi_pending_while_if0 irq_spurious_vector_no_eoi \
                        irq_unhandled_vector_eoi irq_ioapic_masked_at_init \
-                       irq_isa_route_matches_madt irq_ioapic_pit_routed
+                       irq_isa_route_matches_madt irq_ioapic_pit_routed \
+                       irq_api_refused_in_handler irq_self_ipi_from_handler_redelivered \
+                       irq_two_pending_vectors_priority_order irq_fixed_vectors_dispatch \
+                       irq_route_misuse irq_isa_route_all_match_madt \
+                       irq_trap_catch_refused_in_handler trap_catch_restores_if
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \
