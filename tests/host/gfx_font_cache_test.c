@@ -195,10 +195,10 @@ static int modelMatches(const Model *m, const GfxFontStack *s) {
     return 1;
 }
 
-/* Runs `ops` against `s` with the model and (optionally) the direct-render comparison. */
-static int runOps(GfxFontStack *s, const Op *ops, uint32_t nOps, int checkPixels, int everyStep) {
-    Model *m = calloc(1, sizeof *m);
-    CHK(m != NULL);
+/* Runs `ops` against `s` with the model `m` (which carries over between calls) and (optionally)
+ * the direct-render comparison. */
+static int runOpsWith(Model *m, GfxFontStack *s, const Op *ops, uint32_t nOps, int checkPixels,
+                      int everyStep) {
     int ok = 1;
     for (uint32_t i = 0; ok && i < nOps; i++) {
         const Op *o = &ops[i];
@@ -218,6 +218,14 @@ static int runOps(GfxFontStack *s, const Op *ops, uint32_t nOps, int checkPixels
             ok = modelMatches(m, s) && checkInvariants(s);
         }
     }
+    return ok;
+}
+
+/* runOpsWith on a fresh model. */
+static int runOps(GfxFontStack *s, const Op *ops, uint32_t nOps, int checkPixels, int everyStep) {
+    Model *m = calloc(1, sizeof *m);
+    CHK(m != NULL);
+    const int ok = runOpsWith(m, s, ops, nOps, checkPixels, everyStep);
     free(m);
     return ok;
 }
