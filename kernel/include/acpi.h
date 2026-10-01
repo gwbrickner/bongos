@@ -28,4 +28,22 @@ const AcpiTableSet *acpiGetTables(void);
  * interpreter), or NULL. */
 const AcpiTable *acpiFindTable(const char sig[4], uint32_t instance);
 
+/* The AcpiPhysOps pieces acpiInit() hands the pure loader, exposed so ktests can drive them
+ * directly (and a later caller could reload tables the same way).
+ * acpiKernelReadPhys copies [phys, phys+len) out of firmware memory through a temporary read-only
+ * WB KVA mapping of the covering pages (the HHDM does not map RESERVED memory, where BIOS keeps the
+ * RSDP and every table); the mapping and its KVA range are gone again before it returns. `len` 0
+ * is OK and touches nothing. Returns INVALID if acpiPhysRangeAllowed(map, mapCount, ...) refuses
+ * the range or vmmMapKernel refuses the pages (e.g. past MAXPHYADDR, or a WC HHDM alias), or
+ * NO_MEMORY if no KVA range or page-table page is available. Panics only if unmapping its own
+ * mapping fails (a kernel bug). Locks: none of its own (vmmLock/pmmLock in callees, D-088 order).
+ * BSP before any AP exists (the TLB flush is local). May not sleep.
+ * acpiKernelAlloc returns `len` (nonzero) bytes from kmalloc up to KMALLOC_MAX_SIZE, else vmalloc,
+ * or NULL on OOM; acpiKernelFree(p, len) must get the same `len`, which picks the same allocator.
+ * Same locking/sleep rules as kmalloc/vmalloc. */
+Status acpiKernelReadPhys(const BootMemRegion *map, uint32_t mapCount, uint64_t phys, void *dst,
+                          uint32_t len);
+void *acpiKernelAlloc(uint32_t len);
+void acpiKernelFree(void *p, uint32_t len);
+
 #endif

@@ -24,15 +24,13 @@ static AcpiTableSet acpiTableSet;
 static AcpiInfo acpiInfo;
 static bool acpiReady;
 
-/* Copies [phys, phys+len) out of firmware memory through a temporary read-only WB KVA mapping
- * (the HHDM does not map RESERVED memory, where BIOS keeps the RSDP and every table). A range
- * outside acpiPhysRangeAllowed()'s policy is refused. The mapping lives only for the copy. */
-static Status acpiReadPhys(void *ctx, uint64_t phys, void *dst, uint32_t len) {
-    const AcpiKernelCtx *k = ctx;
+/* See kernel/include/acpi.h for these three. */
+Status acpiKernelReadPhys(const BootMemRegion *map, uint32_t mapCount, uint64_t phys, void *dst,
+                          uint32_t len) {
     if (len == 0) {
         return STATUS_OK;
     }
-    if (!acpiPhysRangeAllowed(k->map, k->mapCount, phys, len)) {
+    if (!acpiPhysRangeAllowed(map, mapCount, phys, len)) {
         return STATUS_ERR_INVALID;
     }
     uint64_t pageBase = phys & ~(uint64_t)0xFFF;
@@ -60,20 +58,31 @@ static Status acpiReadPhys(void *ctx, uint64_t phys, void *dst, uint32_t len) {
     return STATUS_OK;
 }
 
-/* kmalloc covers up to KMALLOC_MAX_SIZE; anything bigger goes to vmalloc. The free side makes the
- * same choice from the same length, so the pair always matches. */
-static void *acpiAlloc(void *ctx, uint32_t len) {
-    (void)ctx;
+void *acpiKernelAlloc(uint32_t len) {
     return len <= KMALLOC_MAX_SIZE ? kmalloc(len, 0) : vmalloc(len, 0);
 }
 
-static void acpiFree(void *ctx, void *p, uint32_t len) {
-    (void)ctx;
+void acpiKernelFree(void *p, uint32_t len) {
     if (len <= KMALLOC_MAX_SIZE) {
         kfree(p);
     } else {
         vfree(p);
     }
+}
+
+static Status acpiReadPhys(void *ctx, uint64_t phys, void *dst, uint32_t len) {
+    const AcpiKernelCtx *k = ctx;
+    return acpiKernelReadPhys(k->map, k->mapCount, phys, dst, len);
+}
+
+static void *acpiAlloc(void *ctx, uint32_t len) {
+    (void)ctx;
+    return acpiKernelAlloc(len);
+}
+
+static void acpiFree(void *ctx, void *p, uint32_t len) {
+    (void)ctx;
+    acpiKernelFree(p, len);
 }
 
 static void sigToString(const char sig[4], char out[5]) {

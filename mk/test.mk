@@ -105,7 +105,10 @@ M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad kaslr_slide_con
 # lists the CPUs from the MADT"; scales to the 4-CPU rows M3.5 adds), and `acpiextract --check` on
 # the ACPIDUMP block the ktest image's `acpidump=1` makes the kernel print (docs/specs/acpidump.md).
 ACPI_REQUIRED_KTESTS := acpi_tables_loaded acpi_madt_lists_bsp acpi_mcfg_present acpi_fadt_sane \
-                        acpi_tables_are_kernel_copies acpi_parse_rejects_corrupt
+                        acpi_tables_are_kernel_copies acpi_parse_rejects_corrupt \
+                        acpi_read_phys_matches_copies acpi_read_phys_releases_kva \
+                        acpi_read_phys_refuses_bad_ranges acpi_alloc_free_boundary \
+                        acpi_reload_matches_and_frees
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \
