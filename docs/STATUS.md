@@ -6,11 +6,13 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-01 (M3.1 merged; M3.2 started)
 
 ## Next step
-**M3.2 Interrupt controllers** is in progress on branch `claude/nifty-bell-wrb444`; the plan and the architect's
-design are in `docs/logs/M3.2.md`. Do step 1 (the UC mapping type and `vmmMapMmio`): see the log's Next step.
+**M3.2 Interrupt controllers** is code-complete and swept on branch `claude/nifty-bell-wrb444` (tests green, `SWEEP: PASS`);
+remaining finish items are in `docs/logs/M3.2.md`: the `reviewer` verdict (fix Criticals), the D-175 wording fix (CI
+may run KVM, so the x2APIC path may run there), `make screenshot` PNGs, ROADMAP box + log Summary, then the PR (not
+opened yet: the owner has not asked for it).
 
 ## Current milestone
-M3.2 Interrupt controllers (M3.1 is merged, PR #19).
+M3.2 Interrupt controllers (finishing; M3.1 is merged, PR #19).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
