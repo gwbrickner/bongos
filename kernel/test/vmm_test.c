@@ -273,6 +273,7 @@ KTEST(vmm_mmio_edges) {
     /* Rejected before any KVA is reserved: size 0 and every wrap of pa + size (+ page round-up). */
     volatile void *bad = (volatile void *)0x1;
     KTEST_ASSERT(vmmMapMmio(pa, 0, &bad) == STATUS_ERR_INVALID);
+    KTEST_ASSERT(vmmMapMmio(pa + 0x10, 0, &bad) == STATUS_ERR_INVALID); /* would round to a page */
     KTEST_ASSERT(vmmMapMmio(UINT64_MAX, 1, &bad) == STATUS_ERR_INVALID);
     KTEST_ASSERT(vmmMapMmio(UINT64_MAX - 4095, 1, &bad) == STATUS_ERR_INVALID);
     KTEST_ASSERT(vmmMapMmio(1, UINT64_MAX, &bad) == STATUS_ERR_INVALID);
