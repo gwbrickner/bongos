@@ -656,6 +656,7 @@ TEST(cacheAllocSweep) {
             ASSERT_EQ(st, STATUS_ERR_NO_MEMORY);
             sawInitFail++;
             ASSERT_EQ(fa.live, 0);
+            ASSERT_EQ(fa.liveBytes, (size_t)0); /* freed with the size it was allocated with */
             GfxFontStack zero;
             memset(&zero, 0, sizeof zero);
             ASSERT_TRUE(memcmp(&s, &zero, sizeof s) == 0);
