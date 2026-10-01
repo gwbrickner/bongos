@@ -1215,7 +1215,7 @@ def lb_parse_marked(text):
 LB_HAND = ["a |b", "a  |b", "well-|known", "10-20", "a |-b", "x|—|y", "x|——|y",
            "f(x) |g", "( a", "一|二。|三", "（一）",
            "a b |c", "a​|b", "a\r\n!b", "a\r!b", "a\n!\n!b", "á |b", "e.g. |x",
-           "a\t|b"]
+           "a\t|b", "x|— —|y"]
 
 
 def break_cases(path):

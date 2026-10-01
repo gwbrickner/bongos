@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define CHK(c)                                                                                     \
     do {                                                                                           \
@@ -257,6 +258,12 @@ TEST(layoutHardBreaksAndEmptyLines) {
         {"a\r\n", 2},
         {"a\r\n\r\nb", 3},
         {"abc", 1},
+        {"a\r", 2},
+        {"a\xC2\x85", 2},
+        {"a\xE2\x80\xA8", 2},
+        {"a\xE2\x80\xA9", 2},
+        {"a\x0B", 2},
+        {"a\x0C", 2},
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         ASSERT_EQ(fxLay(&fx, cases[i].text, PX(16), 0, 0, 0), STATUS_OK);
@@ -264,6 +271,11 @@ TEST(layoutHardBreaksAndEmptyLines) {
             fprintf(stderr, "  text %zu: %u lines, want %u\n", i, fx.l.nLines, cases[i].lines);
             ASSERT_TRUE(0);
         }
+        /* every line but the last ends with its hard break, also the one the text ends in */
+        for (uint32_t li = 0; li + 1 < fx.l.nLines; li++) {
+            ASSERT_EQ(fx.l.lines[li].end, (uint8_t)GFX_TEXT_LINE_END_HARD);
+        }
+        ASSERT_EQ(fx.l.lines[fx.l.nLines - 1].end, (uint8_t)GFX_TEXT_LINE_END_TEXT);
     }
     /* the lines of "a\r\nb": CR and LF both belong to line 0; byte ranges tile the text */
     ASSERT_EQ(fxLay(&fx, "a\r\nb", PX(16), 0, 0, 0), STATUS_OK);
@@ -331,6 +343,18 @@ TEST(layoutKerningOnLiberation) {
     ASSERT_EQ(fx.l.glyphs[2].xQ6, advA);
     ASSERT_EQ(fxLay(&fx, "A\nV", PX(16), 0, 0, 0), STATUS_OK);
     ASSERT_EQ(fx.l.glyphs[2].xQ6, 0);
+    const int32_t tab =
+        8 * gfxFontScaleQ6(f, gfxFontAdvanceUnits(f, gfxFontGlyphIndex(f, ' ')), PX(16));
+    ASSERT_TRUE(tab > advA);
+    ASSERT_EQ(fxLay(&fx, "A\tV", PX(16), 0, 0, 0), STATUS_OK);
+    ASSERT_EQ(fx.l.glyphs[2].xQ6, tab); /* exactly on the stop: no kern */
+    /* an invisible codepoint is face 0, glyph 0, even where the font maps it (Sans has U+00AD);
+     * U+3000 is not a SPACE record (only U+0020 hangs) */
+    ASSERT_TRUE(gfxFontGlyphIndex(f, 0xAD) != 0);
+    ASSERT_EQ(fxLay(&fx, "A\xC2\xAD\xE3\x80\x80", PX(16), 0, 0, 0), STATUS_OK);
+    ASSERT_TRUE(fx.l.glyphs[1].flags & GFX_TEXT_GLYPH_INVISIBLE);
+    ASSERT_TRUE(fx.l.glyphs[1].face == 0 && fx.l.glyphs[1].glyph == 0);
+    ASSERT_TRUE(!(fx.l.glyphs[2].flags & (GFX_TEXT_GLYPH_SPACE | GFX_TEXT_GLYPH_HANGING)));
     const uint16_t gV2 = gfxFontGlyphIndex(f, 'V');
     const int32_t fitsKerned = advA + kern + gfxFontScaleQ6(f, gfxFontAdvanceUnits(f, gV2), PX(16));
     ASSERT_EQ(fxLay(&fx, "AV", PX(16), fitsKerned, 0, 0), STATUS_OK); /* fits only kerned */
@@ -367,6 +391,138 @@ TEST(layoutKerningStaysInsideAFace) {
     ASSERT_EQ(fx.l.glyphs[1].glyph, (uint16_t)2);
     ASSERT_EQ(fx.l.glyphs[1].xQ6, 512);
     fxFree(&fx);
+}
+
+/* ---- negative pens, from patched fonts ------------------------------------------------------ */
+
+/* A private copy of fixture `which` with 16-bit values patched (table tag, offset in the table,
+ * value), initialized into *f. Free the bytes after the stack and font are done with. */
+typedef struct {
+    const char *tag;
+    uint32_t off;
+    uint16_t val;
+} Patch;
+static uint8_t *patchedFont(int which, const Patch *p, int n, GfxFont *f) {
+    size_t size = 0;
+    const uint8_t *src = ftuFont(which, &size);
+    uint8_t *d = src != NULL ? malloc(size) : NULL;
+    if (d == NULL) {
+        return NULL;
+    }
+    memcpy(d, src, size);
+    for (int i = 0; i < n; i++) {
+        uint32_t len = 0;
+        const uint32_t t = ftuTable(d, size, p[i].tag, &len);
+        if (t == 0 || p[i].off + 2 > len) {
+            free(d);
+            return NULL;
+        }
+        ftuPut16(d, t + p[i].off, p[i].val);
+    }
+    if (gfxFontInit(f, d, size) != STATUS_OK) {
+        free(d);
+        return NULL;
+    }
+    return d;
+}
+
+/* synth-fallback: U+4E00 is glyph 1, U+4E01 glyph 2 (hmtx entries 1 and 2), and its only 'kern'
+ * pair (1, 2) has its value at byte 22 of the table */
+static uint8_t *fallbackKern(uint16_t adv1, uint16_t adv2, int16_t kern, GfxFont *f) {
+    const Patch p[] = {{"hmtx", 4, adv1}, {"hmtx", 8, adv2}, {"kern", 22, (uint16_t)kern}};
+    return patchedFont(FTU_SYNTH_FALLBACK, p, 3, f);
+}
+
+static Status layOne(const GfxFont *f, const char *text, size_t len, uint32_t sizeQ6, int32_t tab,
+                     uint32_t flags, GfxTextLayout *l) {
+    GfxFontStack s;
+    const GfxFont *faces[1] = {f};
+    if (gfxFontStackInit(&s, faces, 1, 0, NULL) != STATUS_OK) {
+        return STATUS_ERR_NO_MEMORY;
+    }
+    GfxTextStyle st = {sizeQ6, 0, tab, flags};
+    const Status r = gfxTextLayout(&s, (const uint8_t *)text, len, &st, NULL, l);
+    gfxFontStackDestroy(&s); /* only l->stack is left dangling, and it is not used here */
+    return r;
+}
+
+#define YI   "\xE4\xB8\x80" /* U+4E00, glyph 1 */
+#define DING "\xE4\xB8\x81" /* U+4E01, glyph 2 */
+
+TEST(layoutNegativePens) {
+    GfxFont f;
+    GfxTextLayout l;
+    /* a kern larger than the advance before it: a negative x, rounded down (never truncated
+     * towards zero): xQ6 -102 -> q = floor(-94 / 16) = -6 -> x = -2, bin 2 */
+    uint8_t *d = fallbackKern(0, 1000, -100, &f);
+    ASSERT_TRUE(d != NULL);
+    ASSERT_EQ(layOne(&f, YI DING, 6, PX(16), 0, 0, &l), STATUS_OK);
+    ASSERT_EQ(l.glyphs[1].xQ6, -102);
+    ASSERT_EQ(l.glyphs[1].x, -2);
+    ASSERT_EQ(l.glyphs[1].bin, (uint8_t)2);
+    ASSERT_EQ(l.lines[0].widthQ6, 1024 - 102);
+    gfxTextLayoutFree(&l);
+    free(d);
+
+    /* the line ends left of its start: width 0; a tab from a negative pen goes to stop 0 */
+    d = fallbackKern(0, 0, -100, &f);
+    ASSERT_TRUE(d != NULL);
+    ASSERT_EQ(layOne(&f, YI DING, 6, PX(16), 0, 0, &l), STATUS_OK);
+    ASSERT_EQ(l.lines[0].widthQ6, 0);
+    ASSERT_EQ(l.widthQ6, 0);
+    gfxTextLayoutFree(&l);
+    ASSERT_EQ(layOne(&f, YI DING "\tx", 8, PX(16), 2048, 0, &l), STATUS_OK);
+    ASSERT_EQ(l.glyphs[2].xQ6, -102);
+    ASSERT_EQ(l.glyphs[3].xQ6, 0);
+    gfxTextLayoutFree(&l);
+    free(d);
+
+    /* NO_SUBPIXEL rounds a negative half pixel away from zero: -32 Q6 -> -64 */
+    d = fallbackKern(1000, 1000, -125, &f);
+    ASSERT_TRUE(d != NULL);
+    ASSERT_EQ(layOne(&f, YI DING, 6, 256, 0, 0, &l), STATUS_OK);
+    ASSERT_EQ(l.glyphs[1].xQ6, 256 - 32);
+    gfxTextLayoutFree(&l);
+    ASSERT_EQ(layOne(&f, YI DING, 6, 256, 0, GFX_TEXT_NO_SUBPIXEL, &l), STATUS_OK);
+    ASSERT_EQ(l.glyphs[1].xQ6, 256 - 64);
+    gfxTextLayoutFree(&l);
+    free(d);
+
+    /* the negative bound, also when only the kern itself crosses it: at 512 px a pair is kern
+     * -2^20 then advance +2^19, so after j pairs the pen is -j * 2^19 and the kern of pair j + 1
+     * dips 2^20 lower. 2047 pairs touch -2^30 exactly (allowed); the 2048th kern goes below it
+     * (UNSUPPORTED), although its advance would bring the pen back to -2^30. */
+    d = fallbackKern(0, 16000, -32000, &f);
+    ASSERT_TRUE(d != NULL);
+    char *big = malloc(2048 * 6);
+    ASSERT_TRUE(big != NULL);
+    for (int i = 0; i < 2048; i++) {
+        memcpy(big + 6 * i, YI DING, 6);
+    }
+    ASSERT_EQ(layOne(&f, big, 2047 * 6, 32768, 0, 0, &l), STATUS_OK);
+    ASSERT_EQ(l.glyphs[2 * 2047 - 1].xQ6, -GFX_TEXT_MAX_COORD_Q6);
+    ASSERT_EQ(l.lines[0].widthQ6, 0);
+    gfxTextLayoutFree(&l);
+    memset(&l, 0x5A, sizeof l);
+    ASSERT_EQ(layOne(&f, big, 2048 * 6, 32768, 0, 0, &l), STATUS_ERR_UNSUPPORTED);
+    ASSERT_TRUE(l.glyphs == NULL && l.lines == NULL && l.nGlyphs == 0);
+    free(big);
+    free(d);
+}
+
+/* synth-grid's U+0020 is glyph 1 (hmtx entry 1): the default tab from a tiny or zero space */
+TEST(layoutDefaultTabFallbacks) {
+    GfxFont f;
+    GfxTextLayout l;
+    /* space 50 units: 3 Q6 at 1 px, a tab of 24 Q6, raised to the 64 minimum */
+    const Patch tiny[] = {{"hmtx", 4, 50}};
+    uint8_t *d = patchedFont(FTU_SYNTH_GRID, tiny, 1, &f);
+    ASSERT_TRUE(d != NULL);
+    ASSERT_EQ(layOne(&f, "a\tb", 3, 64, 0, 0, &l), STATUS_OK);
+    ASSERT_EQ(l.glyphs[1].xQ6, 32);
+    ASSERT_EQ(l.glyphs[2].xQ6, 64);
+    gfxTextLayoutFree(&l);
+    free(d);
 }
 
 /* ---- the Python reference ------------------------------------------------------------------ */
@@ -597,6 +753,16 @@ TEST(layoutArgumentsAndLimits) {
     GfxFontStack zero;
     memset(&zero, 0, sizeof zero);
     ASSERT_EQ(gfxTextLayout(&zero, (const uint8_t *)"a", 1, &st, NULL, &l), STATUS_ERR_INVALID);
+    GfxFontStack nine; /* a corrupt stack, only for the argument check */
+    memcpy(&nine, &fx.s, sizeof nine);
+    nine.nFaces = GFX_FONT_STACK_MAX_FACES + 1;
+    ASSERT_EQ(gfxTextLayout(&nine, (const uint8_t *)"a", 1, &st, NULL, &l), STATUS_ERR_INVALID);
+    nine.nFaces = GFX_FONT_STACK_MAX_FACES;
+    for (uint32_t i = 1; i < GFX_FONT_STACK_MAX_FACES; i++) {
+        nine.faces[i] = fx.s.faces[0];
+    }
+    ASSERT_EQ(gfxTextLayout(&nine, (const uint8_t *)"a", 1, &st, NULL, &l), STATUS_OK); /* 8 ok */
+    gfxTextLayoutFree(&l);
     const GfxTextStyle bad[] = {
         {PX(16), 0, 0, 4},  {PX(16), -1, 0, 0},  {PX(16), GFX_TEXT_MAX_COORD_Q6 + 1, 0, 0},
         {PX(16), 0, 63, 0}, {PX(16), 0, -64, 0}, {PX(16), 0, GFX_TEXT_MAX_COORD_Q6 + 1, 0},
@@ -650,7 +816,79 @@ TEST(layoutArgumentsAndLimits) {
     memset(big, '\n', 40000);
     ASSERT_EQ(gfxTextLayout(&fx.s, big, 40000, &st, &al, &l), STATUS_ERR_UNSUPPORTED);
     ASSERT_EQ(fa.live, 0);
+    /* ... exactly: a baseline at 2^24 px is allowed, one line more is not */
+    uint32_t edgeSize = 0, k = 0;
+    for (uint32_t q = 1024; q <= GFX_FONT_MAX_SIZE_Q6 && edgeSize == 0; q++) {
+        GfxFontMetricsPx m;
+        ASSERT_EQ(gfxFontMetrics(fontOf(FTU_SYNTH_GRID), q, &m), STATUS_OK);
+        if (((1 << 24) - m.ascent) % m.lineHeight == 0) {
+            edgeSize = q;
+            k = (uint32_t)(((1 << 24) - m.ascent) / m.lineHeight);
+        }
+    }
+    ASSERT_TRUE(edgeSize != 0 && k < GFX_TEXT_MAX_BYTES);
+    memset(big, '\n', k + 1);
+    st.sizeQ6 = edgeSize;
+    ASSERT_EQ(gfxTextLayout(&fx.s, big, k, &st, &al, &l), STATUS_OK); /* k + 1 lines */
+    ASSERT_EQ(l.lines[k].baseline, 1 << 24);
+    gfxTextLayoutFree(&l);
+    ASSERT_EQ(gfxTextLayout(&fx.s, big, k + 1, &st, &al, &l), STATUS_ERR_UNSUPPORTED);
+    ASSERT_EQ(fa.live, 0);
     free(big);
+    fxFree(&fx);
+}
+
+/* The work bound (O(n), each codepoint placed a few times): a megabyte of the inputs that would be
+ * quadratic with a naive emergency break, each well under a second even under ASan. A quadratic
+ * regression takes hours on these, so the CPU-time bound only turns a hang into a failure. */
+TEST(layoutWorkIsLinear) {
+    Fx fx;
+    ASSERT_TRUE(fxInit(&fx, GRID, 1, 0, NULL));
+    const size_t n = GFX_TEXT_MAX_BYTES;
+    uint8_t *b = malloc(n);
+    ASSERT_TRUE(b != NULL);
+    for (int kind = 0; kind < 6; kind++) {
+        size_t len = n;
+        int32_t w = 1;
+        for (size_t i = 0; i < n; i++) {
+            switch (kind) {
+                case 0: /* a base, then marks: the step-forward case */
+                    b[i] = i == 0 ? 'a' : (i % 2 ? 0xCC : 0x81);
+                    break;
+                case 1: /* two bases, then marks: an emergency break, then the step forward */
+                    b[i] = i < 2 ? 'a' : (i % 2 ? 0x81 : 0xCC);
+                    break;
+                case 2: /* bases each with a run of marks wider than the line */
+                    b[i] = i % 64 == 0 ? 'x' : (i % 2 ? 0xCC : 0x81);
+                    w = 64 * 3;
+                    break;
+                case 3: /* one long word: an emergency break at every glyph */
+                    b[i] = 'a';
+                    break;
+                case 4: /* a long word with one break opportunity at its start */
+                    b[i] = i == 1 ? ' ' : 'a';
+                    w = 64 * 40;
+                    break;
+                default: /* spaces: none of them overflows */
+                    b[i] = ' ';
+                    break;
+            }
+        }
+        if (kind == 0) {
+            len = n - 1; /* whole marks only */
+        }
+        GfxTextStyle st = {64, w, 0, 0};
+        const clock_t t0 = clock();
+        ASSERT_EQ(gfxTextLayout(&fx.s, b, len, &st, NULL, &fx.l), STATUS_OK);
+        const double secs = (double)(clock() - t0) / CLOCKS_PER_SEC;
+        if (secs > 20.0) {
+            fprintf(stderr, "  input %d took %.1f s\n", kind, secs);
+            ASSERT_TRUE(0);
+        }
+        ASSERT_TRUE(checkLayout(&fx.l, b, len, &st));
+        gfxTextLayoutFree(&fx.l);
+    }
+    free(b);
     fxFree(&fx);
 }
 
@@ -813,7 +1051,7 @@ TEST(drawArgumentsAndExtremeOrigins) {
     ASSERT_TRUE(fxInit(&fx, SETS, 1, 0, NULL));
     ASSERT_TRUE(fxInit(&other, SETS, 1, 0, NULL));
     ASSERT_EQ(fxLay(&fx, "Hello\nworld", PX(16), 0, 0, 0), STATUS_OK);
-    Canvas cv;
+    Canvas cv, cv2;
     ASSERT_TRUE(canvasInit(&cv, 64, 64, 0xFF000000u));
     const GfxColor white = gfxColorPremul(0xFFFFFFFFu);
     ASSERT_EQ(gfxTextDraw(NULL, &fx.s, &fx.l, 0, 0, white), STATUS_ERR_INVALID);
@@ -827,6 +1065,30 @@ TEST(drawArgumentsAndExtremeOrigins) {
             ASSERT_EQ(gfxTextDraw(&cv.c, &fx.s, &fx.l, ext[i], ext[j], white), STATUS_OK);
         }
     }
+    /* a glyph whose position is beyond int32 is skipped, never wrapped: with the canvas origin at
+     * INT32_MAX, a wrapped x would land back on the canvas */
+    ASSERT_TRUE(canvasInit(&cv2, 64, 64, 0xFF000000u));
+    gfxCanvasSetOrigin(&cv2.c, INT32_MAX, 0);
+    ASSERT_EQ(gfxTextDraw(&cv2.c, &fx.s, &fx.l, INT32_MAX, 0, white), STATUS_OK);
+    gfxCanvasSetOrigin(&cv2.c, 0, INT32_MAX);
+    ASSERT_EQ(gfxTextDraw(&cv2.c, &fx.s, &fx.l, 0, INT32_MAX, white), STATUS_OK);
+    for (int i = 0; i < 64 * 64; i++) {
+        ASSERT_EQ(cv2.px[i], 0xFF000000u);
+    }
+    gfxCanvasSetOrigin(&cv2.c, 0, 0); /* and the same text does draw at (0, 0) */
+    ASSERT_EQ(gfxTextDraw(&cv2.c, &fx.s, &fx.l, 0, 0, white), STATUS_OK);
+    int drawn = 0;
+    for (int i = 0; i < 64 * 64; i++) {
+        drawn += cv2.px[i] != 0xFF000000u;
+    }
+    ASSERT_TRUE(drawn > 50);
+    canvasFree(&cv2);
+    /* an error other than NO_MEMORY from the cache stops the draw and is returned (a record with a
+     * face the stack does not have: only a corrupt layout can do that) */
+    const uint8_t face0 = fx.l.glyphs[0].face;
+    fx.l.glyphs[0].face = 7;
+    ASSERT_EQ(gfxTextDraw(&cv.c, &fx.s, &fx.l, 0, 0, white), STATUS_ERR_INVALID);
+    fx.l.glyphs[0].face = face0;
     /* everything above was far off the 64x64 canvas except the origin (0, 0) rows: only check that
      * it did not crash and an empty layout draws nothing */
     ASSERT_EQ(fxLay(&fx, "", PX(16), 0, 0, 0), STATUS_OK);
@@ -866,6 +1128,24 @@ TEST(drawAllocationFailureSweep) {
         Status s = gfxTextDraw(&cv.c, &fx.s, &fx.l, 2, 2, col);
         if (s == STATUS_ERR_NO_MEMORY) {
             noMem++;
+            /* one allocation failed, so exactly one glyph was skipped and the draw went on: the
+             * pixels differ from the reference only inside one glyph's box */
+            int x0 = 100, y0 = 160, x1 = -1, y1 = -1;
+            for (int y = 0; y < 160; y++) {
+                for (int x = 0; x < 100; x++) {
+                    if (cv.px[y * 100 + x] != ref.px[y * 100 + x]) {
+                        x0 = x < x0 ? x : x0;
+                        y0 = y < y0 ? y : y0;
+                        x1 = x > x1 ? x : x1;
+                        y1 = y > y1 ? y : y1;
+                    }
+                }
+            }
+            if (x1 - x0 >= 24 || y1 - y0 >= 24) {
+                fprintf(stderr, "  failAt %d: pixels differ in (%d,%d)-(%d,%d)\n", failAt, x0, y0,
+                        x1, y1);
+                ASSERT_TRUE(0);
+            }
             /* repaint over a cleared background: the result must be the reference */
             gfxFillRect(&cv.c, (GfxRect){0, 0, 100, 160}, 0xFF102030u, GFX_OP_SRC);
             s = gfxTextDraw(&cv.c, &fx.s, &fx.l, 2, 2, col);

@@ -330,6 +330,7 @@ TEST(breakHandCases) {
         "ab\x0B!cd",
         "a |b |c",
         "a|\xE4\xB8\x80",
+        "x|\xE2\x80\x94 \xE2\x80\x94|y", /* rule 10 looks through the space */
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         ASSERT_TRUE(checkMarked(cases[i]));
