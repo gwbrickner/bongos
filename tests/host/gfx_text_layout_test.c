@@ -278,6 +278,16 @@ TEST(layoutCombiningMarksStayWithTheirBase) {
     ASSERT_EQ(fxLay(&fx, "a\xCC\x81 ", PX(16), 512, 0, 0), STATUS_OK);
     ASSERT_EQ(fx.l.nLines, 1u);
     ASSERT_EQ(fx.l.lines[0].end, (uint8_t)GFX_TEXT_LINE_END_TEXT);
+    /* stepping back over marks can land on a space: it is their base (a standalone diacritic),
+     * so it starts the next line with them and does not hang (spec: the emergency break) */
+    ASSERT_EQ(fxLay(&fx, "x \xCC\x81\xCC\x81\xCC\x81", PX(16), 1024, 0, 0), STATUS_OK);
+    ASSERT_EQ(fx.l.nLines, 2u);
+    ASSERT_EQ(fx.l.lines[0].count, 1u);
+    ASSERT_EQ(fx.l.lines[0].end, (uint8_t)GFX_TEXT_LINE_END_EMERGENCY);
+    ASSERT_EQ(fx.l.lines[1].count, 4u);
+    ASSERT_EQ(fx.l.lines[1].widthQ6, 2048);
+    ASSERT_TRUE((fx.l.glyphs[1].flags & GFX_TEXT_GLYPH_SPACE) &&
+                !(fx.l.glyphs[1].flags & GFX_TEXT_GLYPH_HANGING));
     ASSERT_EQ(fxLay(&fx, "a\xCC\x81\xE4\xB8\x80", PX(16), 512, 0, 0), STATUS_OK);
     ASSERT_EQ(fx.l.nLines, 2u); /* the ideograph's allowed break: a soft break after the run */
     ASSERT_EQ(fx.l.lines[0].count, 2u);

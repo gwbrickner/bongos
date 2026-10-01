@@ -170,7 +170,9 @@ Pass 2, per line: `pen = 0` (int64, Q6), no previous glyph.
 - Overflow when `maxWidthQ6 > 0`, `pen > maxWidthQ6`, `i > lineStart`, and the record is not SPACE,
   not HARD and not a zero-width invisible. Then: if the largest ALLOWED break `o` with
   `lineStart < o <= i` exists, close the line before `o` (SOFT) and restart at `o`; otherwise an
-  emergency break before `i` (if `i` is CM, step back to the last non-CM in (lineStart, i); if none,
+  emergency break before `i` (if `i` is CM, step back to the last non-CM in (lineStart, i), which
+  may be a SPACE: a space followed by combining marks is their base, a standalone diacritic, so it
+  moves to the next line with them and does not hang; if none,
   step forward past the CM run: the marks stay on the line without further overflow checks, and the
   record after the run is then checked like any other, so a space after it hangs, a hard break
   after it ends the line as HARD, and a visible glyph after it breaks before itself).
@@ -197,7 +199,11 @@ Status gfxTextDrawLines(GfxCanvas *c, GfxFontStack *s, const GfxTextLayout *l, u
 1. INVALID if any pointer is NULL or `l->stack != s`.
 2. Per non-INVISIBLE record: `gfxFontStackGlyph(s, face, glyph, l->sizeQ6, bin, &img)`, then at once
    `gfxFillMask(c, X, Y, &img->mask, col)` with `X = ox + x + left`, `Y = oy + y + top` in int64
-   (outside int32: skip the glyph). Never hold `img` across another Glyph call.
+   (outside int32: skip the glyph, never wrap). The check is made before `gfxFillMask` adds the
+   canvas origin, so a skipped glyph stays skipped even when the origin would bring it back on
+   screen: since `x + left` and `y + top` stay within about +-2^25 px, callers keep `|ox|` and
+   `|oy|` below `2^31 - 2^26` and put any larger translation in the canvas origin. Never hold `img`
+   across another Glyph call.
 3. NO_MEMORY: remember, skip the glyph, continue, return NO_MEMORY at the end (a retry must repaint
    over a cleared background: SRC_OVER twice darkens AA edges). Any other error: return at once.
 
@@ -219,7 +225,11 @@ advance): bins at 16.25 px and NO_SUBPIXEL, exact fit vs `maxWidth - 1` Q6, hang
 emergency breaks, a glyph wider than `maxWidth` alone on its line, CM not orphaned,
 BK/CR/LF/CRLF/NEL/LS/PS, the trailing empty line, empty text, tab stops after a wrap. Kerning on
 Liberation ("AV"); none across a face change, ZWSP or a line break; the NO_KERNING flag. gen.py
-`layout.cases` from a Python layout reference. Invariants: lines partition [0, len), offsets
+`layout.cases` from a Python layout reference. Its scope is deliberately narrow: one face (Sans,
+Mono or the grid), no tabs, no combining marks, no invisible other than LF and no flags; it is
+independent of the C in its font parse, breaks and Q6 scaling. Tabs, marks, invisibles, fallback,
+kerning across faces, the flags and negative pens are covered by the hand-computed cases and the
+structural invariants above. Invariants: lines partition [0, len), offsets
 monotonic, every break is an opportunity or EMERGENCY. Limits: exactly 1 MiB OK; 1 MiB + 1
 UNSUPPORTED with no allocation; coordinate overflow UNSUPPORTED. Allocation-failure sweep with a
 leak check. Draw: pixel-identical to a manual `gfxFontRenderGlyph` + `gfxFillMask` composition and
