@@ -185,8 +185,8 @@ Pass 2, per line: `pen = 0` (int64, Q6), no previous glyph.
 - Glyph position: `q = floorDiv(xQ6 + 8, 16)`, `x = floorDiv(q, 4)`, `bin = q & 3`, in int64, with
   a helper (never right-shift a negative number).
 - Vertical: `y = baseline = ascent + k*lineHeight` from face 0; above 2^24 px: UNSUPPORTED.
-- End of text: `n == 0`, or the last record is HARD: add an empty last line with
-  `byteStart = byteEnd = len`.
+- End of text: empty text (`n == 0`) is exactly one empty line (`count == 0`, `byteStart = byteEnd =
+  len`); if the last record is HARD, add one more empty last line with `byteStart = byteEnd = len`.
 - Work bound: each codepoint placed at most about 3 times; O(n).
 
 ## Draw (text-draw.c)

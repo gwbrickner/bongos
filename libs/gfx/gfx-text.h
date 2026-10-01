@@ -148,7 +148,8 @@ typedef struct {
  * Failure modes: INVALID (NULL arguments, text NULL with len > 0, nFaces 0, unknown flags,
  * maxWidthQ6 or tabQ6 out of range, a size outside the font limits), UNSUPPORTED (len over
  * GFX_TEXT_MAX_BYTES, a coordinate beyond 2^24 px), NO_MEMORY. Allocates 24 bytes per codepoint
- * and 28 per line. Not thread-safe on `s`' cache (only read here). */
+ * and 28 per line. Reads only `s`' faces (never its cache), but must not race with a
+ * gfxFontStackGlyph or gfxFontStackDestroy on `s`. */
 Status gfxTextLayout(const GfxFontStack *s, const uint8_t *text, size_t len, const GfxTextStyle *st,
                      const GfxAllocator *a, GfxTextLayout *out);
 

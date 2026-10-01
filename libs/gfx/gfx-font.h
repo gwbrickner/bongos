@@ -66,7 +66,8 @@ typedef enum { GFX_FONT_KERN_NONE, GFX_FONT_KERN_TABLE, GFX_FONT_KERN_GPOS } Gfx
 /* Parses `data` (an sfnt with TrueType outlines) into *f. Never allocates. *f is zeroed on failure.
  * `data` must stay valid and unmodified while `f`, or any stack or layout using it, is alive.
  * Failure modes: INVALID (malformed, truncated, missing required table), UNSUPPORTED (CFF, TTC,
- * WOFF, over GFX_FONT_MAX_FILE_BYTES, no usable Unicode cmap). Never sleeps. */
+ * WOFF, over GFX_FONT_MAX_FILE_BYTES, no usable Unicode cmap, a nonzero glyphDataFormat). Never
+ * sleeps. */
 Status gfxFontInit(GfxFont *f, const uint8_t *data, size_t size);
 
 /* Glyph for a codepoint; 0 (.notdef) when unmapped or out of range. Never fails. */
@@ -116,7 +117,8 @@ Status gfxFontGlyphOutline(const GfxFont *f, uint16_t glyph, const GfxFontXform 
                            GfxGlyphOutline *o);
 
 /* Appends the outline to `p` as closed quadratic subpaths, translated by (dx, dy); returns the
- * path's sticky error. Contours with fewer than 2 points are skipped. */
+ * path's sticky error, or INVALID for a NULL argument or inconsistent contour ends. Contours with
+ * fewer than 2 points are skipped. */
 Status gfxGlyphOutlineToPath(const GfxGlyphOutline *o, float dx, float dy, GfxPath *p);
 
 /* ---- glyph images ------------------------------------------------------------------------- */

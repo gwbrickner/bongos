@@ -328,12 +328,14 @@ TEST(glyfAdvSimpleRoundTripRandom) {
                         case 0:
                             d[j] = 0;
                             break;
-                        case 1:
-                            d[j] = (int32_t)(1 + rng() % 255) * (rng() & 1 ? 1 : -1);
-                            break;
-                        case 2:
-                            d[j] = (int32_t)(256 + rng() % 32512) * (rng() & 1 ? 1 : -1);
-                            break;
+                        case 1: {
+                            const int32_t mag = (int32_t)(1 + rng() % 255);
+                            d[j] = mag * (rng() & 1 ? 1 : -1);
+                        } break;
+                        case 2: {
+                            const int32_t mag = (int32_t)(256 + rng() % 32512);
+                            d[j] = mag * (rng() & 1 ? 1 : -1);
+                        } break;
                         default: /* the int16 extremes and the short/long boundary */
                         {
                             static const int32_t ex[] = {32767, -32768, 255, -255,
@@ -348,8 +350,9 @@ TEST(glyfAdvSimpleRoundTripRandom) {
             }
             ends[k][c] = np[k] - 1;
         }
-        encSimple(&g[k], pts[k], np[k], ends[k], nc[k], rng() % 3 == 0 ? rng() % 40 : 0,
-                  (int)(rng() & 1));
+        const uint32_t instr = rng() % 3 == 0 ? rng() % 40 : 0;
+        const int rle = (int)(rng() & 1);
+        encSimple(&g[k], pts[k], np[k], ends[k], nc[k], instr, rle);
     }
     /* N: a composite of glyphs 0, 1 and 2 */
     Comp cc[3] = {{.gid = 0, .dx = 7, .dy = -9},

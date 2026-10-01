@@ -275,8 +275,14 @@ static void makeRandomOps(Op *ops, uint32_t n, const GfxFontStack *s) {
         ops[i].face = face;
         ops[i].glyph = glyph;
         /* mostly a few popular sizes (so there are hits), sometimes any size (so there is churn) */
-        ops[i].size =
-            rnd() % 10 < 7 ? (12 + rnd() % 3 * 6) * 64 : (8 + rnd() % 41) * 64 + rnd() % 64;
+        if (rnd() % 10 < 7) {
+            ops[i].size = (12 + rnd() % 3 * 6) * 64;
+        } else {
+            const uint32_t whole =
+                8 + rnd() % 41;               /* one call per statement: C leaves the order of */
+            const uint32_t frac = rnd() % 64; /* operands unspecified, and the seed must replay */
+            ops[i].size = whole * 64 + frac;
+        }
         ops[i].bin = rnd() % 4;
     }
 }

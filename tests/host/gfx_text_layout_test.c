@@ -656,7 +656,8 @@ TEST(layoutMatchesPythonReference) {
         ASSERT_EQ(gfxTextLayout(&fx.s, utf8, n, &st, NULL, &fx.l), STATUS_OK);
         /* per-codepoint line and x */
         uint32_t k = 0;
-        for (const char *q = recsStart; q < widthsStart - 3 && *q != '-' && k < fx.l.nGlyphs;) {
+        const char *q = recsStart;
+        for (; q < widthsStart - 3 && *q != '-' && k < fx.l.nGlyphs;) {
             char *end;
             const unsigned wantLine = (unsigned)strtoul(q, &end, 10);
             const long wantX = strtol(end + 1, &end, 10);
@@ -676,9 +677,11 @@ TEST(layoutMatchesPythonReference) {
             q = *end == ' ' ? end + 1 : end;
         }
         ASSERT_EQ(k, fx.l.nGlyphs);
+        ASSERT_TRUE(q >= widthsStart - 3 || *q == '-'); /* every expected record was checked */
         /* per-line width */
         uint32_t li = 0;
-        for (const char *q = widthsStart; *q != 0 && li < fx.l.nLines;) {
+        q = widthsStart;
+        for (; *q != 0 && li < fx.l.nLines;) {
             char *end;
             const long w = strtol(q, &end, 10);
             if (fx.l.lines[li].widthQ6 != w) {
@@ -691,6 +694,11 @@ TEST(layoutMatchesPythonReference) {
             q = *end == ' ' ? end + 1 : end;
         }
         ASSERT_EQ(li, fx.l.nLines);
+        if (*q != 0) {
+            fprintf(stderr, "  case %zu (%s): C has %u lines, expected widths continue at '%s'\n",
+                    cases, line, fx.l.nLines, q);
+        }
+        ASSERT_TRUE(*q == 0); /* ... and every expected width, including a trailing empty line's */
         fxFree(&fx);
         cases++;
     }
@@ -822,7 +830,10 @@ TEST(layoutInvariantsOnRandomText) {
             }
         }
         GfxTextStyle st;
-        st.sizeQ6 = PX(6 + rnd() % 40) + rnd() % 64;
+        const uint32_t whole = rnd() % 40; /* separate statements: the evaluation order of the */
+        const uint32_t frac =
+            rnd() % 64; /* operands of + is unspecified, and the seed must replay */
+        st.sizeQ6 = PX(6 + whole) + frac;
         const uint32_t w = rnd() % 4;
         st.maxWidthQ6 = w == 0 ? 0 : w == 1 ? (int32_t)(rnd() % 200) : (int32_t)(rnd() % 6000);
         st.tabQ6 = rnd() % 3 == 0 ? (int32_t)(64 + rnd() % 3000) : 0;

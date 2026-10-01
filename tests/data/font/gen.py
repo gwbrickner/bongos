@@ -15,6 +15,11 @@ Outputs, in this directory:
                       incl. composites, GPOS 'kern'): sizes, crc32, metrics, cmap, advances, kerning
                       and expanded outlines, which libs/gfx must reproduce
   utf8.cases          hex input -> expected codepoints, from Python's utf-8 'replace' decoder
+  utf8.digest         count and FNV-1a-64 of Python's decoding of a seeded 1 MiB byte stream
+  linebreak.ranges    the line class of every codepoint 0..10FFFF and the invisible set, written
+                      from docs/specs/gfx-text.md (not from the C tables)
+  break.cases         break opportunities of hand-checked and random strings (the spec's 16 rules)
+  layout.cases        a Python layout reference (advances and kerning from the independent parse)
 
 The oracle text format is line based (see tests/host/font_testutil.c for the reader):
   <kind> <font> <numbers...>
@@ -1331,7 +1336,7 @@ def py_layout(cps, adv, kern, maxw):
         widths.append(max(w, 0))
         i = end
         if i >= n:
-            if n == 0 or cps[n - 1] == 0x0A:
+            if n > 0 and cps[n - 1] == 0x0A:  # empty text is one (empty) line already
                 widths.append(0)
             break
     return recs, widths
