@@ -104,7 +104,7 @@ M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad kaslr_slide_con
 # row must pass: the MCFG base line, one `MADT cpu` line per vCPU in the row (the roadmap's "boot log
 # lists the CPUs from the MADT"; scales to the 4-CPU rows M3.5 adds), and `acpiextract --check` on
 # the ACPIDUMP block the ktest image's `acpidump=1` makes the kernel print (docs/specs/acpidump.md).
-ACPI_REQUIRED_KTESTS := acpi_reclaimed acpi_tables_loaded acpi_madt_lists_bsp acpi_mcfg_present acpi_fadt_sane \
+ACPI_REQUIRED_KTESTS := acpi_reclaimed pmm_reclaim_keeps_low_memory acpi_tables_loaded acpi_madt_lists_bsp acpi_mcfg_present acpi_fadt_sane \
                         acpi_tables_are_kernel_copies acpi_parse_rejects_corrupt \
                         acpi_read_phys_matches_copies acpi_read_phys_releases_kva \
                         acpi_read_phys_refuses_bad_ranges acpi_alloc_free_boundary \

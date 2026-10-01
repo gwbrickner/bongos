@@ -80,6 +80,13 @@ Status pmmMapScan(const BootMemRegion *regions, uint32_t count, PmmMap *out);
  * No locks; IRQ-safe; pure. */
 bool pmmMapTypeIsManaged(uint32_t type);
 
+/* Clips one recorded reclaim range (LOADER_RECLAIM or ACPI_RECLAIM) to what a reclaim may free:
+ * [1 MiB, BOOTINFO_HHDM_SIZE), the same window pmmMapScan() backs with buddy-usable Page entries
+ * (D-080's low-memory withholding, the HHDM limit). Writes the clipped [*outBase, *outEnd) and
+ * returns true if it is non-empty; returns false (outputs unspecified) if nothing is left. `r` is
+ * page-aligned and does not wrap (the BootInfo map contract). No locks; IRQ-safe; pure. */
+bool pmmReclaimClip(const PmmReclaimRange *r, uint64_t *outBase, uint64_t *outEnd);
+
 /* --- early.c: the bump allocator (boot-time only, sealed before the buddy allocator opens) --- */
 
 /* Initializes the bump allocator over `map->usable` (top-down per range, so NORMAL memory is

@@ -186,3 +186,37 @@ TEST(pmmMapScanAcpiReclaimOverflowIsCountedNotFatal) {
     ASSERT_EQ(map.typePages[BOOT_MEM_ACPI_RECLAIM], (uint64_t)N);
     ASSERT_EQ(map.usableCount, 1u);
 }
+
+/* pmmReclaimClip: what pmmReclaimLoaderMemory()/pmmReclaimAcpiMemory() may free of one recorded
+ * range -- never below 1 MiB (D-080), never at or past the HHDM window. Straddling either edge
+ * keeps exactly the inside part; a range entirely outside yields nothing. */
+TEST(pmmReclaimClipEdges) {
+    const uint64_t mib = 0x100000, hhdm = BOOTINFO_HHDM_SIZE;
+    struct {
+        uint64_t base, length;
+        bool ok;
+        uint64_t wantBase, wantEnd;
+    } cases[] = {
+        {0x200000, 0x8000, true, 0x200000, 0x208000},       /* plain */
+        {0x9F000, 0x1000, false, 0, 0},                     /* entirely below 1 MiB */
+        {0x0, mib, false, 0, 0},                            /* ends exactly at 1 MiB */
+        {0xFF000, 0x2000, true, mib, mib + 0x1000},         /* straddles 1 MiB */
+        {0x0, 2 * mib, true, mib, 2 * mib},                 /* from 0 across 1 MiB */
+        {mib, 0x1000, true, mib, mib + 0x1000},             /* starts exactly at 1 MiB */
+        {hhdm - 0x1000, 0x1000, true, hhdm - 0x1000, hhdm}, /* last page inside */
+        {hhdm - 0x1000, 0x3000, true, hhdm - 0x1000, hhdm}, /* straddles the HHDM limit */
+        {hhdm, 0x1000, false, 0, 0},                        /* starts exactly at the limit */
+        {hhdm + 0x5000, 0x10000, false, 0, 0},              /* entirely past it */
+        {0x0, hhdm + 0x1000, true, mib, hhdm},              /* both edges at once */
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        PmmReclaimRange r = {.physBase = cases[i].base, .length = cases[i].length};
+        uint64_t b = 0xDEAD, e = 0xBEEF;
+        bool ok = pmmReclaimClip(&r, &b, &e);
+        ASSERT_EQ(ok, cases[i].ok);
+        if (ok) {
+            ASSERT_EQ(b, cases[i].wantBase);
+            ASSERT_EQ(e, cases[i].wantEnd);
+        }
+    }
+}

@@ -405,10 +405,6 @@ Status pmmAddFreeRange(uint64_t physBase, uint64_t length) {
     return STATUS_OK;
 }
 
-/* PMM_RECLAIM_LOW_LIMIT mirrors D-080's low-memory withholding (PMM_LOW_MEM_LIMIT_PFN, pmm-map.c):
- * pmmReclaimLoaderMemory() must never hand anything below 1 MiB to the buddy allocator either. */
-#define PMM_RECLAIM_LOW_LIMIT 0x100000ULL
-
 static void pmmZeroRange(uint64_t physBase, uint64_t length) {
     uint64_t *p = (uint64_t *)(uintptr_t)(pmmHhdmBaseValue + physBase);
     uint64_t words = length / sizeof(uint64_t);
@@ -460,23 +456,16 @@ static uint64_t pmmReclaimPiece(uint64_t base, uint64_t length) {
     return length >> 12;
 }
 
-/* Frees every range in `ranges[0..n)` via pmmReclaimPiece(), clipped to [1 MiB, HHDM window) the
- * same way pmmMapScan() clips what it backs with Page entries. Returns the pages freed. */
+/* Frees every range in `ranges[0..n)` via pmmReclaimPiece(), clipped by pmmReclaimClip() to
+ * [1 MiB, HHDM window), the same window pmmMapScan() backs with Page entries. Returns the pages
+ * freed. */
 static uint64_t pmmReclaimRanges(const PmmReclaimRange *ranges, uint32_t n) {
     uint64_t reclaimed = 0;
     for (uint32_t i = 0; i < n; i++) {
-        uint64_t base = ranges[i].physBase;
-        uint64_t end = base + ranges[i].length;
-        if (base < PMM_RECLAIM_LOW_LIMIT) {
-            base = PMM_RECLAIM_LOW_LIMIT;
+        uint64_t base, end;
+        if (pmmReclaimClip(&ranges[i], &base, &end)) {
+            reclaimed += pmmReclaimPiece(base, end - base);
         }
-        if (end > BOOTINFO_HHDM_SIZE) { /* mirrors pmm-map.c's own HHDM-window clip */
-            end = BOOTINFO_HHDM_SIZE;
-        }
-        if (base >= end) {
-            continue;
-        }
-        reclaimed += pmmReclaimPiece(base, end - base);
     }
     return reclaimed;
 }

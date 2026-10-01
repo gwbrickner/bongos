@@ -28,6 +28,23 @@ bool pmmMapTypeIsManaged(uint32_t type) {
     }
 }
 
+bool pmmReclaimClip(const PmmReclaimRange *r, uint64_t *outBase, uint64_t *outEnd) {
+    uint64_t base = r->physBase;
+    uint64_t end = r->physBase + r->length;
+    if (base < (PMM_LOW_MEM_LIMIT_PFN << 12)) {
+        base = PMM_LOW_MEM_LIMIT_PFN << 12;
+    }
+    if (end > (PMM_HHDM_LIMIT_PFN << 12)) {
+        end = PMM_HHDM_LIMIT_PFN << 12;
+    }
+    if (base >= end) {
+        return false;
+    }
+    *outBase = base;
+    *outEnd = end;
+    return true;
+}
+
 static uint64_t alignDownPfn(uint64_t pfn) {
     return pfn & ~(PMM_SPAN_ALIGN_PFN - 1);
 }

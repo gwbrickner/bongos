@@ -479,3 +479,21 @@ KTEST(pmm_poison_detects_write_after_free) {
     pmmFreePages(leaked, 0);
 }
 #endif /* KERNEL_DEBUG */
+
+/* D-080 after both reclaims (M2.3's LOADER_RECLAIM, M3.1's ACPI_RECLAIM, D-168): no frame below
+ * 1 MiB was ever handed to the buddy allocator, whatever its BootInfo type -- every one that has a
+ * Page entry is still RESERVED. Not vacuous on BIOS, where the loader leaves LOADER_RECLAIM pages
+ * below 1 MiB that a missing reclaim clip would free (M3.1 step-5 sweep, mutation M4). */
+KTEST(pmm_reclaim_keeps_low_memory) {
+    uint32_t withEntry = 0;
+    for (uint64_t pfn = 0; pfn < (0x100000 >> 12); pfn++) {
+        if (!pmmPfnValid(pfn)) {
+            continue;
+        }
+        Page *p = pmmPhysToPage(pfn << 12);
+        KTEST_ASSERT(p != NULL);
+        KTEST_ASSERT_EQ(p->state, PAGE_STATE_RESERVED);
+        withEntry++;
+    }
+    KTEST_ASSERT(withEntry > 0); /* the first span always starts at pfn 0 (order-10 padding) */
+}
