@@ -174,6 +174,13 @@ D-096, §6.2). Misuse that's cheap enough to detect unconditionally (the pmm's d
 state machine; the slab allocator's own bufctl-based double-free/bad-pointer checks) stays on in
 release builds too; `KERNEL_DEBUG` is only for checks with a real per-operation cost.
 
+**Kernel link and KASLR (M2.6, D-120):** `--emit-relocs` keeps the `.rela.*` tables in
+`kernel.elf`, which the loaders read to slide the image. `make kaslr-reloc-check` (a prerequisite
+of `test` and `test-full`) relinks the same objects at a different base and requires the host
+build of the loader's relocator to reproduce that link byte for byte. `libs/crypto/*.c` is part of
+the kernel's source list (and of `make analyze`), compiled with `-Ilibs/crypto/include`, and the
+same files are built for the host tests.
+
 **Make targets:** `all`, `image` (-> `build/bongos.img`), `test` (quick matrix), `test-full`,
 `host-tests`, `gui-test`, `update-refs`, `analyze` (Clang static analyzer, D-116), `screenshot`
 (final boot screen -> PNG, D-115), `debug`, `run`, `run-bios`, `gdb`, `format`, `format-check`,
@@ -244,7 +251,7 @@ empty `initrd =` or `cmdline =` in a section overrides an inherited non-empty va
 - `initrd` (path; built-in default: none; not yet loaded, D-067 -- M5.5)
 - `cmdline` (any bytes but NUL; built-in default: empty)
 - `resolution = auto | WIDTHxHEIGHT` (built-in default `auto`)
-- `kaslr = on | off` (built-in default `on`; no effect until M2.6)
+- `kaslr = on | off` (built-in default `on`; `off` gives the fixed link-time base)
 
 `timeout` (seconds, 0-3600, or `forever`; default 0 = no menu) and `default` (a 1-based index if
 all digits, else an exact entry name; default 1) are **global-only**. At most 9 `[entry]`
@@ -299,6 +306,12 @@ typedef struct BootInfo {
     uint8_t  randomSeed[64];             /* EFI_RNG / RDSEED / RDRAND / TSC jitter */
 } BootInfo;
 ```
+
+`kaslrSlide` is the byte offset the loader added to every kernel link address (0 when KASLR is off
+or the relocator fell back); `kernelVirtBase` is always the link base plus `kaslrSlide`, and the
+kernel refuses to boot if the two disagree or the slide does not keep the image inside the
+kernel window (M2.6, D-120/D-124). `randomSeed` is consumed and wiped by the kernel early in
+`kernelMain` (§6.6, D-123); it is never valid after that.
 
 All addresses are physical. The kernel reads them through the HHDM. If the kernel sees a
 different `version`, it refuses to boot and says so on serial and on the framebuffer. A zero
@@ -361,11 +374,33 @@ BIOS wires IRQ0-7 to interrupt vectors 8-15, which collide with the kernel's own
    default/timed-out) entry.
 4. If the entry's resolved `resolution` differs from the global one, pick and set the GOP mode
    again.
-5. Load `kernel.elf` (check ELF64, x86_64, `PT_LOAD` segments) into `EfiLoaderData` pages.
-   Apply the KASLR slide using the `--emit-relocs` relocations (`R_X86_64_64`, `R_X86_64_32S`).
+5. Read `kernel.elf` into a pool buffer and parse it (`elfParse`: check ELF64, x86_64,
+   `PT_LOAD` segments, compute the image span), then, in this order (M2.6, D-120/D-121):
+   1. **Gather the random seed** (see step 8) -- now, right after the parse and before the kernel
+      is loaded, because the slide is derived from it.
+   2. Allocate the physical block and copy the segments into `EfiLoaderData` pages (`elfLoad`).
+      Physical placement does not depend on the slide.
+   3. **Relocate** (`loaderKaslrApply`, shared with the BIOS loader): if the entry's `kaslr` is
+      on (the default), pick a slide with `bootKaslrPickSlide` (2 MiB slots over the 512 MiB
+      kernel window, §6.1/§6.6) and apply it with `elfRelocate`, which adds the slide to every
+      `R_X86_64_64` and `R_X86_64_32S` location listed in the `--emit-relocs` tables still
+      present in the file buffer (validate everything first, then apply; `PC32`/`PLT32` need
+      nothing). Logs `loader: kaslr: slide=0x... base=0x... relocs=<n>`.
+   4. **Fallback:** on any pick/relocate error the loader logs `loader: kaslr: disabled:
+      <status>; base=0x...`, re-runs `elfLoad` (a failed pass 2 leaves a half-slid image) and
+      continues unslid (slide 0). Only a failing re-load aborts the boot.
+   5. **`kaslr = off`** (boot.cfg, D-067) skips the relocator entirely: slide 0, logs
+      `loader: kaslr: off (boot.cfg); base=0xffffffff80000000`.
+   The kernel file buffer is freed only after this step. The slide then reaches the kernel as
+   `entryVa = entry + slide`, `kernelVirtBase = linkBase + slide`, the page tables' kernel-image
+   mapping (`BootPtPlan.slide`) and `BootInfo.kaslrSlide`; the self-check (step 10) fails the
+   boot if they disagree.
 6. Load the initrd (once M5.5 wires it in; M1.4 parses `initrd =` but doesn't load it).
 7. Find the RSDP in the config tables (ACPI 2.0 GUID first, then 1.0).
-8. Gather the random seed: `EFI_RNG_PROTOCOL` if present, else RDSEED/RDRAND, plus TSC jitter.
+8. The random seed (64 bytes): `EFI_RNG_PROTOCOL` if present, else RDSEED/RDRAND, plus TSC
+   jitter. **Gathered during step 5** (right after `elfParse`, before `elfLoad`), not here; this
+   step only copies it into BootInfo. The loader wipes its own stack copy afterwards; the copy in
+   the BootInfo page is the kernel's to wipe (§6.6, D-123).
 9. Build the page tables (including the framebuffer mapping, §5.4) and BootInfo.
 10. Call `GetMemoryMap` then `ExitBootServices`. Retry on a map-key mismatch, with no
     allocations between the two calls.
@@ -410,8 +445,14 @@ that needs GPT+FAT32+the boot.cfg parser first).
   5. Pick and set a VBE mode using the global `resolution` (same selection rule as UEFI's GOP,
      D-109); show the menu if `timeout > 0`; resolve the entry, re-picking VBE if its own
      `resolution` differs.
-  6. Load `kernel.elf` above 1 MiB (initrd is not yet loaded by either loader -- M5.5, D-067).
-  7. Scan for the RSDP (EBDA first KiB, then 0xE0000 to 0xFFFFF); gather a random seed.
+  6. Read `kernel.elf` and parse it (`elfParse`); **gather the random seed now** (RDSEED/RDRAND
+     plus TSC jitter, via `boot/common/hw/cpu.c`), before the load,
+     because the slide is derived from it; load the image above 1 MiB (`elfLoad`; initrd is not
+     yet loaded by either loader -- M5.5, D-067); then relocate with the same shared
+     `loaderKaslrApply` the UEFI loader uses (§5.5 step 5: pick a slide, `elfRelocate`, fall
+     back to slide 0 by re-running `elfLoad` on any error, skip everything for `kaslr = off`;
+     same serial lines). The kernel file buffer comes from the never-freed loader heap.
+  7. Scan for the RSDP (EBDA first KiB, then 0xE0000 to 0xFFFFF).
   8. Build the page tables and BootInfo using the same shared builder UEFI calls (`boothandoff.c`,
      D-108) -- not a second hand-copied implementation.
   9. Mask both legacy PICs; enter long mode (D-111) and jump.
@@ -437,6 +478,15 @@ that needs GPT+FAT32+the boot.cfg parser first).
 | `0xFFFFE00000000000`-`0xFFFFEFFFFFFFFFFF` | `Page` metadata array (one entry per physical frame) |
 | `0xFFFFFFFF80000000`-`0xFFFFFFFF9FFFFFFF` | kernel image (KASLR slides it within this 512 MiB window, 2 MiB aligned) |
 | `0xFFFFFFFFA0000000`-`0xFFFFFFFFEFFFFFFF` | loadable modules (within ±2 GiB of the kernel for `-mcmodel=kernel`) |
+
+**KASLR slide (M2.6, D-120/D-121/D-124):** the kernel is linked at `0xFFFFFFFF80000000` and the
+loader relocates it by `BootInfo.kaslrSlide`, a multiple of 2 MiB with
+`slide <= 512 MiB - alignUp(kernelSize, 2 MiB)`, so the whole image always stays inside the
+window (about 256 slots, ~8 bits of entropy for a ~1 MiB kernel). The kernel computes its own
+slide as `kernelSlide() = kernelImageStart - 0xFFFFFFFF80000000` from the linker symbol (no
+BootInfo needed, so it is valid in `panic()`). Only the kernel *virtual* address moves: the
+image's physical placement, the HHDM alias of it, the HHDM base and the vmalloc/KVA bases are not
+randomized yet (§6.6).
 
 The PML4 entries 256-511 (the kernel half) are allocated at boot and shared by every address
 space, so kernel mappings never need to be synced between them. M2.3 (D-086) allocates all 256 of
@@ -489,9 +539,12 @@ copies these 256 entries by value rather than syncing individual mappings into t
 7. **Reclaim:** `LOADER_RECLAIM` is handed to the buddy allocator once the kernel switches to its
    own page tables and no longer needs the loader's (M2.3, D-083/D-089 -- superseding this
    section's earlier "after switching stacks" wording, which predates the kernel having its own
-   page tables at all), via `pmmReclaimLoaderMemory()`, which keeps the one BootInfo page reserved
-   until M2.6; `ACPI_RECLAIM` once ACPI tables are parsed (M3.1); `INITRD` once it's no longer
-   needed (M5.5).
+   page tables at all), via `pmmReclaimLoaderMemory(void)`, which zeroes every page it frees. The
+   one BootInfo page used to be kept reserved until the random seed was consumed (D-089); since
+   M2.6 (D-123) the kernel wipes the seed on the live page right after `randomInit`, so the page is
+   reclaimed and zeroed like every other `LOADER_RECLAIM` page at or above 1 MiB (below 1 MiB
+   nothing is reclaimed, D-080); `ACPI_RECLAIM` once ACPI tables are parsed (M3.1); `INITRD` once
+   it's no longer needed (M5.5).
 
 ### 6.3 Paging
 - 4-level paging. Kernel mappings are marked global.
@@ -563,15 +616,47 @@ copies these 256 entries by value rather than syncing individual mappings into t
   - Dirty file pages are written back first.
 
 ### 6.6 Randomization
-- **KASLR:** the kernel slide is chosen by the loader (§5.5). Randomizing the HHDM base and
-  the vmalloc base comes later.
+- **KASLR (M2.6, D-120/D-121):** the loader (§5.5/§5.6) picks the slide and relocates the image.
+  The seed is hashed (splitmix64 finalizer over all 8 qwords of the 64-byte seed, domain
+  `"KASLRSLD"`) and range-reduced by multiply-high to one of the 2 MiB slots that keep the image
+  inside the 512 MiB window (~256 slots, about 8 bits of entropy, accepted for now). The loader
+  prints the slide on serial and the kernel logs `kaslr: virtBase=... slide=...`, so **the slide
+  leaks about 8 bits of the boot seed** (the same seed the stack canary, D-077, is folded from).
+  `kaslr = off` in boot.cfg gives the fixed link base and slide 0; a relocation failure falls
+  back to slide 0 with a serial line instead of refusing to boot. **Not randomized yet** (later
+  milestones): the HHDM base and the HHDM alias of the kernel, the vmalloc/KVA bases, and the
+  image's physical placement.
 - **User ASLR:** the PIE base, mmap base, stack, and heap are randomized, with at least 28
   bits of entropy for mmap.
-- **Kernel RNG:** an entropy pool fed by RDSEED/RDRAND, `BootInfo.randomSeed`, and interrupt
-  timing, feeding a ChaCha20-based CSPRNG (`randomGetBytes`), from M2.6 onward.
+- **Kernel RNG (M2.6, D-122/D-123; EXPERIMENTAL, §17):** `kernel/core/random.c` (global, IRQ-disable
+  lock) over the pure `kernel/core/random-core.c`, built on `libs/crypto`.
+  - *Pool:* a running SHA-256 with domain `"rng-pool-v1"`. `randomInit` (once, from `kernelMain`
+    right after `stackGuardInit`) absorbs the 64-byte `BootInfo.randomSeed`, one TSC reading and
+    up to 8 hardware words (RDSEED, each falling back to RDRAND; it logs
+    `random: seeded (hw words n/8 via ...)`, plus a WARN line when n is 0).
+    `randomAddEntropy` absorbs caller bytes and counts them as pending; nothing is credited or
+    estimated and nothing ever blocks.
+  - *Reseed:* at init and whenever at least 32 bytes are pending when `randomGetBytes` runs
+    (4 RDRAND words and the TSC are stirred in first): `key = SHA256("rng-reseed-v1" || oldKey ||
+    le64(generation) || SHA256(pool))`, then the generation counter increments and the pool
+    restarts.
+  - *Generator:* ChaCha20 with fast key erasure. Per step of at most 512 output bytes the blocks
+    are computed under the old key, the first 32 bytes become the new key and the rest is the
+    output; the key is replaced before any output byte is written to the caller. `randomGetBytes`
+    panics before `randomInit` rather than return weak bytes; `randomU64` and `randomGeneration`
+    are the other entry points.
+  - *Seed lifecycle:* `stackGuardInit` (canary, D-077) and `randomInit` read the live seed in the
+    loader's BootInfo page; `cryptoWipe` then zeroes it there, before `vmmInit`; the BootInfo
+    page is reclaimed (and zeroed) with the rest of `LOADER_RECLAIM` (§6.2, D-123).
+  - *Not yet:* interrupt-timing and other device entropy (the `randomAddEntropy` hook exists
+    and nothing calls it), randomizing the HHDM/vmalloc bases, per-CPU state and real spinlocks
+    (M3.4/M3.5), and moving the canary onto the RNG (owner question, STATUS.md). Hardware
+    RDSEED/RDRAND exhaustion and the AMD all-ones RDRAND quirk are handled in code but QEMU
+    cannot exercise them.
 - **Stack canaries (M2.1, D-077):** `__stack_chk_guard` is set exactly once, very early in
   `kernelMain`, from a splitmix64-style fold of all 8 qwords of `BootInfo.randomSeed` mixed with
-  one `rdtsc` reading (the CSPRNG doesn't exist yet at this point) -- never reseeded afterward.
+  one `rdtsc` reading (the CSPRNG doesn't exist yet at this point; `randomInit` runs right after and
+does not feed the canary) -- never reseeded afterward.
   The reseed function is both `noinline` and `no_stack_protector`, called from a
   `no_stack_protector` `kernelMain`, so the store itself is never inside a canary-checked frame.
 
@@ -989,6 +1074,16 @@ against tables dumped from the reference PC (`acpidump` from a Linux live USB, s
 | Argon2id | passwords, disk keys | RFC 9106 |
 | CRC32C | bongfs | known values |
 
+**Landed in M2.6 (`libs/crypto`, also compiled into the kernel, D-122):** SHA-256
+(`sha256Init/Update/Final`), ChaCha20 (`chacha20Block`, `chacha20Xor`; not yet Poly1305 or the AEAD)
+and `cryptoWipe`, because the kernel RNG (§6.6) needs them. They are **EXPERIMENTAL and
+unaudited**, and nothing is claimed beyond what the tests show: the FIPS 180-4 messages (empty,
+"abc", the 448-bit message, one million 'a'), padding-boundary and split-update cases, and the
+RFC 8439 block/encryption/A.1/A.2 vectors, run on the host (`make host-tests`) and in the kernel
+(`make test`). The vector file is cross-checked against independent transcriptions (Nettle, Mbed TLS, pyca, Linux testmgr, Crypto++); not yet diffed against the RFC text itself (see STATUS.md).
+`cryptoWipe` is a `noinline` loop of volatile stores (no inline asm, since §4 keeps assembly in
+`kernel/arch/` and `boot/`). The rest of the table arrives in M11.1, which must build on these files.
+
 **Rules:**
 - No branches or table lookups that depend on secret data.
 - Compare secrets with `cryptoEqual` (constant time).
@@ -1130,9 +1225,12 @@ against tables dumped from the reference PC (`acpidump` from a Linux live USB, s
   image decoders for PNG, JPEG (baseline and progressive), BMP, and GIF. Implemented so far
   (M12.2): premultiplied ARGB32 canvas with a clip stack, exact-area anti-aliased fills (nonzero
   and even-odd), strokes, A8 box blur and drop shadows, damage regions, and the PNG and BMP
-  decoders (D-141..D-147), and (M12.3) the font engine and text layout above; JPEG and GIF arrive in M12.7. It is userland/host only (never linked
-  into the kernel), uses float only for path, outline and glyph-raster geometry (D-142, D-153), and takes an allocator hook so it has no
-  hidden libc dependency. The DEFLATE/zlib codec it uses lives in `libs/compress` (D-140).
+  decoders (D-141..D-147). M12.7 added the JPEG decoder (SOF0/1/2, Huffman, 8-bit gray/YCbCr/RGB,
+  exact integer pipeline) and the GIF decoder (87a/89a, streaming animation compositor)
+  (D-160..D-165); M12.3 added the font engine and text layout above (D-150..D-158). It is
+  userland/host only (never linked into the kernel), uses float only for path, outline and
+  glyph-raster geometry (D-142, D-153), and takes an allocator hook so it has no hidden libc
+  dependency. The DEFLATE/zlib codec it uses lives in `libs/compress` (D-140).
 - **Apps:**
   - **terminal:** xterm-256color on a PTY, with tabs and scrollback
   - **files:** the file manager
@@ -1249,8 +1347,16 @@ stay always-fatal, or (#BP) already resume unconditionally before archTrapCatch 
   backtrace**. Frame pointers are kept, and the kernel embeds a compressed symbol table (KSYM v1,
   `docs/specs/ksyms.md`, D-075 -- built by a two-pass link + `tools/ksyms`, looked up by
   `ksymSymbolize()`). Other CPUs are stopped by IPI (once SMP exists, M3.5).
+- **Slid kernels (M2.6, D-124):** every panic/trap backtrace starts with
+  `kaslr slide 0x... (link address = address - slide)`, and the symbolizer maps `address - slide`
+  through the KSYM blob (which keeps link-time addresses), so backtrace names and the printed
+  `+offset` are correct on a slid kernel. By hand: `llvm-addr2line -f -e build/kernel/kernel.elf
+  <address - slide>`. The slide is also on the loader's serial line `loader: kaslr: slide=0x...`
+  and the kernel's `[info] kaslr: virtBase=... slide=...`.
 - **Debugger:** `make gdb` runs QEMU's gdbstub with symbols loaded. `make debug` adds
-  `-d int,cpu_reset` logging.
+  `-d int,cpu_reset` logging. A KASLR-slid kernel does not match `kernel.elf`'s link addresses:
+  debug early boot with `build/bongos-kaslroff.img` (slide 0), or load symbols at the slide with
+  `symbol-file build/kernel/kernel.elf -o 0x<slide>` (BUG_HUNTING §5).
 - **Userspace crashes:** the crashing process's registers and backtrace go to `logd`, and
   `svcd` restarts the service if configured to.
 - **procfs:** `/proc/meminfo`, `/proc/cpuinfo`, `/proc/<pid>/status`, `/proc/interrupts`,

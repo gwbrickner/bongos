@@ -23,6 +23,11 @@ void loaderSerialWriteString(const char *s);
  * ExitBootServices. */
 void loaderSerialWriteUint(uint32_t v);
 
+/* Writes `v` as exactly 16 lowercase hex digits (zero-padded, no "0x" prefix, no newline): the
+ * `%016llx` form the kaslr log lines and tests/harness/kaslr-check.sh use (M2.6). Safe before or
+ * after ExitBootServices. */
+void loaderSerialWriteHex64(uint64_t v);
+
 /* Non-blocking read of one byte from COM1 (checks LSR bit 0, "data ready"; never waits). Returns
  * true and fills *out if a byte was pending, false otherwise. BIOS-only in practice: D-068
  * forbids polling COM1 receive before ExitBootServices under UEFI (OVMF's TerminalDxe owns it

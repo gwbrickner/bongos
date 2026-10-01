@@ -21,6 +21,7 @@
 #include "gop.h"
 #include "include/efi/guids.h"
 #include "loader-cpu.h"
+#include "loader-kaslr.h"
 #include "loader-serial.h"
 #include "menu.h"
 
@@ -299,6 +300,11 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         return EFI_LOAD_ERROR;
     }
 
+    /* The random seed drives the KASLR slide below, so it is gathered here (right after the ELF
+     * is validated) rather than later; the same 64 bytes still go into BootInfo. */
+    uint64_t randomSeed[8];
+    handoffGatherRandomSeed(st, randomSeed);
+
     BootAllocList allocs;
     bootMemset(&allocs, 0, sizeof(allocs));
 
@@ -310,6 +316,19 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         return status;
     }
     bst = elfLoad(&elfImage, kernelBuf, (uint8_t *)(uintptr_t)kernelPhys);
+    if (bst != BOOT_OK) {
+        bs->FreePool(kernelBuf);
+        loaderSerialWriteString("loader: kernel.elf: ");
+        loaderSerialWriteString(bootStatusString(bst));
+        loaderSerialWriteString("\n");
+        return EFI_LOAD_ERROR;
+    }
+    /* KASLR (M2.6, D-120/D-121): the file buffer must stay alive until the relocation has read
+     * kernel.elf's --emit-relocs tables from it. Any relocation failure falls back to an unslid
+     * boot (slide 0) after re-loading the image. */
+    uint64_t kaslrSlide = 0;
+    bst = loaderKaslrApply(&elfImage, kernelBuf, kernelSize, (uint8_t *)(uintptr_t)kernelPhys,
+                           (const uint8_t *)randomSeed, entry.kaslr, &kaslrSlide);
     bs->FreePool(kernelBuf);
     if (bst != BOOT_OK) {
         loaderSerialWriteString("loader: kernel.elf: ");
@@ -336,8 +355,6 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     }
 
     uint64_t rsdpPhys = handoffFindRsdp(st);
-    uint64_t randomSeed[8];
-    handoffGatherRandomSeed(st, randomSeed);
 
     /* Pre-map: the EFI memory map as it stands right now, used only to size the HHDM run set. */
     VOID *preMapBuf = NULL;
@@ -430,6 +447,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         .hhdmRunCount = nHhdmRuns,
         .elfImage = &elfImage,
         .kernelPhys = (uint64_t)kernelPhys,
+        .slide = kaslrSlide,
         .trampPhys = trampPhys,
         .patEntry2Uncacheable = loaderCpuPatEntry2Uncacheable(),
     };
@@ -449,7 +467,7 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
 
     /* Self-check (ARCHITECTURE §5.5 step 10): every mapping the trampoline and the kernel's first
      * instructions depend on actually resolves the way it should. */
-    uint64_t entryVa = elfImage.entry;
+    uint64_t entryVa = elfImage.entry + kaslrSlide;
     uint64_t stackTopVa = BOOTINFO_HHDM_BASE + (uint64_t)stackPhys +
                           (uint64_t)BOOT_HANDOFF_BOOT_STACK_PAGES * BOOT_HANDOFF_PAGE_SIZE;
     uint64_t bootInfoVa = BOOTINFO_HHDM_BASE + bootInfoPhys;
@@ -467,8 +485,9 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
         .fb = fb,
         .rsdpPhys = rsdpPhys,
         .kernelPhys = (uint64_t)kernelPhys,
-        .kernelVirtBase = elfImage.linkBase,
+        .kernelVirtBase = elfImage.linkBase + kaslrSlide,
         .kernelSize = elfImage.span,
+        .kaslrSlide = kaslrSlide,
         .cmdlinePhys = cmdlinePhys,
         .hhdmBase = BOOTINFO_HHDM_BASE,
         .loaderTsc = loaderTsc,
@@ -480,10 +499,9 @@ EFI_STATUS handoffRun(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE *st, uint64_t loa
     /* Wipe the loader's stack-local copy now that it's in the BootInfo page: otherwise it lingers
      * in BootServicesData memory, which becomes plain USABLE after ExitBootServices and would be
      * recoverable by any later kernel code that walks USABLE memory. volatile so this store isn't
-     * optimized away as a dead write to a local about to go out of scope. Note: the *original*
-     * BootInfo page's seed still needs a proper wipe once a real consumer (M2.1's CSPRNG init)
-     * exists and before LOADER_RECLAIM memory is ever freed -- that's a forward-reference for a
-     * later milestone, not something this one solves. */
+     * optimized away as a dead write to a local about to go out of scope. The copy in the BootInfo
+     * page is the kernel's job: kernelMain wipes it right after its two consumers (the stack
+     * canary and randomInit) have read it, and the reclaim later zeroes the whole page (D-123). */
     for (int i = 0; i < 8; i++) {
         *(volatile uint64_t *)&randomSeed[i] = 0;
     }

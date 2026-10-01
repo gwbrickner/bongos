@@ -55,7 +55,8 @@ static void printFrame(int index, uint64_t addr, bool isReturnAddr) {
     char name[64];
     uint64_t symAddr = 0;
     size_t blobSize = (size_t)(ksymsEnd - ksymsStart);
-    Status st = ksymDecodeLookup(ksymsStart, blobSize, lookupAddr, name, sizeof(name), &symAddr);
+    Status st = ksymDecodeLookupSlid(ksymsStart, blobSize, lookupAddr, kernelSlide(), name,
+                                     sizeof(name), &symAddr);
 
     char line[128];
     if (st == STATUS_OK) {
@@ -105,6 +106,14 @@ static void printCallback(void *ctx, int index, uint64_t returnAddr) {
 }
 
 void backtracePrint(uint64_t pc, uint64_t fp) {
+    /* Always first, so a report from a slid boot can be mapped back onto kernel.elf by hand (gdb
+     * `symbol-file kernel.elf -o 0x<slide>`, addr2line on `address - slide`). Deliberately does
+     * not start with "  #": frame-line consumers (mk/test.mk's trapUdTrigger check) key on that. */
+    char header[96];
+    ksnprintf(header, sizeof(header), "  kaslr slide 0x%016llx (link address = address - slide)\n",
+              (unsigned long long)kernelSlide());
+    klogRaw(header);
+
     int start = 0;
     if (pc != 0) {
         printFrame(0, pc, false);

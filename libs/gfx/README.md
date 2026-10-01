@@ -1,7 +1,9 @@
-2D rasterizer and PNG/BMP image decoders (M12.2); JPEG/GIF (M12.7) come later. The font engine and text layout (M12.3) are here too.
+2D rasterizer and PNG/BMP image decoders (M12.2), JPEG and GIF decoders (M12.7), and the font
+engine and text layout (M12.3).
 Premultiplied ARGB32 throughout, see `gfx.h`; paths and fills in `gfx-path.h`, blur/shadows in
-`gfx-blur.h`, damage regions in `gfx-region.h`, decoders in `gfx-image.h`. Userland/host only.
-Decisions: D-141..D-147 (graphics), D-150..D-158 (fonts and text).
+`gfx-blur.h`, damage regions in `gfx-region.h`, decoders in `gfx-image.h` (JPEG in `jpeg*.c`; GIF and its animation
+compositor in `gif.c`). Userland/host only.
+Decisions: D-141..D-147 (graphics), D-150..D-158 (fonts and text), D-160..D-165 (JPEG, GIF).
 
 ## Fonts and text (M12.3)
 - `gfx-font.h`: `GfxFont` (a zero-copy TrueType parser: `font-sfnt.c`, `font-cmap.c`, `font-glyf.c`,

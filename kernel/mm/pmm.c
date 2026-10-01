@@ -434,31 +434,18 @@ static bool pmmRangeAllReserved(uint64_t base, uint64_t length) {
     return true;
 }
 
-/* Frees [base, base+length) to the buddy allocator, splitting around [keepPagePhys,
- * keepPagePhys+4096) if it falls inside (recurses at most once per side -- the two split pieces
- * can never contain keepPagePhys again). Zeroes each freed piece through the HHDM first: a loader
- * stack or its page-table pool can hold RNG/seed residue or other loader-controlled data. Returns
- * the number of pages actually freed. Panics (via pmmAddFreeRange's contract, and its own
- * pmmRangeAllReserved() precheck) rather than return an error -- pmmMap.loaderReclaim[] ranges are
- * the pmm's own record of exactly what pmmInit() scanned, so a failure here means that record is
- * inconsistent with the Page array, not a bad caller argument. */
-static uint64_t pmmReclaimPiece(uint64_t base, uint64_t length, uint64_t keepPagePhys) {
+/* Frees [base, base+length) to the buddy allocator. Zeroes the piece through the HHDM first: a
+ * loader stack, its page-table pool or the original BootInfo page can hold RNG/seed residue or
+ * other loader-controlled data. Returns the number of pages actually freed. Panics (via
+ * pmmAddFreeRange's contract, and its own pmmRangeAllReserved() precheck) rather than return an
+ * error -- pmmMap.loaderReclaim[] ranges are the pmm's own record of exactly what pmmInit()
+ * scanned, so a failure here means that record is inconsistent with the Page array, not a bad
+ * caller argument. */
+static uint64_t pmmReclaimPiece(uint64_t base, uint64_t length) {
     if (length == 0) {
         return 0;
     }
     uint64_t end = base + length;
-    uint64_t keepEnd = keepPagePhys + 4096;
-    if (keepPagePhys >= base && keepPagePhys < end) {
-        uint64_t total = 0;
-        if (keepPagePhys > base) {
-            total += pmmReclaimPiece(base, keepPagePhys - base, keepPagePhys);
-        }
-        if (keepEnd < end) {
-            total += pmmReclaimPiece(keepEnd, end - keepEnd, keepPagePhys);
-        }
-        return total;
-    }
-
     if (!pmmRangeAllReserved(base, length)) {
         panic("pmm: reclaim: [0x%llx, 0x%llx) is not entirely PAGE_STATE_RESERVED",
               (unsigned long long)base, (unsigned long long)end);
@@ -472,16 +459,13 @@ static uint64_t pmmReclaimPiece(uint64_t base, uint64_t length, uint64_t keepPag
     return length >> 12;
 }
 
-void pmmReclaimLoaderMemory(uint64_t keepPagePhys) {
+void pmmReclaimLoaderMemory(void) {
     static bool reclaimDone = false;
     if (reclaimDone) {
         panic("pmm: pmmReclaimLoaderMemory: called twice");
     }
     if (!vmmKernelTablesActive()) {
         panic("pmm: pmmReclaimLoaderMemory: called before the kernel's own page tables are active");
-    }
-    if ((keepPagePhys & 0xFFF) != 0) {
-        panic("pmm: pmmReclaimLoaderMemory: keepPagePhys is not 4 KiB aligned");
     }
     reclaimDone = true;
 
@@ -498,7 +482,7 @@ void pmmReclaimLoaderMemory(uint64_t keepPagePhys) {
         if (base >= end) {
             continue;
         }
-        reclaimed += pmmReclaimPiece(base, end - base, keepPagePhys);
+        reclaimed += pmmReclaimPiece(base, end - base);
     }
 
     /* Independent sanity bound (not a full re-derivation, which would just repeat the loop
@@ -516,8 +500,8 @@ void pmmReclaimLoaderMemory(uint64_t keepPagePhys) {
     }
     pmmReclaimedPagesValue += reclaimed;
 
-    klogWrite(KLOG_INFO, "pmm", "reclaimed %llu KiB of LOADER_RECLAIM (kept BootInfo page 0x%llx)",
-              (unsigned long long)reclaimed * 4, (unsigned long long)keepPagePhys);
+    klogWrite(KLOG_INFO, "pmm", "reclaimed %llu KiB of LOADER_RECLAIM",
+              (unsigned long long)reclaimed * 4);
 }
 
 void pmmGetStats(PmmStats *out) {

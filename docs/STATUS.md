@@ -3,24 +3,17 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-09-29 (M2.5 merged; the AI-facing docs were reworked; M2.6 is next)
+**Last updated:** 2026-09-30 (M2.6 finished and awaiting owner merge; M3.1 is next)
 
 ## Next step
-Start **M2.6 KASLR + kernel RNG** (`needs-owner`). Its Needs, M2.4 and M2.5, are done.
-1. `git fetch origin main && git switch -c m2-6-kaslr-rng origin/main`
-2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M2.6.md`, then write its Plan from ROADMAP.md's
-   M2.6 steps and ARCHITECTURE §5.3/§6.6. Every step is **risky** (the boot handoff, and
-   crypto), so consult `architect` before any code.
-3. The scope, in short: both loaders pick a 2 MiB-aligned slide from the random seed and apply
-   the `--emit-relocs` relocations (`R_X86_64_64`, `R_X86_64_32S`), honoring `kaslr=off`. The
-   kernel gets an entropy pool (RDSEED/RDRAND, the boot seed), a ChaCha20 CSPRNG, and
-   `randomGetBytes`. The symbolizer and panic output account for the slide. The ktests: two
-   boots give different `kernelVirtBase` (a harness check), an RNG sanity test, and the RFC 8439
-   vectors. Done when this passes under both firmwares, and `kaslr=off` gives the fixed base.
-4. The first commit also adds M2.4's Done-when ktests to `_check-ktest-pass` (see Open leads).
+Start **M3.1 ACPI tables** (its Need, M2.4, is done), after the owner merges the M2.6 PR
+(`needs-owner`). M2.6's finish gate is complete except that the owner waived the finish-mode
+`bug-sweeper` (see `docs/logs/M2.6.md` "Verification" for exactly what no sweep covered).
+1. `git fetch origin main && git switch -c m3-1-acpi-tables origin/main`
+2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M3.1.md` and write its Plan from ROADMAP.md.
 
 ## Current milestone
-None in progress.
+None in progress (M2.6 is awaiting owner merge).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -37,6 +30,7 @@ None in progress.
 | M2.3 | [#7](https://github.com/gwbrickner/bongos/pull/7) | Kernel page tables, W^X verifier, framebuffer WC, SMEP/SMAP/UMIP, loader reclaim, KVA |
 | M2.4 | [#8](https://github.com/gwbrickner/bongos/pull/8) | Slab caches, kmalloc (16–8192 bytes), vmalloc with guard pages, `PMM_BUG_OWNED_PAGE` |
 | M2.5 | [#11](https://github.com/gwbrickner/bongos/pull/11) | BIOS loader: stage1 MBR, stage2 with a real-mode thunk, E820/VBE, a GPT+FAT32 reader, the shared menu and handoff. One image boots both ways |
+| M2.6 | [#16](https://github.com/gwbrickner/bongos/pull/16) | KASLR in both loaders (2 MiB slide, `--emit-relocs` relocation, `kaslr=off`), slide-aware symbolizer, `libs/crypto` (SHA-256, ChaCha20), kernel RNG (`randomGetBytes`) |
 
 The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
@@ -49,6 +43,16 @@ _(none)_
   so both stay zero. Suggestion: use the UEFI PartitionInfo protocol plus a BlockIo
   GPT-header read (the BIOS loader already has a GPT reader, D-105), in M6.4 (which adds the
   kernel's own GPT scanner, per D-056).
+- **M2.6:** accept 8 bits of KASLR entropy (512 MiB window, D-121)? Keep the canary on D-077's seed
+  fold, or move it to `randomGetBytes` later (the serial-printed slide leaks ~8 bits of that seed)?
+  Is falling back to an unslid boot on a relocation failure (D-120) acceptable, versus refusing?
+- **M2.6 slide in logs:** the kernel prints its KASLR slide (the `kaslr: virtBase=` line and every
+  backtrace header). Once a user-readable kernel log exists (logd/dmesg) that defeats KASLR against
+  local users, so that milestone must make the log privileged or redact the slide. Agree?
+- **M2.6 vector provenance (needs network):** `libs/crypto/test/crypto-vectors.h` could not be diffed
+  against the RFC text (rfc-editor.org was denied by the proxy). Every field was cross-checked against
+  independent transcriptions (Nettle, Mbed TLS, pyca, Linux testmgr, Crypto++, `a66c5b7`), but
+  someone with network access should still diff it against RFC 8439 2.3.2/2.4.2/A.1/A.2 and FIPS 180-4.
 
 ## Waiting on owner (hardware checks and other owner-only steps)
 - **Default the main session to Sonnet** (D-117). Adding `"model": "sonnet"` to
@@ -67,14 +71,16 @@ _(none)_
   resolution. If it doesn't boot, report the last thing visible. Full steps are in
   `docs/logs/M2.5.md`, "Owner hardware check".
 
+- **M2.6 hardware check** (optional; never blocks): boot the USB stick twice (UEFI, and BIOS with CSM)
+  and confirm the menu and kernel screen appear both times; with a serial cable, compare the
+  `kaslr: virtBase=` line across the two boots and check `random: seeded (hw words n/8 ...)`. Full steps
+  are in `docs/logs/M2.6.md`, "Owner hardware check".
+
 ## Open leads (for the next `bug-sweeper` or `/milestone-sweep` to triage)
 - `make analyze` on main reports 5 warnings: `kernel/include/list.h:50` (a possible NULL
   `prev` dereference), `kernel/test/kmalloc_test.c:68,143,365`, and
   `kernel/test/pmm_test.c:405`. The test-file hits are probably deliberate misuse, but none has
   been triaged yet.
-- M2.4's Done-when ktests (slab, kmalloc, vmalloc) aren't in `mk/test.mk`'s
-  `_check-ktest-pass` required list, unlike M2.1–M2.3. CLAUDE.md now requires this. Add them
-  (and confirm each one fails under a mutation) in M2.6's first commit, or in a sweep.
 - M2.5 deferred some items on purpose (D-114), including a PM-side diagnostic IDT in stage2
   and dual teletype+serial logging before VBE is set up.
 
