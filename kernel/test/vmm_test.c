@@ -277,6 +277,8 @@ KTEST(vmm_mmio_edges) {
     KTEST_ASSERT(vmmMapMmio(UINT64_MAX, 1, &bad) == STATUS_ERR_INVALID);
     KTEST_ASSERT(vmmMapMmio(UINT64_MAX - 4095, 1, &bad) == STATUS_ERR_INVALID);
     KTEST_ASSERT(vmmMapMmio(1, UINT64_MAX, &bad) == STATUS_ERR_INVALID);
+    /* pa + size wraps to below pa's own page: unchecked, len would wrap to ~2^64 (NO_MEMORY). */
+    KTEST_ASSERT(vmmMapMmio(0x5000, UINT64_MAX - 0x2FFF, &bad) == STATUS_ERR_INVALID);
     KTEST_ASSERT(bad == (volatile void *)0x1); /* *outVa untouched on failure */
 
     /* Rejected by archMapPages() after vmmKvaAlloc(): the KVA must come back every time. */
