@@ -4,6 +4,8 @@
 #include "ktest.h"
 #include "pte.h"
 #include "sections.h"
+#include "vmm.h"
+#include "acpi.h"
 
 #include <arch/cpu.h>
 #include <arch/paging.h>
@@ -136,4 +138,23 @@ KTEST(paging_text_hhdm_alias_readonly) {
                                         ((uint64_t)(uintptr_t)kernelDataStart -
                                          (uint64_t)(uintptr_t)kernelImageStart));
     *dataAlias = *dataAlias;
+}
+
+/* M3.2, D-171: a vmmMapMmio() leaf decodes, through the live IA32_PAT, to UC (0x00) -- checking
+ * PWT/PCD alone would still pass if the PAT layout (D-087) ever moved UC off index 3. */
+KTEST(paging_mmio_uc_pat) {
+    const AcpiInfo *a = acpiGetInfo();
+    KTEST_ASSERT(a != NULL && a->madtStatus == STATUS_OK && a->madt.ioapicCount >= 1);
+    volatile void *mmio;
+    KTEST_ASSERT(vmmMapMmio(a->madt.ioapics[0].address, 4, &mmio) == STATUS_OK);
+    uint64_t pte = archPagingRawPte((uint64_t)(uintptr_t)mmio & ~0xFFFULL);
+    KTEST_ASSERT((pte & X86_PTE_P) != 0);
+    KTEST_ASSERT((pte & X86_PTE_W) != 0);
+    KTEST_ASSERT((pte & X86_PTE_NX) != 0);
+    KTEST_ASSERT((pte & X86_PTE_G) != 0);
+    uint32_t patIdx =
+        (uint32_t)((((pte >> 7) & 1) << 2) | (((pte >> 4) & 1) << 1) | ((pte >> 3) & 1));
+    uint8_t patEntry = (uint8_t)(archRdmsr(0x277u) >> (8 * patIdx));
+    KTEST_ASSERT_EQ(patEntry, 0x00); /* UC */
+    vmmUnmapMmio(mmio, 4);
 }
