@@ -22,7 +22,7 @@
  * region (where an RSDP, for instance, commonly lives) is not. `rsdpPhys` in particular is an
  * identity only and must never be dereferenced (its target may be RESERVED, or ACPI_RECLAIM memory
  * pmmReclaimAcpiMemory() frees, M3.1): use acpiGetTables() for the kept copies. Only valid from
- * kernelMain's post- validation point on (i.e. from ktests, which run after it). No locks;
+ * kernelMain's post-validation point on (i.e. from ktests, which run after it). No locks;
  * read-only. */
 const BootInfo *kernelBootInfo(void);
 
