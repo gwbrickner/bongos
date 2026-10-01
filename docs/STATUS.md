@@ -11,7 +11,7 @@ into `tests/data/acpi/qemu-q35/{uefi,bios}/` with `tools/acpiextract`, add the p
 stored-table host tests (`tests/host/acpi_fixture.{c,h}`, `kernel_acpi_stored_test.c`). Then step 7, the finish gate.
 
 ## Current milestone
-M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-5 of 7 done and swept).
+M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-5 of 7 done and swept; step 6 in progress, host-tests red until fixtures land).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
