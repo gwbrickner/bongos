@@ -168,6 +168,25 @@ TEST(layoutHangingSpacesAndWideGlyphs) {
     ASSERT_EQ(fx.l.lines[0].end, (uint8_t)GFX_TEXT_LINE_END_SOFT);
     ASSERT_EQ(fxLay(&fx, "a", PX(16), 100, 0, 0), STATUS_OK);
     ASSERT_EQ(fx.l.nLines, 1u);
+    /* a zero-width invisible past the width (here after a hanging space) does not overflow: the
+     * ZWSP stays on the line and the break comes after it */
+    ASSERT_EQ(fxLay(&fx,
+                    "ab \xE2\x80\x8B"
+                    "c",
+                    PX(16), 1024, 0, 0),
+              STATUS_OK);
+    ASSERT_EQ(fx.l.nLines, 2u);
+    ASSERT_EQ(fx.l.lines[0].count, 4u);
+    ASSERT_EQ(fx.l.lines[0].end, (uint8_t)GFX_TEXT_LINE_END_SOFT);
+    /* a tab does overflow: no break opportunity before it (class BA), so an emergency break; the
+     * tab then starts the next line and the break after it is allowed */
+    ASSERT_EQ(fxLay(&fx, "ab\tc", PX(16), 1024, 2048, 0), STATUS_OK);
+    ASSERT_EQ(fx.l.nLines, 3u);
+    ASSERT_EQ(fx.l.lines[0].count, 2u);
+    ASSERT_EQ(fx.l.lines[0].end, (uint8_t)GFX_TEXT_LINE_END_EMERGENCY);
+    ASSERT_EQ(fx.l.lines[1].count, 1u);
+    ASSERT_EQ(fx.l.lines[1].widthQ6, 2048);
+    ASSERT_EQ(fx.l.lines[1].end, (uint8_t)GFX_TEXT_LINE_END_SOFT);
     fxFree(&fx);
 }
 
@@ -380,13 +399,15 @@ TEST(layoutKerningStaysInsideAFace) {
     ASSERT_EQ(fx.l.glyphs[1].xQ6, 0); /* ... and kerning does not reach across the break */
     fxFree(&fx);
 
-    /* across a face change: '!' is glyph 1 of the grid font (face 1), U+4E01 is glyph 2 of the
-     * fallback font (face 0). If the engine asked the current face for the pair (1, 2) it would
-     * find -100 units; between different faces it must not kern at all. */
+    /* across a face change: U+0020 is glyph 1 of the grid font (face 1; the grid's glyphs follow
+     * codepoint order, so '!' is glyph 2), U+4E01 is glyph 2 of the fallback font (face 0). If the
+     * engine asked the current face for the pair (1, 2) it would find -100 units; between
+     * different faces it must not kern at all. */
     static const int TWO[] = {FTU_SYNTH_FALLBACK, FTU_SYNTH_GRID};
     ASSERT_TRUE(fxInit(&fx, TWO, 2, 0, NULL));
-    ASSERT_EQ(fxLay(&fx, "!\xE4\xB8\x81", PX(16), 0, 0, 0), STATUS_OK);
+    ASSERT_EQ(fxLay(&fx, " \xE4\xB8\x81", PX(16), 0, 0, 0), STATUS_OK);
     ASSERT_EQ(fx.l.glyphs[0].face, (uint8_t)1);
+    ASSERT_EQ(fx.l.glyphs[0].glyph, (uint16_t)1);
     ASSERT_EQ(fx.l.glyphs[1].face, (uint8_t)0);
     ASSERT_EQ(fx.l.glyphs[1].glyph, (uint16_t)2);
     ASSERT_EQ(fx.l.glyphs[1].xQ6, 512);
