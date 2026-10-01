@@ -3,16 +3,16 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-01 (M2.6 merged; M3.1 in progress)
+**Last updated:** 2026-10-01 (M3.1 finished and awaiting owner merge; M3.2 is next)
 
 ## Next step
-**M3.1 finish gate, remaining** (see `docs/logs/M3.1.md`): the reviewer's Should-fix items are fixed (D-170) but
-not yet re-verified: run qemu-tester (format-check, host-tests, `make test`, `make test-full`), then `bug-sweeper`
-in step mode on `954bfaa..HEAD`; then screenshots (`docs/screenshots/M3.1.png`, `M3.1-bios.png`), paperwork
-(ROADMAP box, log Summary/Verification), and the PR with `needs-owner: yes`.
+Start **M3.2 Interrupt controllers** (its Need, M3.1, is done), after the owner merges the M3.1 PR (`needs-owner`).
+1. `git fetch origin main && git switch -c m3-2-interrupt-controllers origin/main`
+2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M3.2.md` and write its Plan from ROADMAP.md. Use `acpiGetInfo()->madt`
+   (CPUs, I/O APICs, interrupt source overrides, LAPIC address) from M3.1; consult `architect` first (interrupts).
 
 ## Current milestone
-M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-6 done; step 7 finish gate: tests and sweep PASS, review pending).
+None in progress (M3.1 is awaiting owner merge).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -30,8 +30,9 @@ M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-6 done; step 7 finish gate:
 | M2.4 | [#8](https://github.com/gwbrickner/bongos/pull/8) | Slab caches, kmalloc (16–8192 bytes), vmalloc with guard pages, `PMM_BUG_OWNED_PAGE` |
 | M2.5 | [#11](https://github.com/gwbrickner/bongos/pull/11) | BIOS loader: stage1 MBR, stage2 with a real-mode thunk, E820/VBE, a GPT+FAT32 reader, the shared menu and handoff. One image boots both ways |
 | M2.6 | [#16](https://github.com/gwbrickner/bongos/pull/16) | KASLR in both loaders (2 MiB slide, `--emit-relocs` relocation, `kaslr=off`), slide-aware symbolizer, `libs/crypto` (SHA-256, ChaCha20), kernel RNG (`randomGetBytes`) |
+| M3.1 | (PR pending) | ACPI tables: RSDP/XSDT/RSDT loader, FADT/MADT/MCFG/HPET/IVRS parsers, tables copied through temporary KVA windows (works on BIOS and UEFI), ACPI_RECLAIM freed after the copy, `acpidump=1` + `tools/acpiextract`, stored QEMU q35 tables, D-166..D-170 |
 
-The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB rows in `make test-full`. The final
+The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB and 4-CPU rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
 
 ## Blockers
@@ -59,6 +60,9 @@ _(none)_
   someone with network access should still diff it against RFC 8439 2.3.2/2.4.2/A.1/A.2 and FIPS 180-4.
 
 ## Waiting on owner (hardware checks and other owner-only steps)
+- **M3.1 hardware check** (optional; never blocks): boot the USB stick on the reference PC with `acpidump=1` in
+  `boot.cfg`'s `cmdline`, check the `acpi:` lines (CPU list, MCFG base, no rejected tables), and ideally save the
+  serial log for `tools/acpiextract`. Full steps are in `docs/logs/M3.1.md`, "Owner hardware check".
 - **Default the main session to Sonnet** (D-117). Adding `"model": "sonnet"` to
   `.claude/settings.json` is an owner-only change, because the agent isn't allowed to change
   its own settings. Until then, pick Sonnet when starting a session (`/model sonnet`).

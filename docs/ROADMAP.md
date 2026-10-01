@@ -197,7 +197,7 @@ QEMU-verified only.
 
 ## Phase 3: Cherry Pie (interrupts, time, SMP)
 
-### [ ] M3.1 ACPI tables
+### [x] M3.1 ACPI tables `needs-owner`
 **Needs:** M2.4
 1. RSDP, then XSDT (with RSDT fallback), with checksum validation. Parse the FADT, MADT, MCFG, HPET, and IVRS into kernel structs. Load and keep the DSDT and SSDTs.
 2. Map ACPI regions correctly (reclaim `ACPI_RECLAIM` only after parsing).
