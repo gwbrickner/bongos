@@ -6,12 +6,12 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-01 (M2.6 merged; M3.1 in progress)
 
 ## Next step
-**M3.1 step 4 verification, then step 5** (see `docs/logs/M3.1.md`): confirm `make test` is green on the step 4
-commit, run `bug-sweeper` (step mode) on step 4, then step 5: `pmmMapScan` records ACPI_RECLAIM ranges,
-`pmmReclaimAcpiMemory()` called from `kernelMain` only after `acpiInit` returns OK, `acpi_reclaimed` ktest.
+**M3.1 step 5** (RISKY, allocator; see `docs/logs/M3.1.md` for the exact plan): record ACPI_RECLAIM ranges in
+`pmmMapScan`, add `pmmReclaimAcpiMemory()`, call it from `kernelMain` only after `acpiInit` returns OK (move
+`pmmPrintMeminfo()` after it), ktest `acpi_reclaimed`, host test in `kernel_pmm_map_test.c`.
 
 ## Current milestone
-M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-3 of 7 done, step 4 committed as WIP).
+M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-4 of 7 done and swept).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
