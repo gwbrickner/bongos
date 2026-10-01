@@ -42,6 +42,8 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # kernel/drivers/acpi/acpi-tables.c, acpi-dump.c: the ACPI loader/parsers and the ACPIDUMP
 # formatter are pure (M3.1, D-166);
 # only acpi.c (KVA reads, klog) is kernel-only, so it is not in this list.
+# kernel/arch/x86_64/irq-core.c: the interrupt code's pure core (vector bitmap, IOAPIC RTE encoding,
+# ISA IRQ -> GSI resolution, GSI lookup; M3.2, D-174); the hardware side is kernel-only.
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c tools/mkimage/biosboot.c \
                         boot/uefi/guids.c \
                         $(wildcard boot/common/*.c) $(CONSOLE_FONT_C) \
@@ -51,6 +53,7 @@ HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c tools/mkimage/
                         kernel/mm/slab-core.c kernel/mm/slab-debug.c boot/common/hw/loader-kaslr.c \
                         $(wildcard libs/crypto/*.c) kernel/core/random-core.c \
                         kernel/drivers/acpi/acpi-tables.c kernel/drivers/acpi/acpi-dump.c \
+                        kernel/arch/x86_64/irq-core.c \
                         $(filter-out tools/acpiextract/main.c,$(wildcard tools/acpiextract/*.c))
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/biosboot.h \
                         $(wildcard boot/uefi/include/efi/*.h) \
@@ -62,10 +65,12 @@ HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/
                         kernel/include/kmalloc.h kernel/mm/slab-internal.h \
                         $(wildcard libs/crypto/include/crypto/*.h) $(wildcard libs/crypto/test/*.h) \
                         kernel/include/random-core.h $(wildcard kernel/include/acpi*.h) \
+                        kernel/arch/x86_64/include/irq-core.h \
                         $(wildcard tools/acpiextract/*.h)
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
                             -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms \
-                            -Ikernel/mm -Ilibs/crypto/include -Ilibs/crypto/test -Itools/acpiextract
+                            -Ikernel/mm -Ilibs/crypto/include -Ilibs/crypto/test -Itools/acpiextract \
+                            -Ikernel/arch/x86_64/include
 
 # libs/compress and libs/gfx (M12.2, D-140..D-147): pure portable libraries, one wildcard each so a
 # new source file needs no edit here. `-Ilibs` lets code and tests say "compress/compress.h" and
