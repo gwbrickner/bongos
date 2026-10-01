@@ -1276,6 +1276,109 @@ def utf8_digest(path):
         f.write("count %d\nfnv %016X\n" % (len(text), h))
 
 
+# ---------------------------------------------------------------- text: layout reference -------
+def q6_scale(units, size_q6, upem):
+    """units * sizeQ6 / upem, rounded half away from zero (D-152)."""
+    v = (abs(units) * size_q6 * 2 + upem) // (2 * upem)
+    return -v if units < 0 else v
+
+
+def py_layout(cps, adv, kern, maxw):
+    """The spec's layout (no tabs, no combining marks, no invisible other than LF): returns
+    (per-codepoint (line, xQ6), per-line widthQ6). adv(cp) and kern(cp, cp) are in Q6."""
+    n = len(cps)
+    brk = lb_breaks(cps)
+    recs = [None] * n
+    widths = []
+    i = 0
+    while True:
+        first = i
+        pen = 0
+        prev = None
+        last_allowed = None
+        placed = []   # (x, penAfter) for records first..
+        end = n
+        j = first
+        while j < n:
+            if j > first and brk[j] == 2:
+                end = j
+                break
+            if j > first and brk[j] == 1:
+                last_allowed = j
+            c = cps[j]
+            if c == 0x0A:
+                x = pen
+                prev = None
+            else:
+                if prev is not None:
+                    pen += kern(prev, c)
+                x = pen
+                pen += adv(c)
+                prev = c
+            placed.append((x, pen))
+            if maxw > 0 and pen > maxw and j > first and c not in (0x20, 0x0A):
+                end = last_allowed if last_allowed is not None else j
+                break
+            j += 1
+        line = len(widths)
+        for k in range(first, end):
+            recs[k] = (line, placed[k - first][0])
+        w = 0
+        for k in range(end - 1, first - 1, -1):
+            if cps[k] not in (0x20, 0x0A):
+                w = placed[k - first][1]
+                break
+        widths.append(max(w, 0))
+        i = end
+        if i >= n:
+            if n == 0 or cps[n - 1] == 0x0A:
+                widths.append(0)
+            break
+    return recs, widths
+
+
+def layout_cases(path):
+    rnd = random.Random(0x1A70)
+    sans = PyFont(os.path.join(FONTS, "LiberationSans-Regular.ttf"))
+    mono = PyFont(os.path.join(FONTS, "LiberationMono-Regular.ttf"))
+    sans_kern = sans.gpos_kern_fn()
+
+    def font_fns(name, size):
+        if name == "grid":
+            def adv(c):
+                return q6_scale(1000 if 0x4E00 <= c <= 0x4E0F else 500, size, 1000)
+            return adv, lambda a, b: 0
+        f = sans if name == "sans" else mono
+        kern = sans_kern if name == "sans" else None
+
+        def adv(c):
+            return q6_scale(f.adv(f.cmap.get(c, 0)), size, f.upem)
+
+        def kn(a, b):
+            if kern is None:
+                return 0
+            return q6_scale(kern(f.cmap.get(a, 0), f.cmap.get(b, 0)), size, f.upem)
+        return adv, kn
+
+    alpha_latin = [ord(c) for c in "AVTWoYLay.,-T fi  \n(x)10"]
+    alpha_grid = alpha_latin + [0x4E00, 0x4E05, 0x3002, 0x3001, 0xFF08, 0xFF09, 0x2014, 0x2010]
+    cases = []
+    for name, size in (("sans", 1024), ("sans", 1040), ("sans", 12 * 64 + 17), ("mono", 15 * 64),
+                       ("grid", 1024), ("grid", 700)):
+        alpha = alpha_grid if name == "grid" else alpha_latin
+        for _ in range(120):
+            cps = [rnd.choice(alpha) for _ in range(rnd.randint(0, 28))]
+            maxw = rnd.choice([0, 0, 64 * rnd.randint(1, 60), 64 * rnd.randint(8, 400)])
+            adv, kn = font_fns(name, size)
+            recs, widths = py_layout(cps, adv, kn, maxw)
+            cases.append((name, size, maxw, cps, recs, widths))
+    with open(path, "w") as f:
+        for name, size, maxw, cps, recs, widths in cases:
+            f.write("%s %d %d : %s : %s : %s\n" % (
+                name, size, maxw, " ".join("%X" % c for c in cps) or "-",
+                " ".join("%d:%d" % r for r in recs) or "-", " ".join("%d" % w for w in widths)))
+
+
 
 def main():
     orc = Oracle()
@@ -1297,6 +1400,7 @@ def main():
     utf8_digest(os.path.join(HERE, "utf8.digest"))
     linebreak_ranges(os.path.join(HERE, "linebreak.ranges"))
     break_cases(os.path.join(HERE, "break.cases"))
+    layout_cases(os.path.join(HERE, "layout.cases"))
 
 
 if __name__ == "__main__":
