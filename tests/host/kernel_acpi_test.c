@@ -1025,3 +1025,187 @@ TEST(acpiLoadSurvivesRandomMemory) {
         fakeRelease(&m);
     }
 }
+
+/* ---- bug-sweeper adversarial tests (M3.1 finish sweep) ----------------------------------- */
+
+/* Every 64-bit address field, with values above 4 GiB (every other test, and both QEMU fixtures,
+ * keep tables and bases below 4 GiB, so reading any of these as 32 bits went unnoticed): the RSDP's
+ * XsdtAddress, the XSDT's entries, the FADT's X_DSDT, the MCFG base and the HPET base. Also the
+ * MCFG/HPET fields the other tests leave at 0. */
+TEST(acpiLoadAddressesAbove4Gib) {
+    const uint64_t xsdtPhys = 0x123456000ull, fadtPhys = 0x100002000ull;
+    const uint64_t dsdtPhys = 0x100003000ull, mcfgPhys = 0x200000000ull;
+    const uint64_t hpetPhys = 0x100005000ull;
+    FakeMem m = {0};
+    uint8_t rsdp[36];
+    mkRsdp(rsdp, 2, 0, xsdtPhys);
+    fakePut(&m, RSDP_PHYS, rsdp, 36);
+    uint64_t list[] = {fadtPhys, mcfgPhys, hpetPhys};
+    uint8_t *x = mkRoot("XSDT", true, list, 3, 0);
+    fakePut(&m, xsdtPhys, x, acpiRd32(x + 4));
+    free(x);
+    uint8_t fadt[244];
+    mkFadt(fadt, 244, 0, dsdtPhys);
+    fakePut(&m, fadtPhys, fadt, 244);
+    addSimple(&m, dsdtPhys, "DSDT", 100);
+    uint8_t mcfg[60];
+    mkTable(mcfg, "MCFG", 60, 1);
+    put64(mcfg + 44, 0x4000000000ull);
+    put16(mcfg + 52, 3);
+    mcfg[54] = 0x10;
+    mcfg[55] = 0x7F;
+    fixSum(mcfg, 60);
+    fakePut(&m, mcfgPhys, mcfg, 60);
+    uint8_t hpet[56];
+    mkTable(hpet, "HPET", 56, 1);
+    put32(hpet + 36, 0x8086A201u);
+    put64(hpet + 44, 0x1FED00000ull);
+    hpet[52] = 2;
+    put16(hpet + 53, 0x80);
+    hpet[55] = 1;
+    fixSum(hpet, 56);
+    fakePut(&m, hpetPhys, hpet, 56);
+
+    AcpiPhysOps ops = fakeOps(&m);
+    AcpiTableSet *s = calloc(1, sizeof(*s));
+    ASSERT_EQ(acpiTablesLoad(&ops, RSDP_PHYS, s), STATUS_OK);
+    ASSERT_TRUE(s->usedXsdt);
+    ASSERT_EQ(s->xsdtPhys, xsdtPhys);
+    ASSERT_EQ(s->count, 5u); /* XSDT, FACP, MCFG, HPET, DSDT */
+    ASSERT_EQ(s->tables[0].phys, xsdtPhys);
+    ASSERT_EQ(s->tables[1].phys, fadtPhys);
+    ASSERT_EQ(s->tables[2].phys, mcfgPhys);
+    ASSERT_EQ(s->tables[3].phys, hpetPhys);
+    ASSERT_EQ(s->dsdtIndex, 4);
+    ASSERT_EQ(s->tables[4].phys, dsdtPhys);
+    ASSERT_EQ(s->rejected, 0u);
+    AcpiInfo *info = calloc(1, sizeof(*info));
+    acpiParseAll(s, info);
+    ASSERT_EQ(info->fadtStatus, STATUS_OK);
+    ASSERT_EQ(info->fadt.dsdtPhys, dsdtPhys);
+    ASSERT_EQ(info->mcfgStatus, STATUS_OK);
+    ASSERT_EQ(info->mcfg.count, 1u);
+    ASSERT_EQ(info->mcfg.segs[0].base, 0x4000000000ull);
+    ASSERT_EQ(info->mcfg.segs[0].segment, 3u);
+    ASSERT_EQ(info->mcfg.segs[0].startBus, 0x10u);
+    ASSERT_EQ(info->mcfg.segs[0].endBus, 0x7Fu);
+    ASSERT_EQ(info->hpetStatus, STATUS_OK);
+    ASSERT_EQ(info->hpet.base, 0x1FED00000ull);
+    ASSERT_EQ(info->hpet.blockId, 0x8086A201u);
+    ASSERT_EQ(info->hpet.number, 2u);
+    ASSERT_EQ(info->hpet.minTick, 0x80u);
+    ASSERT_EQ(info->hpet.pageProtection, 1u);
+    free(info);
+    acpiTablesFree(&ops, s);
+    ASSERT_EQ(m.live, 0);
+    free(s);
+    fakeRelease(&m);
+}
+
+/* Every MADT field lands in the right output field: the values are pairwise distinct (in QEMU's
+ * MADT a CPU's ACPI UID equals its APIC ID and the I/O APIC's ID and GSI base are 0, so swapping or
+ * dropping one of them went unnoticed). */
+TEST(acpiMadtFieldsDistinct) {
+    static uint8_t t[512];
+    uint32_t len = madtStart(t);
+    madtLapic(t, &len, 5, 2, 1); /* uid 5, APIC ID 2, enabled */
+    madtLapic(t, &len, 6, 9, 2); /* uid 6, APIC ID 9, online-capable */
+    uint8_t io[12] = {1, 12, 3}; /* I/O APIC ID 3 */
+    put32(io + 4, 0xFEC01000u);
+    put32(io + 8, 24);
+    madtAdd(t, &len, io, 12);
+    uint8_t iso[10] = {2, 10, 1, 9}; /* bus 1, IRQ 9 -> GSI 20, active-low level */
+    put32(iso + 4, 20);
+    put16(iso + 8, 0xF);
+    madtAdd(t, &len, iso, 10);
+    uint8_t nmiSrc[8] = {3, 8};
+    put16(nmiSrc + 2, 0xD);
+    put32(nmiSrc + 4, 7);
+    madtAdd(t, &len, nmiSrc, 8);
+    uint8_t lnmi[6] = {4, 6, 5};
+    put16(lnmi + 3, 0x5);
+    lnmi[5] = 0;
+    madtAdd(t, &len, lnmi, 6);
+    uint8_t x2[16] = {9, 16};
+    put32(x2 + 4, 0x200);  /* x2APIC ID */
+    put32(x2 + 8, 1);      /* flags */
+    put32(x2 + 12, 0x300); /* uid */
+    madtAdd(t, &len, x2, 16);
+    uint8_t x2nmi[12] = {0xA, 12};
+    put16(x2nmi + 2, 0xA);
+    put32(x2nmi + 4, 0x77);
+    x2nmi[8] = 1;
+    madtAdd(t, &len, x2nmi, 12);
+    AcpiMadtInfo *m = calloc(1, sizeof(*m));
+    ASSERT_EQ(acpiParseMadt(t, len, m), STATUS_OK);
+    ASSERT_EQ(m->cpuCount, 3u);
+    ASSERT_EQ(m->cpus[0].apicId, 2u);
+    ASSERT_EQ(m->cpus[0].uid, 5u);
+    ASSERT_EQ(m->cpus[0].flags, 1u);
+    ASSERT_TRUE(!m->cpus[0].x2apic);
+    ASSERT_EQ(m->cpus[1].apicId, 9u);
+    ASSERT_EQ(m->cpus[1].uid, 6u);
+    ASSERT_EQ(m->cpus[1].flags, 2u);
+    ASSERT_EQ(m->cpus[2].apicId, 0x200u);
+    ASSERT_EQ(m->cpus[2].uid, 0x300u);
+    ASSERT_EQ(m->cpus[2].flags, 1u);
+    ASSERT_TRUE(m->cpus[2].x2apic);
+    ASSERT_EQ(m->ioapicCount, 1u);
+    ASSERT_EQ(m->ioapics[0].id, 3u);
+    ASSERT_EQ(m->ioapics[0].address, 0xFEC01000u);
+    ASSERT_EQ(m->ioapics[0].gsiBase, 24u);
+    ASSERT_EQ(m->isoCount, 1u);
+    ASSERT_EQ(m->isos[0].bus, 1u);
+    ASSERT_EQ(m->isos[0].source, 9u);
+    ASSERT_EQ(m->isos[0].gsi, 20u);
+    ASSERT_EQ(m->isos[0].flags, 0xFu);
+    ASSERT_EQ(m->nmiSourceCount, 1u);
+    ASSERT_EQ(m->nmiSources[0].flags, 0xDu);
+    ASSERT_EQ(m->nmiSources[0].gsi, 7u);
+    ASSERT_EQ(m->lapicNmiCount, 2u);
+    ASSERT_EQ(m->lapicNmis[0].uid, 5u);
+    ASSERT_EQ(m->lapicNmis[0].flags, 0x5u);
+    ASSERT_EQ(m->lapicNmis[0].lint, 0u);
+    ASSERT_EQ(m->lapicNmis[1].uid, 0x77u);
+    ASSERT_EQ(m->lapicNmis[1].flags, 0xAu);
+    ASSERT_EQ(m->lapicNmis[1].lint, 1u);
+    ASSERT_EQ(m->malformedEntries, 0u);
+    free(m);
+}
+
+/* Every IVHD field, with a register base above 4 GiB and a 64-bit EFR (type 0x40), plus a type 0x10
+ * block, which has no EFR. */
+TEST(acpiIvrsIvhdFields) {
+    static uint8_t t[256];
+    mkTable(t, "IVRS", 48, 2);
+    uint32_t len = 48;
+    ivrsBlock(t, &len, 0x40, 48);
+    uint8_t *b = t + 48;
+    b[1] = 0xB0;
+    put16(b + 4, 0x0010);
+    put16(b + 6, 0x40);
+    put64(b + 8, 0x1FEB80000ull);
+    put16(b + 16, 2);
+    put16(b + 18, 0x1234);
+    put32(b + 20, 0xABCD);
+    put64(b + 24, 0x1122334455667788ull);
+    ivrsBlock(t, &len, 0x10, 24);
+    put32(t + 48 + 48 + 20, 0x5555);
+    fixSum(t, len);
+    AcpiIvrsInfo v;
+    ASSERT_EQ(acpiParseIvrs(t, len, &v), STATUS_OK);
+    ASSERT_EQ(v.ivhdCount, 2u);
+    ASSERT_EQ(v.ivhd[0].type, 0x40u);
+    ASSERT_EQ(v.ivhd[0].flags, 0xB0u);
+    ASSERT_EQ(v.ivhd[0].deviceId, 0x0010u);
+    ASSERT_EQ(v.ivhd[0].capOffset, 0x40u);
+    ASSERT_EQ(v.ivhd[0].base, 0x1FEB80000ull);
+    ASSERT_EQ(v.ivhd[0].segment, 2u);
+    ASSERT_EQ(v.ivhd[0].info, 0x1234u);
+    ASSERT_EQ(v.ivhd[0].featOrAttr, 0xABCDu);
+    ASSERT_EQ(v.ivhd[0].efr, 0x1122334455667788ull);
+    ASSERT_EQ(v.ivhd[1].type, 0x10u);
+    ASSERT_EQ(v.ivhd[1].featOrAttr, 0x5555u);
+    ASSERT_EQ(v.ivhd[1].efr, 0u);
+    ASSERT_EQ(v.malformed, 0u);
+}
