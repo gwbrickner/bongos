@@ -100,10 +100,13 @@ M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad kaslr_slide_con
                        random_add_entropy_reseeds random_sanity \
                        random_drbg_key_erased_before_output random_boot_seed_wiped \
                        hwrandom_matches_cpuid random_get_bytes_long_request
-# M3.1 (ACPI tables): the ktests its Done-when clauses rest on, plus three log checks every matrix
+# M3.1 (ACPI tables): the ktests its Done-when clauses rest on, plus four log checks every matrix
 # row must pass: the MCFG base line, one `MADT cpu` line per vCPU in the row (the roadmap's "boot log
-# lists the CPUs from the MADT"; scales to the 4-CPU rows M3.5 adds), and `acpiextract --check` on
-# the ACPIDUMP block the ktest image's `acpidump=1` makes the kernel print (docs/specs/acpidump.md).
+# lists the CPUs from the MADT"; only matrix-full.conf's 4-CPU rows can tell "every CPU" from "the
+# first CPU", until M3.5 adds 4-CPU rows to matrix.conf), `acpiextract --check` on the ACPIDUMP block
+# the ktest image's `acpidump=1` makes the kernel print (docs/specs/acpidump.md), and the logged MCFG
+# base equal to the first base in the dumped MCFG table (bytes 44..51, little-endian), so a log line
+# with the right format but a wrong value cannot pass.
 ACPI_REQUIRED_KTESTS := acpi_reclaimed pmm_reclaim_keeps_low_memory acpi_tables_loaded acpi_madt_lists_bsp acpi_mcfg_present acpi_fadt_sane \
                         acpi_tables_are_kernel_copies acpi_parse_rejects_corrupt \
                         acpi_read_phys_matches_copies acpi_read_phys_releases_kva \
@@ -192,6 +195,17 @@ _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	    fi; \
 	    if ! $(ACPIEXTRACT_BIN) --check --require FACP,APIC,DSDT,MCFG,HPET "$$log" > /dev/null; then \
 	        echo "make test: $$log has no valid ACPIDUMP block with FACP,APIC,DSDT,MCFG,HPET (ROADMAP M3.1 item 3)"; \
+	        status=1; \
+	    fi; \
+	    mcfgdir=$$(mktemp -d); \
+	    want=; \
+	    if $(ACPIEXTRACT_BIN) -o "$$mcfgdir" "$$log" > /dev/null 2>&1 && [ -f "$$mcfgdir/MCFG-0.dat" ]; then \
+	        want=$$(od -An -v -tx1 -j44 -N8 "$$mcfgdir/MCFG-0.dat" | tr -s ' \n' '\n' | grep . | tac | tr -d '\n'); \
+	    fi; \
+	    rm -rf "$$mcfgdir"; \
+	    got=$$(tr -d '\r' < "$$log" 2>/dev/null | sed -nE 's/^\[info\] acpi: MCFG base=0x([0-9a-f]{16}) .*/\1/p' | head -n 1); \
+	    if [ "$${#want}" != 16 ] || [ "$$got" != "$$want" ]; then \
+	        echo "make test: $$log logs MCFG base=0x$$got, but the dumped MCFG table says 0x$$want (ROADMAP M3.1 Done-when guarantee not met)"; \
 	        status=1; \
 	    fi; \
 	done < "$(MATRIX)"; \
