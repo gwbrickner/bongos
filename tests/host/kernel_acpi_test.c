@@ -846,3 +846,34 @@ TEST(acpiLoadUnreadableRejectHasNoStaleSig) {
     free(s);
     fakeRelease(&m);
 }
+
+/* acpiPhysRangeAllowed() is pure and documents no "validated map" precondition, so a region whose
+ * base+length wraps past 2^64 must make it return false, not loop forever (its end used to clamp
+ * the cursor back below 1 MiB, which then jumped forward into the same region again). */
+TEST(acpiPhysRangeWrappingRegionTerminates) {
+    BootMemRegion wrap[] = {{0x100000, 0ull - 0x100000, BOOT_MEM_RESERVED, 0}};
+    ASSERT_TRUE(!acpiPhysRangeAllowed(wrap, 1, 0x200000, 0x1000));
+    BootMemRegion wrap2[] = {{0x200000, 0ull - 0x100000, BOOT_MEM_RESERVED, 0}};
+    ASSERT_TRUE(!acpiPhysRangeAllowed(wrap2, 1, 0x200000, 0x1000));
+}
+
+/* Boundary cases of the range policy: the exact 1 MiB edge, a range ending exactly at a region's
+ * end, ending exactly at 2^64 (wraps to 0), and the top of the address space with no region. */
+TEST(acpiPhysRangePolicyEdges) {
+    BootMemRegion map[] = {
+        {0x100000, 0x1000, BOOT_MEM_ACPI_RECLAIM, 0},
+        {0x101000, 0x1000, BOOT_MEM_ACPI_NVS, 0},
+        {0xFFFFFFFFFFFFE000ull, 0x1000, BOOT_MEM_RESERVED, 0},
+    };
+    uint32_t n = sizeof(map) / sizeof(map[0]);
+    ASSERT_TRUE(acpiPhysRangeAllowed(map, n, 0xFFFFF, 1));        /* last byte below 1 MiB */
+    ASSERT_TRUE(acpiPhysRangeAllowed(map, n, 0xFFFFF, 2));        /* ... and the first above */
+    ASSERT_TRUE(acpiPhysRangeAllowed(map, n, 0x100000, 0x2000));  /* two regions, exact end */
+    ASSERT_TRUE(!acpiPhysRangeAllowed(map, n, 0x100000, 0x2001)); /* one byte into the hole */
+    ASSERT_TRUE(!acpiPhysRangeAllowed(map, 0, 0x100000, 1));      /* empty map above 1 MiB */
+    ASSERT_TRUE(acpiPhysRangeAllowed(map, 0, 0, 0x100000));       /* all of low memory */
+    ASSERT_TRUE(acpiPhysRangeAllowed(map, n, 0xFFFFFFFFFFFFE000ull, 0x1000));
+    ASSERT_TRUE(!acpiPhysRangeAllowed(map, n, 0xFFFFFFFFFFFFE000ull, 0x1001));
+    ASSERT_TRUE(!acpiPhysRangeAllowed(map, n, 0xFFFFFFFFFFFFF000ull, 0x1000)); /* wraps to 0 */
+    ASSERT_TRUE(!acpiPhysRangeAllowed(map, n, 0xFFFFFFFFFFFFFFFFull, 1));
+}

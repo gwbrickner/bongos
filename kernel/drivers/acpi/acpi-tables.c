@@ -708,6 +708,9 @@ bool acpiPhysRangeAllowed(const BootMemRegion *map, uint32_t n, uint64_t phys, u
             return false;
         }
         uint64_t regionEnd = hit->base + hit->length;
+        if (regionEnd <= cur) {
+            return false; /* base+length wrapped (an unvalidated map): never move the cursor back */
+        }
         cur = end < regionEnd ? end : regionEnd;
     }
     return true;
