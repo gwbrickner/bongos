@@ -30,8 +30,10 @@ typedef struct {
     const uint8_t *s;
     size_t len, pos;
 } GfxUtf8Iter;
+/* Starts an iteration over s[0..len) (s may be NULL when len is 0). Pure apart from *it. */
 void gfxUtf8IterInit(GfxUtf8Iter *it, const uint8_t *s, size_t len);
-/* The next codepoint and its byte offset; false at the end. */
+/* The next codepoint (as gfxUtf8Decode) and its byte offset; false at the end, with *cp and
+ * *offset untouched. */
 bool gfxUtf8Next(GfxUtf8Iter *it, uint32_t *cp, size_t *offset);
 
 /* ---- line breaking ------------------------------------------------------------------------ */
@@ -73,6 +75,7 @@ GfxLineClass gfxTextLineClass(uint32_t cp);
  * variation selectors, tags; U+00AD, U+200B and the like). Pure. */
 bool gfxTextIsInvisible(uint32_t cp);
 
+/* Resets *st to the start of a text (nothing seen yet). */
 void gfxTextBreakInit(GfxTextBreakState *st);
 
 /* Feeds the next codepoint and returns the break opportunity BEFORE it (the first codepoint is
