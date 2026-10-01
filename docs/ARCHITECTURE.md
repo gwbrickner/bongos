@@ -1110,17 +1110,28 @@ against tables dumped from the reference PC (`acpidump` from a Linux live USB, s
   - HiDPI **scale factor** (integer first, fractional later)
   - keyboard navigation
 - **Text:**
-  - A custom TrueType/OpenType rasterizer (glyf outlines first, CFF later) with anti-aliasing
-    and a glyph cache.
-  - UTF-8 throughout, basic kerning, and fallback fonts.
-  - **Later:** full GSUB/GPOS shaping, bidi, and color emoji (COLR/CPAL).
-  - Fonts: an OFL-licensed UI sans-serif and monospace font in `data/fonts/`.
+  - A custom TrueType rasterizer in `libs/gfx` (M12.3, D-150..D-158; glyf outlines, CFF later)
+    with anti-aliasing and a glyph cache. `GfxFont` is a zero-copy parser over caller bytes
+    (sfnt, `cmap` 4/12, `loca`/`glyf` including composites, `hmtx`, `kern` and GPOS pair
+    kerning); outlines are rasterized unhinted through the exact-area fill at four horizontal
+    subpixel positions; `GfxFontStack` holds up to 8 fallback faces and an LRU glyph cache under
+    a byte budget.
+  - UTF-8 throughout (malformed input becomes U+FFFD per maximal subpart), pair kerning within a
+    face, per-codepoint fallback, tab stops, and a simplified UAX #14 line breaker with an
+    emergency break for over-long words. `gfxTextLayout` produces positioned glyph records and
+    lines in 26.6 fixed point; `gfxTextDraw` paints them through the cache and `gfxFillMask`.
+    The exact rules and tables are in `docs/specs/gfx-text.md` (D-156). All font and text input is
+    untrusted: every read is bounds-checked, with hard limits (1 MiB of text, 2^24 px coordinates).
+  - **Later:** CFF outlines, full GSUB/GPOS shaping, bidi, grapheme clusters, mark positioning,
+    and color emoji (COLR/CPAL) (M16.3).
+  - Fonts: Liberation Sans and Mono (OFL 1.1, byte-identical upstream files, D-157) in
+    `data/fonts/`, with their license.
 - **`libs/gfx`:** 2D rasterization (antialiased paths, rounded rects, blur for shadows) and
   image decoders for PNG, JPEG (baseline and progressive), BMP, and GIF. Implemented so far
   (M12.2): premultiplied ARGB32 canvas with a clip stack, exact-area anti-aliased fills (nonzero
   and even-odd), strokes, A8 box blur and drop shadows, damage regions, and the PNG and BMP
-  decoders (D-141..D-147); JPEG and GIF arrive in M12.7. It is userland/host only (never linked
-  into the kernel), uses float only for path geometry, and takes an allocator hook so it has no
+  decoders (D-141..D-147), and (M12.3) the font engine and text layout above; JPEG and GIF arrive in M12.7. It is userland/host only (never linked
+  into the kernel), uses float only for path, outline and glyph-raster geometry (D-142, D-153), and takes an allocator hook so it has no
   hidden libc dependency. The DEFLATE/zlib codec it uses lives in `libs/compress` (D-140).
 - **Apps:**
   - **terminal:** xterm-256color on a PTY, with tabs and scrollback
