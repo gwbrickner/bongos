@@ -103,7 +103,7 @@ static void mkTable(uint8_t *t, const char *sig, uint32_t len, uint8_t rev) {
     memcpy(t, sig, 4);
     put32(t + 4, len);
     t[8] = rev;
-    memcpy(t + 10, "BONGOS", 6);
+    memcpy(t + 10, "HOSTTS", 6);
     t[9] = (uint8_t)(0 - acpiChecksum(t, len));
 }
 
@@ -115,7 +115,7 @@ static void fixSum(uint8_t *t, uint32_t len) {
 static void mkRsdp(uint8_t *r, uint8_t rev, uint32_t rsdt, uint64_t xsdt) {
     memset(r, 0, 36);
     memcpy(r, "RSD PTR ", 8);
-    memcpy(r + 9, "BONGOS", 6);
+    memcpy(r + 9, "HOSTTS", 6);
     r[15] = rev;
     put32(r + 16, rsdt);
     r[8] = 0;
