@@ -124,7 +124,8 @@ IRQ_REQUIRED_KTESTS := vmm_map_uc irq_pic_masked irq_legacy_spurious_counted irq
                        irq_api_refused_in_handler irq_self_ipi_from_handler_redelivered \
                        irq_two_pending_vectors_priority_order irq_fixed_vectors_dispatch \
                        irq_route_misuse irq_isa_route_all_match_madt \
-                       irq_trap_catch_refused_in_handler trap_catch_restores_if
+                       irq_trap_catch_refused_in_handler trap_catch_restores_if \
+                       irq_lapic_reinit_neutralizes_leftovers
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \

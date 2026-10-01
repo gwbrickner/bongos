@@ -100,7 +100,10 @@ static bool madtNmiOnLint(const AcpiMadtInfo *madt, uint32_t lint) {
 }
 
 KTEST(irq_lapic_state) {
-    KTEST_ASSERT_EQ(lapicRead(LAPIC_REG_SVR), LAPIC_SVR_VALUE);
+    /* The literal D-172 value (enabled, spurious vector 0xFF, no EOI-broadcast suppression), not
+     * LAPIC_SVR_VALUE: comparing against the constant lapic.c writes would pass whatever it says.
+     */
+    KTEST_ASSERT_EQ(lapicRead(LAPIC_REG_SVR), 0x1FFu);
     KTEST_ASSERT((lapicRead(LAPIC_REG_TIMER) & LAPIC_LVT_MASKED) != 0);
     KTEST_ASSERT((lapicRead(LAPIC_REG_ERROR) & LAPIC_LVT_MASKED) != 0);
     KTEST_ASSERT_EQ(lapicRead(LAPIC_REG_TPR), 0);

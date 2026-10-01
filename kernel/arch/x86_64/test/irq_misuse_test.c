@@ -411,7 +411,11 @@ KTEST(irq_isa_route_all_match_madt) {
         KTEST_ASSERT_EQ(st == STATUS_OK ? 0xFFu : irq, 0xFFu);
         KTEST_ASSERT_EQ(gsi, wantGsi);
         uint64_t rte;
-        KTEST_ASSERT(ioapicReadRte(gsi, &rte) == STATUS_OK);
+        Status rst = ioapicReadRte(gsi, &rte);
+        /* Unroute before asserting, so a failure here does not leave GSI/vector state behind for
+         * every later test to trip over. */
+        KTEST_ASSERT(irqUnrouteGsi(gsi) == STATUS_OK);
+        KTEST_ASSERT(rst == STATUS_OK);
         KTEST_ASSERT_EQ(rte & 0xFF, v);
         KTEST_ASSERT_EQ((rte >> 8) & 7, 0);
         KTEST_ASSERT_EQ((rte >> 11) & 1, 0);
@@ -420,7 +424,6 @@ KTEST(irq_isa_route_all_match_madt) {
         KTEST_ASSERT_EQ((rte >> 16) & 1, 1);
         KTEST_ASSERT_EQ(rte >> 56, lapicId());
         levels += wantLevel ? 1 : 0;
-        KTEST_ASSERT(irqUnrouteGsi(gsi) == STATUS_OK);
     }
     /* QEMU's MADT overrides IRQ 9 (SCI) and the PCI-capable IRQs to level, so the level path is
      * actually covered here, not only the edge default. */
@@ -496,4 +499,76 @@ KTEST(trap_catch_restores_if) {
     archIrqRestore(f);
     KTEST_ASSERT(caught);
     KTEST_ASSERT(!ifAfter);
+}
+
+/* --- lapicInit() neutralizes what firmware leaves behind (D-172) ------------------------------ */
+
+#define LAPIC_REG_TIMER_CUR 0x390u
+
+/* lapicInit() is written to run once per CPU (M3.5), so running it again on the BSP is in contract.
+ * QEMU's reset state and both firmwares already leave every LVT masked and TPR at 0, so the boot
+ * state alone cannot show that lapicInit() masks or clears anything: dirty each register first,
+ * then re-run it (IF=0, as its contract requires) and check the D-172 state comes back. */
+KTEST(irq_lapic_reinit_neutralizes_leftovers) {
+    const AcpiInfo *a = acpiGetInfo();
+    KTEST_ASSERT(a != NULL && a->madtStatus == STATUS_OK);
+    uint32_t maxLvt = (lapicRead(LAPIC_REG_VER) >> 16) & 0xFFu;
+    uint32_t lint0Before = lapicRead(LAPIC_REG_LINT0); /* boot state: masked, or the MADT's NMI */
+    uint32_t lint1Before = lapicRead(LAPIC_REG_LINT1);
+
+    uint64_t f = archIrqSave();
+    lapicWrite(LAPIC_REG_TIMER, LAPIC_LVT_MASKED | 0xEFu);
+    lapicWrite(LAPIC_REG_TIMER_INIT, 0x7FFFFFFFu); /* a running count (seconds away from zero) */
+    lapicWrite(LAPIC_REG_TIMER, 0xEFu);            /* ... unmasked, one-shot */
+    lapicWrite(LAPIC_REG_LINT0, (7u << 8));        /* ExtINT, unmasked: the BIOS virtual wire */
+    lapicWrite(LAPIC_REG_LINT1, LAPIC_LVT_MASKED);
+    lapicWrite(LAPIC_REG_ERROR, 0xEEu);
+    if (maxLvt >= 4) {
+        lapicWrite(LAPIC_REG_PERF, 0xEDu);
+    }
+    if (maxLvt >= 5) {
+        lapicWrite(LAPIC_REG_THERM, 0xECu);
+    }
+    lapicWrite(LAPIC_REG_TPR, 0x20u);
+    lapicWrite(LAPIC_REG_SVR, 0x1F0u);
+    uint32_t dirtyCur = lapicRead(LAPIC_REG_TIMER_CUR);
+
+    lapicInit(&a->madt);
+
+    uint32_t svr = lapicRead(LAPIC_REG_SVR);
+    uint32_t timer = lapicRead(LAPIC_REG_TIMER);
+    uint32_t timerInit = lapicRead(LAPIC_REG_TIMER_INIT);
+    uint32_t timerCur = lapicRead(LAPIC_REG_TIMER_CUR);
+    uint32_t lint0 = lapicRead(LAPIC_REG_LINT0);
+    uint32_t lint1 = lapicRead(LAPIC_REG_LINT1);
+    uint32_t err = lapicRead(LAPIC_REG_ERROR);
+    uint32_t perf = maxLvt >= 4 ? lapicRead(LAPIC_REG_PERF) : LAPIC_LVT_MASKED;
+    uint32_t therm = maxLvt >= 5 ? lapicRead(LAPIC_REG_THERM) : LAPIC_LVT_MASKED;
+    uint32_t tpr = lapicRead(LAPIC_REG_TPR);
+    archIrqRestore(f);
+
+    KTEST_ASSERT(dirtyCur != 0); /* the dirtying worked: the timer was really counting */
+    KTEST_ASSERT_EQ(svr, 0x1FFu);
+    KTEST_ASSERT((timer & LAPIC_LVT_MASKED) != 0);
+    KTEST_ASSERT_EQ(timerInit, 0);
+    KTEST_ASSERT_EQ(timerCur, 0);        /* stopped, not merely masked */
+    KTEST_ASSERT_EQ(lint0, lint0Before); /* the virtual wire is masked again */
+    KTEST_ASSERT_EQ(lint1, lint1Before); /* the MADT NMI pin is programmed again */
+    KTEST_ASSERT((err & LAPIC_LVT_MASKED) != 0);
+    KTEST_ASSERT((perf & LAPIC_LVT_MASKED) != 0);
+    KTEST_ASSERT((therm & LAPIC_LVT_MASKED) != 0);
+    KTEST_ASSERT_EQ(tpr, 0);
+    KTEST_ASSERT(lapicIsrEmpty());
+    KTEST_ASSERT_EQ(lapicReadEsr(), 0);
+
+    /* Delivery still works after the re-init. */
+    static Fixed s;
+    s.count = 0;
+    uint32_t v;
+    KTEST_ASSERT(irqAllocVector(&v) == STATUS_OK);
+    KTEST_ASSERT(irqRegister(v, fixedHandler, &s) == STATUS_OK);
+    lapicSendSelfIpi((uint8_t)v);
+    KTEST_ASSERT(waitFor(&s.count, 1));
+    KTEST_ASSERT(irqUnregister(v) == STATUS_OK);
+    KTEST_ASSERT(irqFreeVector(v) == STATUS_OK);
 }
