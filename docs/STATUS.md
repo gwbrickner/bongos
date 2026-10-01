@@ -6,12 +6,12 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-01 (M2.6 merged; M3.1 in progress)
 
 ## Next step
-**M3.1 step 5 verification, then step 6** (see `docs/logs/M3.1.md`): `make test` on the step 5 commit, then
-`bug-sweeper` (step mode, base 219fa45); then step 6 (capture QEMU fixtures to `tests/data/acpi/qemu-q35/{uefi,bios}/`,
-stored-table host tests).
+**M3.1 step 6** (see `docs/logs/M3.1.md` for the exact commands): capture QEMU's tables (uefi + bios, `--cpus 4`)
+into `tests/data/acpi/qemu-q35/{uefi,bios}/` with `tools/acpiextract`, add the provenance README, and write the
+stored-table host tests (`tests/host/acpi_fixture.{c,h}`, `kernel_acpi_stored_test.c`). Then step 7, the finish gate.
 
 ## Current milestone
-M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-4 of 7 done and swept; step 5 committed as WIP).
+M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-5 of 7 done and swept).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
