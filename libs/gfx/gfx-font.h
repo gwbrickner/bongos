@@ -157,7 +157,8 @@ typedef struct {
 /* hits: lookups served from the cache (a negative entry counts). misses: renders attempted
  * (NO_MEMORY included). bad: misses whose render gave INVALID or UNSUPPORTED. evictions: entries
  * removed to make room (not temp frees, not Destroy). bytes: the sum of `cost` over the cached
- * entries (the temp image and the tables are not counted). */
+ * entries (the temp image and the tables are not counted). The caller may reset the stats at any
+ * time (the cache never reads them): entries and bytes are copies, refreshed at every lookup. */
 typedef struct {
     uint64_t hits, misses, evictions, bad;
     uint32_t entries;
@@ -175,7 +176,8 @@ typedef struct {
     int32_t *buckets;
     uint32_t bucketMask, capacity; /* capacity = entries allocated */
     int32_t lruHead, lruTail, freeHead;
-    size_t budget;
+    uint32_t nEntries; /* the cache's own counts; stats.entries and stats.bytes copy them */
+    size_t usedBytes, budget;
     GfxGlyphCacheStats stats;
     GfxGlyphImage temp; /* an oversized glyph, freed at the next Glyph call / Destroy */
 } GfxFontStack;

@@ -175,8 +175,8 @@ static void evictTail(GfxFontStack *s) {
     *link = e->hashNext;
     lruUnlink(s, i);
     gfxGlyphImageFree(&e->img);
-    s->stats.bytes -= e->cost;
-    s->stats.entries--;
+    s->usedBytes -= e->cost;
+    s->nEntries--;
     s->stats.evictions++;
     memset(e, 0, sizeof *e);
     e->hashNext = NIL;
@@ -202,6 +202,8 @@ Status gfxFontStackGlyph(GfxFontStack *s, uint32_t face, uint16_t glyph, uint32_
         return STATUS_ERR_INVALID;
     }
 
+    s->stats.entries = s->nEntries; /* the stats are the caller's: refresh, never read */
+    s->stats.bytes = s->usedBytes;
     const uint64_t key = fontCacheKey(face, glyph, sizeQ6, bin);
     const uint32_t bucket = fontCacheHash(key) & s->bucketMask;
     for (int32_t i = s->buckets[bucket]; i != NIL; i = s->entries[i].hashNext) {
@@ -235,8 +237,7 @@ Status gfxFontStackGlyph(GfxFontStack *s, uint32_t face, uint16_t glyph, uint32_
         *out = &s->temp;
         return STATUS_OK;
     }
-    while (s->lruTail != NIL &&
-           (s->stats.entries >= s->capacity || s->stats.bytes + cost > s->budget)) {
+    while (s->lruTail != NIL && (s->nEntries >= s->capacity || s->usedBytes + cost > s->budget)) {
         evictTail(s);
     }
     const int32_t i = s->freeHead;
@@ -248,8 +249,10 @@ Status gfxFontStackGlyph(GfxFontStack *s, uint32_t face, uint16_t glyph, uint32_
     e->hashNext = s->buckets[bucket];
     s->buckets[bucket] = i;
     lruPushFront(s, i);
-    s->stats.bytes += cost;
-    s->stats.entries++;
+    s->usedBytes += cost;
+    s->nEntries++;
+    s->stats.entries = s->nEntries;
+    s->stats.bytes = s->usedBytes;
     *out = &e->img;
     return STATUS_OK;
 }

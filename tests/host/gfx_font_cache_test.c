@@ -79,6 +79,7 @@ static int checkInvariants(const GfxFontStack *s) {
         n++;
     }
     CHK(s->lruTail == prev);
+    CHK(n == s->nEntries && bytes == s->usedBytes);
     CHK(n == s->stats.entries);
     CHK(n <= s->capacity);
     CHK(bytes == s->stats.bytes);
@@ -219,6 +220,29 @@ static int runOpsWith(Model *m, GfxFontStack *s, const Op *ops, uint32_t nOps, i
         }
     }
     return ok;
+}
+
+/* Loads the cache's current LRU list (and counters) into a fresh model, oldest first, so a run
+ * can continue from a cache that was filled some other way. */
+static int modelFromCache(Model *m, const GfxFontStack *s) {
+    memset(m, 0, sizeof *m);
+    static int32_t order[GFX_GLYPH_CACHE_MAX_ENTRIES];
+    uint32_t n = 0;
+    for (int32_t j = s->lruHead; j != -1; j = s->entries[j].lruNext) {
+        CHK(n < GFX_GLYPH_CACHE_MAX_ENTRIES);
+        order[n++] = j;
+    }
+    for (uint32_t k = n; k-- > 0;) {
+        memmove(&m->e[1], &m->e[0], m->n * sizeof m->e[0]);
+        m->e[0].key = s->entries[order[k]].key;
+        m->e[0].cost = s->entries[order[k]].cost;
+        m->n++;
+        m->bytes += s->entries[order[k]].cost;
+    }
+    m->hits = s->stats.hits;
+    m->misses = s->stats.misses;
+    m->evictions = s->stats.evictions;
+    return 1;
 }
 
 /* runOpsWith on a fresh model. */
@@ -449,23 +473,50 @@ TEST(cacheNonPowerOfTwoCapacity) {
     makeRandomOps(real, 3000, &s);
     Model *m = calloc(1, sizeof *m);
     ASSERT_TRUE(m != NULL);
-    /* carry the cache's current state into a fresh model: replay the LRU order, oldest first */
-    int32_t order[1562];
-    uint32_t n = 0;
-    for (int32_t j = s.lruHead; j != -1; j = s.entries[j].lruNext) {
-        order[n++] = j;
-    }
-    for (uint32_t k = n; k-- > 0;) {
-        memmove(&m->e[1], &m->e[0], m->n * sizeof m->e[0]);
-        m->e[0].key = s.entries[order[k]].key;
-        m->e[0].cost = s.entries[order[k]].cost;
-        m->n++;
-        m->bytes += s.entries[order[k]].cost;
-    }
-    m->hits = s.stats.hits;
-    m->misses = s.stats.misses;
-    m->evictions = s.stats.evictions;
+    ASSERT_TRUE(modelFromCache(m, &s));
     ASSERT_TRUE(runOpsWith(m, &s, real, 3000, 1, 0));
+    free(m);
+    gfxFontStackDestroy(&s);
+}
+
+/* The stats are the caller's to read and reset (a per-frame hit rate, say): zeroing them must not
+ * change what the cache does. Its own entry and byte counts are kept elsewhere, and stats.entries
+ * and stats.bytes are refreshed whenever the cache changes. */
+TEST(cacheStatsResetIsSafe) {
+    const GfxFont *faces[3];
+    ASSERT_TRUE(stdFaces(faces));
+    GfxFontStack s;
+    ASSERT_EQ(gfxFontStackInit(&s, faces, 3, 1, NULL), STATUS_OK);
+    const GfxGlyphImage *img;
+    for (uint32_t i = 0; i < 1024; i++) { /* full: 1024 negative entries */
+        ASSERT_EQ(gfxFontStackGlyph(&s, 2, (uint16_t)(100 + i), 64, 0, &img), STATUS_OK);
+    }
+    memset(&s.stats, 0, sizeof s.stats);
+    for (uint32_t i = 0; i < 2000; i++) {
+        ASSERT_EQ(gfxFontStackGlyph(&s, 2, (uint16_t)(2000 + i), 64, 0, &img), STATUS_OK);
+    }
+    ASSERT_EQ(s.stats.entries, 1024u);
+    ASSERT_EQ(s.stats.bytes, (size_t)65536);
+    ASSERT_EQ(s.stats.evictions, 2000u);
+    ASSERT_EQ(s.stats.misses, 2000u);
+    ASSERT_TRUE(checkInvariants(&s));
+    /* a hit after a reset: entries and bytes are right again even though nothing was evicted */
+    memset(&s.stats, 0, sizeof s.stats);
+    ASSERT_EQ(gfxFontStackGlyph(&s, 2, 3999, 64, 0, &img), STATUS_OK);
+    ASSERT_EQ(s.stats.hits, 1u);
+    ASSERT_TRUE(checkInvariants(&s));
+    /* then real glyphs from there, against the model, with a reset in the middle */
+    static Op ops[2000];
+    rngState = 0x0F0E0D0C0B0A0908ull;
+    makeRandomOps(ops, 2000, &s);
+    Model *m = calloc(1, sizeof *m);
+    ASSERT_TRUE(m != NULL);
+    ASSERT_TRUE(modelFromCache(m, &s));
+    ASSERT_TRUE(runOpsWith(m, &s, ops, 1000, 1, 0));
+    memset(&s.stats, 0, sizeof s.stats);
+    ASSERT_TRUE(modelFromCache(m, &s));
+    ASSERT_TRUE(runOpsWith(m, &s, ops + 1000, 1000, 1, 0));
+    ASSERT_TRUE(s.stats.evictions > 0);
     free(m);
     gfxFontStackDestroy(&s);
 }
