@@ -21,4 +21,11 @@ void trapIdtInit(void);
  * once more on the way out. */
 void trapDispatch(TrapFrame *f);
 
+/* trapDispatch() hands every vector >= 32 to this (kernel/arch/x86_64/irq.c, D-173): the 8259
+ * spurious checks, the registered handler (or log-and-count if there is none), then the LAPIC EOI;
+ * 0xFF is counted and returns without an EOI. Called with IF=0 on the interrupted stack. Panics on
+ * a nested interrupt, an 8259 vector that is not a spurious IRQ7/15, or any vector before
+ * irqInit(). May not sleep. */
+void irqDispatch(TrapFrame *f);
+
 #endif

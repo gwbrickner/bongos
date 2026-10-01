@@ -4,6 +4,7 @@
 #include "bootinfo-validate.h"
 #include "cmdline.h"
 #include "kernel-boot.h"
+#include "irq.h"
 #include "klog.h"
 #include "ktest.h"
 #include "panic.h"
@@ -240,6 +241,12 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
         klogWrite(KLOG_WARN, "acpi", "ACPI unavailable (status %d); ACPI_RECLAIM left reserved",
                   (int)acpiSt);
     }
+    /* M3.2, D-172/D-173: bring up the 8259/LAPIC/IOAPICs, then enable interrupts for the rest of
+     * boot. Everything from here on, ktests included, runs with IF=1. */
+    irqInit();
+    archEnableInterrupts();
+    klogWrite(KLOG_INFO, "irq", "interrupts enabled");
+
     pmmPrintMeminfo(); /* the post-reclaim totals (both reclaims); panics if the check fails */
 
     ktestRunFromCmdline(cmdlineCopy); /* never returns if ktest= was present */
