@@ -3,17 +3,16 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-09-30 (M2.6 finished and awaiting owner merge; M3.1 is next)
+**Last updated:** 2026-10-01 (M3.1 finished and awaiting owner merge; M3.2 is next)
 
 ## Next step
-Start **M3.1 ACPI tables** (its Need, M2.4, is done), after the owner merges the M2.6 PR
-(`needs-owner`). M2.6's finish gate is complete except that the owner waived the finish-mode
-`bug-sweeper` (see `docs/logs/M2.6.md` "Verification" for exactly what no sweep covered).
-1. `git fetch origin main && git switch -c m3-1-acpi-tables origin/main`
-2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M3.1.md` and write its Plan from ROADMAP.md.
+Start **M3.2 Interrupt controllers** (its Need, M3.1, is done), after the owner merges the M3.1 PR (`needs-owner`).
+1. `git fetch origin main && git switch -c m3-2-interrupt-controllers origin/main`
+2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M3.2.md` and write its Plan from ROADMAP.md. Use `acpiGetInfo()->madt`
+   (CPUs, I/O APICs, interrupt source overrides, LAPIC address) from M3.1; consult `architect` first (interrupts).
 
 ## Current milestone
-None in progress (M2.6 is awaiting owner merge).
+None in progress (M3.1 is awaiting owner merge).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -31,14 +30,20 @@ None in progress (M2.6 is awaiting owner merge).
 | M2.4 | [#8](https://github.com/gwbrickner/bongos/pull/8) | Slab caches, kmalloc (16–8192 bytes), vmalloc with guard pages, `PMM_BUG_OWNED_PAGE` |
 | M2.5 | [#11](https://github.com/gwbrickner/bongos/pull/11) | BIOS loader: stage1 MBR, stage2 with a real-mode thunk, E820/VBE, a GPT+FAT32 reader, the shared menu and handoff. One image boots both ways |
 | M2.6 | [#16](https://github.com/gwbrickner/bongos/pull/16) | KASLR in both loaders (2 MiB slide, `--emit-relocs` relocation, `kaslr=off`), slide-aware symbolizer, `libs/crypto` (SHA-256, ChaCha20), kernel RNG (`randomGetBytes`) |
+| M3.1 | [#19](https://github.com/gwbrickner/bongos/pull/19) | ACPI tables: RSDP/XSDT/RSDT loader, FADT/MADT/MCFG/HPET/IVRS parsers, tables copied through temporary KVA windows (works on BIOS and UEFI), ACPI_RECLAIM freed after the copy, `acpidump=1` + `tools/acpiextract`, stored QEMU q35 tables, D-166..D-170 |
 
-The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB rows in `make test-full`. The final
+The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB and 4-CPU rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
 
 ## Blockers
 _(none)_
 
 ## Questions for owner
+- **M3.1:** (1) Checksum strictness: reject a bad-checksum table (D-167, as designed) or warn and use it
+  like Linux? (2) OK to commit QEMU's table blobs (incl. its DSDT AML) under `tests/data/acpi/`? (3) OK to keep
+  `acpidump=1` in `tests/harness/ktest-boot.cfg` (30-60 KiB extra serial per matrix row)? (4) Reclaiming
+  ACPI_RECLAIM for good means Phase-2 AML serves `DataTableRegion`, and SSDTs it `Load`s/`LoadTable`s, from the
+  kernel copies (anything in ACPI_RECLAIM is gone); accepted?
 - `BootInfo.bootDiskGuid` and `bootPartGuid` (D-056) have no milestone that fills them yet,
   so both stay zero. Suggestion: use the UEFI PartitionInfo protocol plus a BlockIo
   GPT-header read (the BIOS loader already has a GPT reader, D-105), in M6.4 (which adds the
@@ -55,6 +60,9 @@ _(none)_
   someone with network access should still diff it against RFC 8439 2.3.2/2.4.2/A.1/A.2 and FIPS 180-4.
 
 ## Waiting on owner (hardware checks and other owner-only steps)
+- **M3.1 hardware check** (optional; never blocks): boot the USB stick on the reference PC with `acpidump=1` in
+  `boot.cfg`'s `cmdline`, check the `acpi:` lines (CPU list, MCFG base, no rejected tables), and ideally save the
+  serial log for `tools/acpiextract`. Full steps are in `docs/logs/M3.1.md`, "Owner hardware check".
 - **Default the main session to Sonnet** (D-117). Adding `"model": "sonnet"` to
   `.claude/settings.json` is an owner-only change, because the agent isn't allowed to change
   its own settings. Until then, pick Sonnet when starting a session (`/model sonnet`).

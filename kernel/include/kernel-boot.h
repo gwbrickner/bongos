@@ -19,8 +19,11 @@
  * Every *other* phys-address field (`rsdpPhys`, `efiSystemTablePhys`, `initrdPhys`) still holds
  * its original loader-reported value, but is only actually HHDM-reachable if its target's
  * BootMemType is one M2.3's narrower kernel HHDM still maps (ARCHITECTURE §5.4/§6.1) -- a RESERVED
- * region (where an RSDP, for instance, commonly lives) is not. Only valid from kernelMain's post-
- * validation point on (i.e. from ktests, which run after it). No locks; read-only. */
+ * region (where an RSDP, for instance, commonly lives) is not. `rsdpPhys` in particular is an
+ * identity only and must never be dereferenced (its target may be RESERVED, or ACPI_RECLAIM memory
+ * pmmReclaimAcpiMemory() frees, M3.1): use acpiGetTables() for the kept copies. Only valid from
+ * kernelMain's post-validation point on (i.e. from ktests, which run after it). No locks;
+ * read-only. */
 const BootInfo *kernelBootInfo(void);
 
 /* The kernel's own NUL-terminated copy of the command line. Same availability as

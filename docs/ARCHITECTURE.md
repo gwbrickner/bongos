@@ -543,8 +543,9 @@ copies these 256 entries by value rather than syncing individual mappings into t
    one BootInfo page used to be kept reserved until the random seed was consumed (D-089); since
    M2.6 (D-123) the kernel wipes the seed on the live page right after `randomInit`, so the page is
    reclaimed and zeroed like every other `LOADER_RECLAIM` page at or above 1 MiB (below 1 MiB
-   nothing is reclaimed, D-080); `ACPI_RECLAIM` once ACPI tables are parsed (M3.1); `INITRD` once
-   it's no longer needed (M5.5).
+   nothing is reclaimed, D-080); `ACPI_RECLAIM` (M3.1, D-168) via `pmmReclaimAcpiMemory()`, only
+   after `acpiInit` returned OK with no table dropped, only the first 16 recorded regions, clipped
+   to >= 1 MiB, and never `ACPI_NVS`; `INITRD` once it's no longer needed (M5.5).
 
 ### 6.3 Paging
 - 4-level paging. Kernel mappings are marked global.
@@ -958,6 +959,13 @@ then a triple fault. No sleep states in v1.
 - Load the DSDT and SSDTs.
 - A **minimal AML evaluator**, enough to evaluate `\_S5_` for shutdown.
 - The SCI and the power-button fixed event, which trigger an orderly shutdown through `svcd`.
+
+**Table access (M3.1, D-166..D-168):** the kernel never reads firmware memory through the HHDM (it
+does not map RESERVED, where BIOS keeps the RSDP and all tables). It copies each validated table
+through a temporary read-only KVA mapping into kmalloc/vmalloc memory and keeps only the copies;
+the parsers (`kernel/drivers/acpi/acpi-tables.c`, host-tested) work on copies. `ACPI_RECLAIM` is
+freed (`pmmReclaimAcpiMemory`) only after `acpiInit` succeeds; `ACPI_NVS` never. `acpidump=1` dumps
+the tables over serial (`docs/specs/acpidump.md`).
 
 **Phase 2 (full interpreter):**
 - The complete ACPI 6.x AML opcode set, the namespace, methods with locals and args, and

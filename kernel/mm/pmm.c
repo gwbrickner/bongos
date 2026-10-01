@@ -17,6 +17,7 @@ static PmmZone pmmZones[PMM_ZONE_COUNT];
 static uint64_t pmmPageArrayPages;
 static uint64_t pmmPageTablePages;
 static uint64_t pmmReclaimedPagesValue;
+static uint64_t pmmAcpiReclaimedPagesValue; /* subset of the above: ACPI_RECLAIM (M3.1) */
 static PmmBugKind pmmLastBugKind = PMM_BUG_NONE;
 
 /* --- BSP-only per-CPU cache: order-0 only, one free list per zone (D-081). No cpu index appears
@@ -404,10 +405,6 @@ Status pmmAddFreeRange(uint64_t physBase, uint64_t length) {
     return STATUS_OK;
 }
 
-/* PMM_RECLAIM_LOW_LIMIT mirrors D-080's low-memory withholding (PMM_LOW_MEM_LIMIT_PFN, pmm-map.c):
- * pmmReclaimLoaderMemory() must never hand anything below 1 MiB to the buddy allocator either. */
-#define PMM_RECLAIM_LOW_LIMIT 0x100000ULL
-
 static void pmmZeroRange(uint64_t physBase, uint64_t length) {
     uint64_t *p = (uint64_t *)(uintptr_t)(pmmHhdmBaseValue + physBase);
     uint64_t words = length / sizeof(uint64_t);
@@ -459,6 +456,20 @@ static uint64_t pmmReclaimPiece(uint64_t base, uint64_t length) {
     return length >> 12;
 }
 
+/* Frees every range in `ranges[0..n)` via pmmReclaimPiece(), clipped by pmmReclaimClip() to
+ * [1 MiB, HHDM window), the same window pmmMapScan() backs with Page entries. Returns the pages
+ * freed. */
+static uint64_t pmmReclaimRanges(const PmmReclaimRange *ranges, uint32_t n) {
+    uint64_t reclaimed = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t base, end;
+        if (pmmReclaimClip(&ranges[i], &base, &end)) {
+            reclaimed += pmmReclaimPiece(base, end - base);
+        }
+    }
+    return reclaimed;
+}
+
 void pmmReclaimLoaderMemory(void) {
     static bool reclaimDone = false;
     if (reclaimDone) {
@@ -469,21 +480,7 @@ void pmmReclaimLoaderMemory(void) {
     }
     reclaimDone = true;
 
-    uint64_t reclaimed = 0;
-    for (uint32_t i = 0; i < pmmMap.loaderReclaimCount; i++) {
-        uint64_t base = pmmMap.loaderReclaim[i].physBase;
-        uint64_t end = base + pmmMap.loaderReclaim[i].length;
-        if (base < PMM_RECLAIM_LOW_LIMIT) {
-            base = PMM_RECLAIM_LOW_LIMIT;
-        }
-        if (end > BOOTINFO_HHDM_SIZE) { /* mirrors pmm-map.c's own HHDM-window clip */
-            end = BOOTINFO_HHDM_SIZE;
-        }
-        if (base >= end) {
-            continue;
-        }
-        reclaimed += pmmReclaimPiece(base, end - base);
-    }
+    uint64_t reclaimed = pmmReclaimRanges(pmmMap.loaderReclaim, pmmMap.loaderReclaimCount);
 
     /* Independent sanity bound (not a full re-derivation, which would just repeat the loop
      * above): reclaiming can never exceed the raw LOADER_RECLAIM total pmmMapScan() recorded at
@@ -504,6 +501,36 @@ void pmmReclaimLoaderMemory(void) {
               (unsigned long long)reclaimed * 4);
 }
 
+void pmmReclaimAcpiMemory(void) {
+    static bool reclaimDone = false;
+    if (reclaimDone) {
+        panic("pmm: pmmReclaimAcpiMemory: called twice");
+    }
+    if (!vmmKernelTablesActive()) {
+        panic("pmm: pmmReclaimAcpiMemory: called before the kernel's own page tables are active");
+    }
+    reclaimDone = true;
+
+    uint64_t reclaimed = pmmReclaimRanges(pmmMap.acpiReclaim, pmmMap.acpiReclaimCount);
+    /* Same independent bound as the loader reclaim (D-091(6)): never more than pmmMapScan()
+     * recorded for the type. Checked before the count is published. */
+    if (reclaimed > pmmMap.typePages[BOOT_MEM_ACPI_RECLAIM]) {
+        panic("pmm: reclaim: reclaimed %llu pages, more than the %llu ever recorded as "
+              "ACPI_RECLAIM",
+              (unsigned long long)reclaimed,
+              (unsigned long long)pmmMap.typePages[BOOT_MEM_ACPI_RECLAIM]);
+    }
+    pmmReclaimedPagesValue += reclaimed;
+    pmmAcpiReclaimedPagesValue = reclaimed;
+
+    klogWrite(KLOG_INFO, "pmm", "reclaimed %llu KiB of ACPI_RECLAIM",
+              (unsigned long long)reclaimed * 4);
+    if (pmmMap.acpiReclaimDroppedPages != 0) {
+        klogWrite(KLOG_WARN, "pmm", "%llu KiB of ACPI_RECLAIM was not recorded and stays reserved",
+                  (unsigned long long)pmmMap.acpiReclaimDroppedPages * 4);
+    }
+}
+
 void pmmGetStats(PmmStats *out) {
     uint64_t irqFlags = pmmLock();
     *out = (PmmStats){0};
@@ -514,6 +541,7 @@ void pmmGetStats(PmmStats *out) {
     out->lowReservedPages = pmmMap.lowReservedPages;
     out->unmappedPages = pmmMap.unmappedPages;
     out->reclaimedPages = pmmReclaimedPagesValue;
+    out->acpiReclaimedPages = pmmAcpiReclaimedPagesValue;
     out->earlyPages = pmmEarlyUsedPages();
     out->pageArrayPages = pmmPageArrayPages;
     out->pageTablePages = pmmPageTablePages;

@@ -26,9 +26,9 @@ static inline PmmZoneId pmmZoneOfPfn(uint64_t pfn) {
 
 /* --- pmm-map.c: pure BootInfo-map scan (host-tested by tests/host/kernel_pmm_map_test.c) --- */
 
-#define PMM_MAX_SPANS          128
-#define PMM_MAX_USABLE_RANGES  256
-#define PMM_MAX_RECLAIM_RANGES 16
+#define PMM_MAX_SPANS         128
+#define PMM_MAX_USABLE_RANGES 256
+/* PMM_MAX_RECLAIM_RANGES lives in pmm.h (ktests model which ACPI_RECLAIM regions D-168 frees). */
 
 typedef struct {
     uint64_t startPfn, endPfn; /* [start, end), order-10 aligned and merged */
@@ -39,7 +39,7 @@ typedef struct {
 } PmmUsableRange;
 
 typedef struct {
-    uint64_t physBase, length; /* raw BOOT_MEM_LOADER_RECLAIM region, unclipped */
+    uint64_t physBase, length; /* raw BOOT_MEM_LOADER_RECLAIM/ACPI_RECLAIM region, unclipped */
 } PmmReclaimRange;
 
 typedef struct {
@@ -52,6 +52,13 @@ typedef struct {
 
     PmmReclaimRange loaderReclaim[PMM_MAX_RECLAIM_RANGES];
     uint32_t loaderReclaimCount;
+
+    /* ACPI_RECLAIM regions (M3.1, D-168). The count is firmware-controlled, so unlike
+     * loaderReclaim[] an overflow is not an error: the extra regions stay RESERVED forever (never
+     * freed, which is always safe) and their pages are counted here. */
+    PmmReclaimRange acpiReclaim[PMM_MAX_RECLAIM_RANGES];
+    uint32_t acpiReclaimCount;
+    uint64_t acpiReclaimDroppedPages;
 
     uint64_t lowReservedPages;                    /* USABLE below 1 MiB */
     uint64_t unmappedPages;                       /* USABLE at/beyond the HHDM window */
@@ -72,6 +79,13 @@ Status pmmMapScan(const BootMemRegion *regions, uint32_t count, PmmMap *out);
  * range) that never appeared in the BootInfo map at all and so carry no HHDM-mapping guarantee.
  * No locks; IRQ-safe; pure. */
 bool pmmMapTypeIsManaged(uint32_t type);
+
+/* Clips one recorded reclaim range (LOADER_RECLAIM or ACPI_RECLAIM) to what a reclaim may free:
+ * [1 MiB, BOOTINFO_HHDM_SIZE), the same window pmmMapScan() backs with buddy-usable Page entries
+ * (D-080's low-memory withholding, the HHDM limit). Writes the clipped [*outBase, *outEnd) and
+ * returns true if it is non-empty; returns false (outputs unspecified) if nothing is left. `r` is
+ * page-aligned and does not wrap (the BootInfo map contract). No locks; IRQ-safe; pure. */
+bool pmmReclaimClip(const PmmReclaimRange *r, uint64_t *outBase, uint64_t *outEnd);
 
 /* --- early.c: the bump allocator (boot-time only, sealed before the buddy allocator opens) --- */
 

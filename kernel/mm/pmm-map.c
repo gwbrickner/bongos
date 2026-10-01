@@ -28,6 +28,23 @@ bool pmmMapTypeIsManaged(uint32_t type) {
     }
 }
 
+bool pmmReclaimClip(const PmmReclaimRange *r, uint64_t *outBase, uint64_t *outEnd) {
+    uint64_t base = r->physBase;
+    uint64_t end = r->physBase + r->length;
+    if (base < (PMM_LOW_MEM_LIMIT_PFN << 12)) {
+        base = PMM_LOW_MEM_LIMIT_PFN << 12;
+    }
+    if (end > (PMM_HHDM_LIMIT_PFN << 12)) {
+        end = PMM_HHDM_LIMIT_PFN << 12;
+    }
+    if (base >= end) {
+        return false;
+    }
+    *outBase = base;
+    *outEnd = end;
+    return true;
+}
+
 static uint64_t alignDownPfn(uint64_t pfn) {
     return pfn & ~(PMM_SPAN_ALIGN_PFN - 1);
 }
@@ -85,6 +102,16 @@ Status pmmMapScan(const BootMemRegion *regions, uint32_t count, PmmMap *out) {
             out->loaderReclaim[out->loaderReclaimCount] =
                 (PmmReclaimRange){.physBase = r->base, .length = r->length};
             out->loaderReclaimCount++;
+        }
+
+        if (r->type == BOOT_MEM_ACPI_RECLAIM) {
+            if (out->acpiReclaimCount >= PMM_MAX_RECLAIM_RANGES) {
+                out->acpiReclaimDroppedPages += endPfn - startPfn;
+            } else {
+                out->acpiReclaim[out->acpiReclaimCount] =
+                    (PmmReclaimRange){.physBase = r->base, .length = r->length};
+                out->acpiReclaimCount++;
+            }
         }
 
         if (r->type == BOOT_MEM_USABLE) {

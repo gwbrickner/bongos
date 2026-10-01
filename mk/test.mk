@@ -7,7 +7,7 @@
 # GUI screenshot tests (D-070, tests/gui/run.sh) and a countdown smoke test against the shipped
 # boot.cfg, on top of the ktest matrix.
 .PHONY: test test-full _check-ktest-pass gui-test update-refs screenshot
-test: image imgdiff kaslr-reloc-check
+test: image imgdiff acpiextract kaslr-reloc-check
 	tests/harness/run-matrix.sh tests/harness/matrix.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix.conf
 	tests/gui/run.sh --fw uefi
@@ -19,7 +19,7 @@ test: image imgdiff kaslr-reloc-check
 	tests/harness/kaslr-check.sh --fw uefi
 	tests/harness/kaslr-check.sh --fw bios
 
-test-full: image kaslr-reloc-check
+test-full: image acpiextract kaslr-reloc-check
 	tests/harness/run-matrix.sh tests/harness/matrix-full.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix-full.conf
 	tests/harness/kaslr-check.sh --fw uefi
@@ -100,7 +100,19 @@ M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad kaslr_slide_con
                        random_add_entropy_reseeds random_sanity \
                        random_drbg_key_erased_before_output random_boot_seed_wiped \
                        hwrandom_matches_cpuid random_get_bytes_long_request
-_check-ktest-pass:
+# M3.1 (ACPI tables): the ktests its Done-when clauses rest on, plus four log checks every matrix
+# row must pass: the MCFG base line, one `MADT cpu` line per vCPU in the row (the roadmap's "boot log
+# lists the CPUs from the MADT"; only matrix-full.conf's 4-CPU rows can tell "every CPU" from "the
+# first CPU", until M3.5 adds 4-CPU rows to matrix.conf), `acpiextract --check` on the ACPIDUMP block
+# the ktest image's `acpidump=1` makes the kernel print (docs/specs/acpidump.md), and the logged MCFG
+# base equal to the first base in the dumped MCFG table (bytes 44..51, little-endian), so a log line
+# with the right format but a wrong value cannot pass.
+ACPI_REQUIRED_KTESTS := acpi_reclaimed pmm_reclaim_keeps_low_memory acpi_tables_loaded acpi_madt_lists_bsp acpi_mcfg_present acpi_fadt_sane \
+                        acpi_tables_are_kernel_copies acpi_parse_rejects_corrupt \
+                        acpi_read_phys_matches_copies acpi_read_phys_releases_kva \
+                        acpi_read_phys_refuses_bad_ranges acpi_alloc_free_boundary \
+                        acpi_reload_matches_and_frees acpi_read_phys_offsets_exact
+_check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \
 	    case "$$fw" in ''|\#*) continue ;; esac; \
@@ -164,6 +176,36 @@ _check-ktest-pass:
 	    fi; \
 	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^  kaslr slide 0x[0-9a-f]{16} \(link address = address - slide\)$$'; then \
 	        echo "make test: $$log does not contain backtracePrint's 'kaslr slide 0x...' header (ROADMAP M2.6 Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
+	    for t in $(ACPI_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M3.1 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^\[info\] acpi: MCFG base=0x[0-9a-f]{16} seg=[0-9]+ bus=[0-9]+-[0-9]+$$'; then \
+	        echo "make test: $$log does not contain an 'acpi: MCFG base=...' line (ROADMAP M3.1 Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
+	    ncpu=$$(tr -d '\r' < "$$log" 2>/dev/null | grep -cE '^\[info\] acpi: MADT cpu apic-id=[0-9]+ uid=[0-9]+ (enabled|online-capable)( x2apic)?$$'); \
+	    if [ "$$ncpu" != "$$cpus" ]; then \
+	        echo "make test: $$log lists $$ncpu 'acpi: MADT cpu' lines, expected $$cpus (ROADMAP M3.1 Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
+	    if ! $(ACPIEXTRACT_BIN) --check --require FACP,APIC,DSDT,MCFG,HPET "$$log" > /dev/null; then \
+	        echo "make test: $$log has no valid ACPIDUMP block with FACP,APIC,DSDT,MCFG,HPET (ROADMAP M3.1 item 3)"; \
+	        status=1; \
+	    fi; \
+	    mcfgdir=$$(mktemp -d); \
+	    want=; \
+	    if $(ACPIEXTRACT_BIN) -o "$$mcfgdir" "$$log" > /dev/null 2>&1 && [ -f "$$mcfgdir/MCFG-0.dat" ]; then \
+	        want=$$(od -An -v -tx1 -j44 -N8 "$$mcfgdir/MCFG-0.dat" | tr -s ' \n' '\n' | grep . | tac | tr -d '\n'); \
+	    fi; \
+	    rm -rf "$$mcfgdir"; \
+	    got=$$(tr -d '\r' < "$$log" 2>/dev/null | sed -nE 's/^\[info\] acpi: MCFG base=0x([0-9a-f]{16}) .*/\1/p' | head -n 1); \
+	    if [ "$${#want}" != 16 ] || [ "$$got" != "$$want" ]; then \
+	        echo "make test: $$log logs MCFG base=0x$$got, but the dumped MCFG table says 0x$$want (ROADMAP M3.1 Done-when guarantee not met)"; \
 	        status=1; \
 	    fi; \
 	done < "$(MATRIX)"; \

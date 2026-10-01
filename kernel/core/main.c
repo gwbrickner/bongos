@@ -1,5 +1,6 @@
 /* Kernel entry point (ARCHITECTURE §5.4/§5.5 step 4). kernelEntry (entry.asm) calls kernelMain
  * once on the kernel's own stack, with `rdi` holding the BootInfo HHDM virtual address. */
+#include "acpi.h"
 #include "bootinfo-validate.h"
 #include "cmdline.h"
 #include "kernel-boot.h"
@@ -219,10 +220,27 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
     kernelSnapshotMemMap(&bootInfoCopy);
     vmmInit(&bootInfoCopy, memMapSnapshot, memMapSnapshotCount);
     pmmReclaimLoaderMemory(); /* D-123: also zeroes and frees the original BootInfo page */
-    pmmPrintMeminfo(); /* shows the post-reclaim totals; panics internally if the check fails */
 
     slabInit();    /* M2.4, D-092..D-096: slab caches + kmalloc's 12 size classes */
     vmallocInit(); /* M2.4, D-097: vmalloc */
+
+    /* M3.1, D-166: copy every ACPI table out of firmware memory (through temporary KVA mappings,
+     * since the HHDM does not map RESERVED) and parse them. A failure is logged and boot goes on
+     * without ACPI: nothing in the kernel depends on it until M3.2. */
+    Status acpiSt = acpiInit(&bootInfoCopy, memMapSnapshot, memMapSnapshotCount, cmdlineCopy);
+    if (acpiSt == STATUS_OK && acpiGetTables()->dropped == 0) {
+        /* D-168: every table is now a kernel copy, so ACPI_RECLAIM may be freed. Never on a
+         * failed acpiInit (nothing was proven safe to drop), never when the table cap dropped
+         * some (their only copy would be lost), and ACPI_NVS never. */
+        pmmReclaimAcpiMemory();
+    } else if (acpiSt == STATUS_OK) {
+        klogWrite(KLOG_WARN, "acpi", "%u tables were dropped; ACPI_RECLAIM left reserved",
+                  acpiGetTables()->dropped);
+    } else {
+        klogWrite(KLOG_WARN, "acpi", "ACPI unavailable (status %d); ACPI_RECLAIM left reserved",
+                  (int)acpiSt);
+    }
+    pmmPrintMeminfo(); /* the post-reclaim totals (both reclaims); panics if the check fails */
 
     ktestRunFromCmdline(cmdlineCopy); /* never returns if ktest= was present */
 

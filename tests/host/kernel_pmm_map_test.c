@@ -151,3 +151,72 @@ TEST(pmmMapScanUnknownTypeFails) {
     PmmMap map;
     ASSERT_EQ(pmmMapScan(regions, 1, &map), STATUS_ERR_INVALID);
 }
+
+TEST(pmmMapScanRecordsAcpiReclaim) {
+    BootMemRegion regions[] = {
+        region(0x100000, 0x100000, BOOT_MEM_USABLE),
+        region(0x200000, 0x8000, BOOT_MEM_ACPI_RECLAIM),
+        region(0x208000, 0x1000, BOOT_MEM_ACPI_NVS),
+        region(0x300000, 0x4000, BOOT_MEM_ACPI_RECLAIM),
+    };
+    PmmMap map;
+    ASSERT_EQ(pmmMapScan(regions, 4, &map), STATUS_OK);
+    ASSERT_EQ(map.acpiReclaimCount, 2u);
+    ASSERT_EQ(map.acpiReclaim[0].physBase, 0x200000ull);
+    ASSERT_EQ(map.acpiReclaim[0].length, 0x8000ull);
+    ASSERT_EQ(map.acpiReclaim[1].physBase, 0x300000ull);
+    ASSERT_EQ(map.acpiReclaimDroppedPages, 0ull);
+    ASSERT_EQ(map.typePages[BOOT_MEM_ACPI_RECLAIM], 12ull);
+    ASSERT_EQ(map.loaderReclaimCount, 0u); /* the two reclaim lists are independent */
+}
+
+TEST(pmmMapScanAcpiReclaimOverflowIsCountedNotFatal) {
+    /* PMM_MAX_RECLAIM_RANGES + 3 one-page ACPI_RECLAIM regions (firmware controls the count):
+     * the extras are counted, never an error, and never lose the usable/span bookkeeping. */
+    enum { N = PMM_MAX_RECLAIM_RANGES + 3 };
+    BootMemRegion regions[N + 1];
+    regions[0] = region(0x100000, 0x100000, BOOT_MEM_USABLE);
+    for (int i = 0; i < N; i++) {
+        regions[1 + i] = region(0x200000 + (uint64_t)i * 0x2000, 0x1000, BOOT_MEM_ACPI_RECLAIM);
+    }
+    PmmMap map;
+    ASSERT_EQ(pmmMapScan(regions, N + 1, &map), STATUS_OK);
+    ASSERT_EQ(map.acpiReclaimCount, (uint32_t)PMM_MAX_RECLAIM_RANGES);
+    ASSERT_EQ(map.acpiReclaimDroppedPages, 3ull);
+    ASSERT_EQ(map.typePages[BOOT_MEM_ACPI_RECLAIM], (uint64_t)N);
+    ASSERT_EQ(map.usableCount, 1u);
+}
+
+/* pmmReclaimClip: what pmmReclaimLoaderMemory()/pmmReclaimAcpiMemory() may free of one recorded
+ * range -- never below 1 MiB (D-080), never at or past the HHDM window. Straddling either edge
+ * keeps exactly the inside part; a range entirely outside yields nothing. */
+TEST(pmmReclaimClipEdges) {
+    const uint64_t mib = 0x100000, hhdm = BOOTINFO_HHDM_SIZE;
+    struct {
+        uint64_t base, length;
+        bool ok;
+        uint64_t wantBase, wantEnd;
+    } cases[] = {
+        {0x200000, 0x8000, true, 0x200000, 0x208000},       /* plain */
+        {0x9F000, 0x1000, false, 0, 0},                     /* entirely below 1 MiB */
+        {0x0, mib, false, 0, 0},                            /* ends exactly at 1 MiB */
+        {0xFF000, 0x2000, true, mib, mib + 0x1000},         /* straddles 1 MiB */
+        {0x0, 2 * mib, true, mib, 2 * mib},                 /* from 0 across 1 MiB */
+        {mib, 0x1000, true, mib, mib + 0x1000},             /* starts exactly at 1 MiB */
+        {hhdm - 0x1000, 0x1000, true, hhdm - 0x1000, hhdm}, /* last page inside */
+        {hhdm - 0x1000, 0x3000, true, hhdm - 0x1000, hhdm}, /* straddles the HHDM limit */
+        {hhdm, 0x1000, false, 0, 0},                        /* starts exactly at the limit */
+        {hhdm + 0x5000, 0x10000, false, 0, 0},              /* entirely past it */
+        {0x0, hhdm + 0x1000, true, mib, hhdm},              /* both edges at once */
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        PmmReclaimRange r = {.physBase = cases[i].base, .length = cases[i].length};
+        uint64_t b = 0xDEAD, e = 0xBEEF;
+        bool ok = pmmReclaimClip(&r, &b, &e);
+        ASSERT_EQ(ok, cases[i].ok);
+        if (ok) {
+            ASSERT_EQ(b, cases[i].wantBase);
+            ASSERT_EQ(e, cases[i].wantEnd);
+        }
+    }
+}
