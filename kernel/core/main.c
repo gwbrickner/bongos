@@ -220,7 +220,6 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
     kernelSnapshotMemMap(&bootInfoCopy);
     vmmInit(&bootInfoCopy, memMapSnapshot, memMapSnapshotCount);
     pmmReclaimLoaderMemory(); /* D-123: also zeroes and frees the original BootInfo page */
-    pmmPrintMeminfo(); /* shows the post-reclaim totals; panics internally if the check fails */
 
     slabInit();    /* M2.4, D-092..D-096: slab caches + kmalloc's 12 size classes */
     vmallocInit(); /* M2.4, D-097: vmalloc */
@@ -229,7 +228,15 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
      * since the HHDM does not map RESERVED) and parse them. A failure is logged and boot goes on
      * without ACPI: nothing in the kernel depends on it until M3.2. */
     Status acpiSt = acpiInit(&bootInfoCopy, memMapSnapshot, memMapSnapshotCount, cmdlineCopy);
-    (void)acpiSt;
+    if (acpiSt == STATUS_OK) {
+        /* D-168: every table is now a kernel copy, so ACPI_RECLAIM may be freed. Never on a
+         * failed acpiInit (nothing was proven safe to drop), and ACPI_NVS never. */
+        pmmReclaimAcpiMemory();
+    } else {
+        klogWrite(KLOG_WARN, "acpi", "ACPI unavailable (status %d); ACPI_RECLAIM left reserved",
+                  (int)acpiSt);
+    }
+    pmmPrintMeminfo(); /* the post-reclaim totals (both reclaims); panics if the check fails */
 
     ktestRunFromCmdline(cmdlineCopy); /* never returns if ktest= was present */
 

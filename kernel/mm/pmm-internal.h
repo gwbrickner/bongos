@@ -39,7 +39,7 @@ typedef struct {
 } PmmUsableRange;
 
 typedef struct {
-    uint64_t physBase, length; /* raw BOOT_MEM_LOADER_RECLAIM region, unclipped */
+    uint64_t physBase, length; /* raw BOOT_MEM_LOADER_RECLAIM/ACPI_RECLAIM region, unclipped */
 } PmmReclaimRange;
 
 typedef struct {
@@ -52,6 +52,13 @@ typedef struct {
 
     PmmReclaimRange loaderReclaim[PMM_MAX_RECLAIM_RANGES];
     uint32_t loaderReclaimCount;
+
+    /* ACPI_RECLAIM regions (M3.1, D-168). The count is firmware-controlled, so unlike
+     * loaderReclaim[] an overflow is not an error: the extra regions stay RESERVED forever (never
+     * freed, which is always safe) and their pages are counted here. */
+    PmmReclaimRange acpiReclaim[PMM_MAX_RECLAIM_RANGES];
+    uint32_t acpiReclaimCount;
+    uint64_t acpiReclaimDroppedPages;
 
     uint64_t lowReservedPages;                    /* USABLE below 1 MiB */
     uint64_t unmappedPages;                       /* USABLE at/beyond the HHDM window */

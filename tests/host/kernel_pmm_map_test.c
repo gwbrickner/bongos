@@ -151,3 +151,38 @@ TEST(pmmMapScanUnknownTypeFails) {
     PmmMap map;
     ASSERT_EQ(pmmMapScan(regions, 1, &map), STATUS_ERR_INVALID);
 }
+
+TEST(pmmMapScanRecordsAcpiReclaim) {
+    BootMemRegion regions[] = {
+        region(0x100000, 0x100000, BOOT_MEM_USABLE),
+        region(0x200000, 0x8000, BOOT_MEM_ACPI_RECLAIM),
+        region(0x208000, 0x1000, BOOT_MEM_ACPI_NVS),
+        region(0x300000, 0x4000, BOOT_MEM_ACPI_RECLAIM),
+    };
+    PmmMap map;
+    ASSERT_EQ(pmmMapScan(regions, 4, &map), STATUS_OK);
+    ASSERT_EQ(map.acpiReclaimCount, 2u);
+    ASSERT_EQ(map.acpiReclaim[0].physBase, 0x200000ull);
+    ASSERT_EQ(map.acpiReclaim[0].length, 0x8000ull);
+    ASSERT_EQ(map.acpiReclaim[1].physBase, 0x300000ull);
+    ASSERT_EQ(map.acpiReclaimDroppedPages, 0ull);
+    ASSERT_EQ(map.typePages[BOOT_MEM_ACPI_RECLAIM], 12ull);
+    ASSERT_EQ(map.loaderReclaimCount, 0u); /* the two reclaim lists are independent */
+}
+
+TEST(pmmMapScanAcpiReclaimOverflowIsCountedNotFatal) {
+    /* PMM_MAX_RECLAIM_RANGES + 3 one-page ACPI_RECLAIM regions (firmware controls the count):
+     * the extras are counted, never an error, and never lose the usable/span bookkeeping. */
+    enum { N = PMM_MAX_RECLAIM_RANGES + 3 };
+    BootMemRegion regions[N + 1];
+    regions[0] = region(0x100000, 0x100000, BOOT_MEM_USABLE);
+    for (int i = 0; i < N; i++) {
+        regions[1 + i] = region(0x200000 + (uint64_t)i * 0x2000, 0x1000, BOOT_MEM_ACPI_RECLAIM);
+    }
+    PmmMap map;
+    ASSERT_EQ(pmmMapScan(regions, N + 1, &map), STATUS_OK);
+    ASSERT_EQ(map.acpiReclaimCount, (uint32_t)PMM_MAX_RECLAIM_RANGES);
+    ASSERT_EQ(map.acpiReclaimDroppedPages, 3ull);
+    ASSERT_EQ(map.typePages[BOOT_MEM_ACPI_RECLAIM], (uint64_t)N);
+    ASSERT_EQ(map.usableCount, 1u);
+}

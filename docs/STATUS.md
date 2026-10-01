@@ -6,12 +6,12 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-01 (M2.6 merged; M3.1 in progress)
 
 ## Next step
-**M3.1 step 5** (RISKY, allocator; see `docs/logs/M3.1.md` for the exact plan): record ACPI_RECLAIM ranges in
-`pmmMapScan`, add `pmmReclaimAcpiMemory()`, call it from `kernelMain` only after `acpiInit` returns OK (move
-`pmmPrintMeminfo()` after it), ktest `acpi_reclaimed`, host test in `kernel_pmm_map_test.c`.
+**M3.1 step 5 verification, then step 6** (see `docs/logs/M3.1.md`): `make test` on the step 5 commit, then
+`bug-sweeper` (step mode, base 219fa45); then step 6 (capture QEMU fixtures to `tests/data/acpi/qemu-q35/{uefi,bios}/`,
+stored-table host tests).
 
 ## Current milestone
-M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-4 of 7 done and swept).
+M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-4 of 7 done and swept; step 5 committed as WIP).
 
 ## Phase
 2: Blue Dream (CPU and memory core)

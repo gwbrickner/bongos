@@ -3,9 +3,12 @@
  * copy (not a pointer into firmware memory that could be reclaimed). */
 #include "acpi.h"
 #include "kernel-boot.h"
+#include "klog.h"
 #include "ktest.h"
 #include "kmalloc.h"
 #include "vmalloc.h"
+#include "page.h"
+#include "pmm.h"
 #include "vmm.h"
 
 #include <arch/cpu.h>
@@ -361,5 +364,44 @@ KTEST(acpi_reload_matches_and_frees) {
         KTEST_ASSERT_EQ(vAfter.areas, vBefore.areas);
         KTEST_ASSERT_EQ(vAfter.pages, vBefore.pages);
         KTEST_ASSERT_EQ(kmallocLiveForTables(s), kBefore);
+    }
+}
+
+/* D-168: ACPI_RECLAIM was freed (after acpiInit copied the tables), ACPI_NVS and RESERVED never
+ * were. On BIOS there is no ACPI_RECLAIM at all (SeaBIOS reports its tables RESERVED), which is
+ * legitimate: then nothing is checked beyond the count being 0. */
+KTEST(acpi_reclaimed) {
+    uint32_t count;
+    const BootMemRegion *regions = kernelBootMemMap(&count);
+    uint64_t expectPages = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        uint64_t base = regions[i].base;
+        uint64_t end = base + regions[i].length;
+        if (regions[i].type == BOOT_MEM_ACPI_RECLAIM) {
+            if (base < 0x100000) {
+                base = 0x100000;
+            }
+            if (end > BOOTINFO_HHDM_SIZE) {
+                end = BOOTINFO_HHDM_SIZE;
+            }
+            for (uint64_t phys = base; phys < end; phys += 4096) {
+                Page *p = pmmPhysToPage(phys);
+                KTEST_ASSERT(p != NULL);
+                KTEST_ASSERT(p->state != PAGE_STATE_RESERVED);
+                expectPages++;
+            }
+        } else if (regions[i].type == BOOT_MEM_ACPI_NVS) {
+            for (uint64_t phys = base; phys < end; phys += 4096) {
+                Page *p = pmmPhysToPage(phys);
+                KTEST_ASSERT(p == NULL || p->state == PAGE_STATE_RESERVED);
+            }
+        }
+    }
+    PmmStats st;
+    pmmGetStats(&st);
+    KTEST_ASSERT_EQ(st.acpiReclaimedPages, expectPages);
+    KTEST_ASSERT(st.reclaimedPages >= st.acpiReclaimedPages);
+    if (expectPages == 0) {
+        klogWrite(KLOG_INFO, "ktest", "acpi_reclaimed: no ACPI_RECLAIM in this memory map");
     }
 }

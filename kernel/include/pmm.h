@@ -35,12 +35,13 @@ typedef struct {
     uint64_t freePages;    /* managedPages currently free: buddy free lists + every cache */
     uint64_t cachedPages;  /* subset of freePages sitting in the (BSP) per-CPU cache */
     uint64_t allocatedPages;
-    uint64_t earlyPages;       /* consumed by the bump allocator (Page array + its page tables) */
-    uint64_t pageArrayPages;   /* subset of earlyPages: the Page array itself */
-    uint64_t pageTablePages;   /* subset of earlyPages: page tables mapping the Page array */
-    uint64_t lowReservedPages; /* USABLE below 1 MiB, withheld from the buddy allocator */
-    uint64_t unmappedPages;    /* USABLE at or beyond the 64 TiB HHDM window */
-    uint64_t reclaimedPages;   /* LOADER_RECLAIM handed to the buddy allocator (M2.3, D-089) */
+    uint64_t earlyPages;         /* consumed by the bump allocator (Page array + its page tables) */
+    uint64_t pageArrayPages;     /* subset of earlyPages: the Page array itself */
+    uint64_t pageTablePages;     /* subset of earlyPages: page tables mapping the Page array */
+    uint64_t lowReservedPages;   /* USABLE below 1 MiB, withheld from the buddy allocator */
+    uint64_t unmappedPages;      /* USABLE at or beyond the 64 TiB HHDM window */
+    uint64_t reclaimedPages;     /* LOADER_RECLAIM + ACPI_RECLAIM handed to the buddy allocator */
+    uint64_t acpiReclaimedPages; /* subset of reclaimedPages: ACPI_RECLAIM (M3.1, D-168) */
     uint64_t zoneManagedPages[PMM_ZONE_COUNT];
     uint64_t zoneFreePages[PMM_ZONE_COUNT];
     uint64_t typePages[BOOT_MEM_FRAMEBUFFER + 1]; /* indexed by BootMemType */
@@ -143,6 +144,18 @@ void pmmPrintMeminfo(void);
  * only, BSP, IF=0; called once, from kernelMain after vmmInit(). After it returns the loader's
  * BootInfo pointer must not be dereferenced again. Locks: pmmLock. IRQ-safe: yes. May sleep: no. */
 void pmmReclaimLoaderMemory(void);
+
+/* Hands every ACPI_RECLAIM range the pmm recorded during pmmInit() (`PmmMap.acpiReclaim[]`, M3.1,
+ * D-168) to the buddy allocator the same way pmmReclaimLoaderMemory() does: clipped to >= 1 MiB and
+ * to the HHDM window, each piece zeroed through the HHDM first, then pmmAddFreeRange(). Ranges
+ * beyond PMM_MAX_RECLAIM_RANGES were never recorded and stay RESERVED (counted in
+ * `acpiReclaimDroppedPages`, logged as a warning). ACPI_NVS is never touched. The count joins
+ * PmmStats.reclaimedPages (and acpiReclaimedPages), so the meminfo identity still holds. The
+ * CALLER must guarantee nothing still references ACPI_RECLAIM memory: kernelMain calls this only
+ * after acpiInit() returned OK, i.e. after every table was copied into kernel memory. Panics if
+ * called twice or before vmmKernelTablesActive(). Boot-time only, BSP, IF=0. Locks: pmmLock.
+ * IRQ-safe: yes. May sleep: no. */
+void pmmReclaimAcpiMemory(void);
 
 /* The kind of the most recent pmmBug() call, for ktests that catch it via archTrapCatch
  * (TRAP_CATCH_KERNEL_BUG) to assert what actually happened. PMM_BUG_NONE if none has happened yet.

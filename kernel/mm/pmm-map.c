@@ -87,6 +87,16 @@ Status pmmMapScan(const BootMemRegion *regions, uint32_t count, PmmMap *out) {
             out->loaderReclaimCount++;
         }
 
+        if (r->type == BOOT_MEM_ACPI_RECLAIM) {
+            if (out->acpiReclaimCount >= PMM_MAX_RECLAIM_RANGES) {
+                out->acpiReclaimDroppedPages += endPfn - startPfn;
+            } else {
+                out->acpiReclaim[out->acpiReclaimCount] =
+                    (PmmReclaimRange){.physBase = r->base, .length = r->length};
+                out->acpiReclaimCount++;
+            }
+        }
+
         if (r->type == BOOT_MEM_USABLE) {
             uint64_t lowEnd = minU64(endPfn, PMM_LOW_MEM_LIMIT_PFN);
             if (startPfn < lowEnd) {
