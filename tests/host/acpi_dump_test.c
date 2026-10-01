@@ -168,3 +168,71 @@ TEST(acpiExtractNeedsCompleteBlock) {
     }
     free(s);
 }
+
+/* acpiextract over randomly corrupted dumps: random byte flips, truncations and line duplications
+ * of a valid dump must either parse (and then every table verifies) or fail with a line number;
+ * ASan/LSan catch any overrun or leak on either path. The input buffer is exactly `len` bytes and
+ * not NUL-terminated, as the API allows. */
+TEST(acpiExtractSurvivesCorruption) {
+    uint8_t *bufs[4];
+    AcpiTableSet *s = makeSet(bufs);
+    Sink sink = {0};
+    acpiDumpTables(s, sinkLine, &sink);
+    uint64_t x = 0x243F6A8885A308D3ull;
+    int parsed = 0;
+    for (int iter = 0; iter < 3000; iter++) {
+        size_t len = sink.len;
+        char *t = malloc(len * 2);
+        memcpy(t, sink.text, len);
+        int edits = 1 + iter % 4;
+        for (int e = 0; e < edits; e++) {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            size_t at = (size_t)(x % len);
+            switch ((x >> 40) % 4) {
+                case 0:
+                    t[at] = (char)(x >> 48);
+                    break;
+                case 1:
+                    t[at] = "0123456789abcdef \n\r"[(x >> 48) % 19];
+                    break;
+                case 2:
+                    len = at;
+                    break; /* truncate */
+                default: { /* duplicate a span */
+                    size_t span = (size_t)((x >> 32) % 200);
+                    if (at + span <= len && len + span <= sink.len * 2) {
+                        memmove(t + at + span, t + at, len - at);
+                        len += span;
+                    }
+                }
+            }
+            if (len == 0) {
+                break;
+            }
+        }
+        char *exact = malloc(len == 0 ? 1 : len);
+        memcpy(exact, t, len);
+        free(t);
+        AcpiExtractDump d;
+        char err[256];
+        int rc = acpiExtractParse(exact, len, &d, err, sizeof(err));
+        if (rc == 0) {
+            parsed++;
+            ASSERT_TRUE(d.count >= 1);
+            ASSERT_TRUE(strcmp(d.tables[0].sig, "RSDP") == 0);
+            acpiExtractFree(&d);
+        } else {
+            ASSERT_EQ(d.count, 0u);
+            ASSERT_TRUE(strstr(err, "line ") != NULL);
+        }
+        free(exact);
+    }
+    ASSERT_TRUE(parsed > 0); /* flips inside ignored text keep some dumps valid */
+    free(sink.text);
+    for (int i = 0; i < 4; i++) {
+        free(bufs[i]);
+    }
+    free(s);
+}
