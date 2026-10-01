@@ -82,15 +82,15 @@ const char *ftuOracle(const char *name) {
     static struct {
         char name[64];
         uint8_t *text;
-    } cache[8];
-    for (int i = 0; i < 8; i++) {
+    } cache[16];
+    for (int i = 0; i < 16; i++) {
         if (cache[i].text != NULL && strcmp(cache[i].name, name) == 0) {
             return (const char *)cache[i].text;
         }
     }
     char path[160];
     snprintf(path, sizeof path, "tests/data/font/%s", name);
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 16; i++) {
         if (cache[i].text == NULL) {
             cache[i].text = ftuLoad(path, NULL);
             snprintf(cache[i].name, sizeof cache[i].name, "%s", name);

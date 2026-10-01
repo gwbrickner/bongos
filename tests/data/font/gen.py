@@ -1088,6 +1088,194 @@ def utf8_cases(path):
             cps = [ord(ch) for ch in c.decode("utf-8", "replace")]
             f.write("%s : %s\n" % (c.hex() or "-", " ".join("%d" % v for v in cps)))
 
+# ---------------------------------------------------------------- text: utf-8 digest, line breaks
+# Everything below is written from docs/specs/gfx-text.md, NOT from the C tables (D-147/D-158).
+LB_NAMES = ["AL", "BK", "CR", "LF", "NL", "SP", "ZW", "WJ", "GL", "BA", "HY", "B2", "OP", "NS",
+            "CM", "NU", "ID"]
+LB_ASCII = {0x09: "BA", 0x0A: "LF", 0x0B: "BK", 0x0C: "BK", 0x0D: "CR", 0x20: "SP", 0x28: "OP",
+            0x5B: "OP", 0x7B: "OP", 0x2D: "HY", 0x7C: "BA"}
+for _c in (0x21, 0x29, 0x2C, 0x2E, 0x3A, 0x3B, 0x3F, 0x5D, 0x7D):
+    LB_ASCII[_c] = "NS"
+for _c in range(0x30, 0x3A):
+    LB_ASCII[_c] = "NU"
+LB_SPECIFIC = [
+    ("NL", [(0x85, 0x85)]),
+    ("CM", [(0x80, 0x84), (0x86, 0x9F), (0x300, 0x34E), (0x350, 0x36F), (0x1AB0, 0x1AFF),
+            (0x1DC0, 0x1DFF), (0x200C, 0x200F), (0x202A, 0x202E), (0x20D0, 0x20FF),
+            (0x302A, 0x302F), (0x3099, 0x309A), (0xFE00, 0xFE0F), (0xFE20, 0xFE2F),
+            (0xE0001, 0xE0001), (0xE0020, 0xE007F), (0xE0100, 0xE01EF)]),
+    ("GL", [(0xA0, 0xA0), (0x34F, 0x34F), (0x2007, 0x2007), (0x2011, 0x2011), (0x202F, 0x202F)]),
+    ("BA", [(0xAD, 0xAD), (0x1680, 0x1680), (0x2000, 0x2006), (0x2008, 0x200A), (0x2010, 0x2010),
+            (0x2012, 0x2013), (0x205F, 0x205F), (0x3000, 0x3000)]),
+    ("ZW", [(0x200B, 0x200B)]),
+    ("B2", [(0x2014, 0x2014), (0x2E3A, 0x2E3B)]),
+    ("OP", [(c, c) for c in (0x2018, 0x201C, 0x3008, 0x300A, 0x300C, 0x300E, 0x3010, 0x3014, 0x3016,
+                             0x3018, 0x301A, 0x301D, 0xFF08, 0xFF3B, 0xFF5B, 0xFF5F, 0xFF62)]),
+    ("NS", [(c, c) for c in (0x2019, 0x201D, 0x3001, 0x3002, 0x3005, 0x3009, 0x300B, 0x300D, 0x300F,
+                             0x3011, 0x3015, 0x3017, 0x3019, 0x301B, 0x301C, 0x301E, 0x301F, 0x303B,
+                             0x3041, 0x3043, 0x3045, 0x3047, 0x3049, 0x3063, 0x3083, 0x3085, 0x3087,
+                             0x308E, 0x3095, 0x3096, 0x309B, 0x309C, 0x309D, 0x309E, 0x30A0,
+                             0x30A1, 0x30A3, 0x30A5, 0x30A7, 0x30A9, 0x30C3, 0x30E3, 0x30E5, 0x30E7,
+                             0x30EE, 0x30F5, 0x30F6, 0x30FB, 0x30FC, 0x30FD, 0x30FE, 0xFF01, 0xFF09,
+                             0xFF0C, 0xFF0E, 0xFF1A, 0xFF1B, 0xFF1F, 0xFF3D, 0xFF5D, 0xFF60, 0xFF61,
+                             0xFF63, 0xFF64)] + [(0x31F0, 0x31FF)]),
+    ("BK", [(0x2028, 0x2029)]),
+    ("WJ", [(0x2060, 0x2060), (0xFEFF, 0xFEFF)]),
+]
+LB_ID = [(0x2E80, 0x2FFF), (0x3000, 0x31FF), (0x3200, 0x4DBF), (0x4E00, 0x9FFF), (0xA000, 0xA4CF),
+         (0xAC00, 0xD7A3), (0xF900, 0xFAFF), (0xFE30, 0xFE4F), (0xFF00, 0xFF60), (0xFFE0, 0xFFE6),
+         (0x1F000, 0x1FAFF), (0x20000, 0x2FFFD), (0x30000, 0x3FFFD)]
+LB_INVISIBLE = [(0x0, 0x1F), (0x7F, 0x9F), (0xAD, 0xAD), (0x34F, 0x34F), (0x61C, 0x61C),
+                (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F),
+                (0x2028, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F),
+                (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF9, 0xFFFB), (0x1BCA0, 0x1BCA3),
+                (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF)]
+
+
+def lb_class(cp):
+    if cp < 0x80:
+        if cp in LB_ASCII:
+            return LB_ASCII[cp]
+        return "CM" if cp < 0x20 or cp == 0x7F else "AL"
+    for name, rs in LB_SPECIFIC:
+        for lo, hi in rs:
+            if lo <= cp <= hi:
+                return name
+    for lo, hi in LB_ID:
+        if lo <= cp <= hi:
+            return "ID"
+    return "AL"
+
+
+def lb_invisible(cp):
+    return any(lo <= cp <= hi for lo, hi in LB_INVISIBLE)
+
+
+def lb_breaks(cps):
+    """Break before each codepoint: 0 none, 1 allowed, 2 mandatory (the 16 pair rules)."""
+    cl = [lb_class(c) for c in cps]
+    out = []
+    for i, cur in enumerate(cl):
+        if i == 0:
+            out.append(0)
+            continue
+        p = cl[i - 1]
+        p2 = cl[i - 2] if i >= 2 else None
+        nonsp = [c for c in cl[:i] if c != "SP"]
+        last = nonsp[-1] if nonsp else None
+        if p in ("BK", "LF", "NL") or (p == "CR" and cur != "LF"):
+            r = 2
+        elif p == "CR" and cur == "LF":
+            r = 0
+        elif cur in ("BK", "CR", "LF", "NL", "SP", "ZW"):
+            r = 0
+        elif last == "ZW":
+            r = 1
+        elif p == "WJ" or cur == "WJ":
+            r = 0
+        elif p == "GL" or (cur == "GL" and p not in ("SP", "BA", "HY")):
+            r = 0
+        elif cur in ("NS", "CM"):
+            r = 0
+        elif last == "OP":
+            r = 0
+        elif last == "B2" and cur == "B2":
+            r = 0
+        elif p == "SP":
+            r = 1
+        elif cur in ("BA", "HY"):
+            r = 0
+        elif p == "HY" and (cur == "NU" or (cur == "AL" and p2 in (None, "BK", "CR", "LF", "NL", "SP", "ZW", "GL"))):
+            r = 0
+        elif p in ("BA", "HY", "B2") or cur == "B2":
+            r = 1
+        elif p == "ID" or cur == "ID":
+            r = 1
+        else:
+            r = 0
+        out.append(r)
+    return out
+
+
+def lb_parse_marked(text):
+    """'a |b' -> codepoints and the expected break digits ('|' allowed, '!' mandatory)."""
+    cps, exp, pend = [], [], 0
+    for ch in text:
+        if ch == "|":
+            pend = 1
+        elif ch == "!":
+            pend = 2
+        else:
+            cps.append(ord(ch))
+            exp.append(pend)
+            pend = 0
+    return cps, exp
+
+
+LB_HAND = ["a |b", "a  |b", "well-|known", "10-20", "a |-b", "x|—|y", "x|——|y",
+           "f(x) |g", "( a", "一|二。|三", "（一）",
+           "a b |c", "a​|b", "a\r\n!b", "a\r!b", "a\n!\n!b", "á |b", "e.g. |x",
+           "a\t|b"]
+
+
+def break_cases(path):
+    rnd = random.Random(0xB12EA)
+    for h in LB_HAND:  # the hand-checked expectations must agree with the rules as written
+        cps, exp = lb_parse_marked(h)
+        assert lb_breaks(cps) == exp, (h, lb_breaks(cps), exp)
+    reps = [0x61, 0x62, 0x20, 0x0A, 0x0D, 0x0B, 0x85, 0x200B, 0x2060, 0xA0, 0x09, 0x2D, 0x2014,
+            0x28, 0x29, 0x301, 0x31, 0x4E00, 0x3002, 0x3001, 0x3010, 0x2011, 0x2028, 0xAD, 0x2E,
+            0x30A1, 0x3000, 0x200C]
+    for r in reps:
+        lb_class(r)
+    cases = [lb_parse_marked(h)[0] for h in LB_HAND]
+    for _ in range(2000):
+        cases.append([rnd.choice(reps) for _ in range(rnd.randint(1, 9))])
+    with open(path, "w") as f:
+        for cps in cases:
+            f.write("%s : %s\n" % (" ".join("%X" % c for c in cps),
+                                   "".join(str(b) for b in lb_breaks(cps))))
+
+
+def linebreak_ranges(path):
+    runs = []
+    for cp in range(0x110000):
+        c = lb_class(cp)
+        if runs and runs[-1][2] == c and runs[-1][1] == cp - 1:
+            runs[-1][1] = cp
+        else:
+            runs.append([cp, cp, c])
+    with open(path, "w") as f:
+        for lo, hi, c in runs:
+            f.write("class %X %X %s\n" % (lo, hi, c))
+        for lo, hi in LB_INVISIBLE:
+            f.write("invisible %X %X\n" % (lo, hi))
+
+
+def utf8_digest(path):
+    """A seeded 1 MiB byte stream (biased towards UTF-8 lead/trail edge bytes) and the count and
+    FNV-1a-64 of Python's decoded codepoints (each hashed as 4 little-endian bytes)."""
+    alphabet = [0x41, 0x7F, 0x80, 0x9F, 0xA0, 0xBF, 0xC0, 0xC1, 0xC2, 0xDF, 0xE0, 0xE1, 0xED,
+                0xEE, 0xEF, 0xF0, 0xF1, 0xF4, 0xF5, 0xFF, 0x8F, 0x90, 0xE2, 0x82, 0xAC, 0xF0, 0x9F,
+                0x98, 0x80]
+    m64 = (1 << 64) - 1
+    state = 0x853C49E6748FEA9B
+    buf = bytearray()
+    for _ in range(1 << 20):
+        state = (state * 6364136223846793005 + 1442695040888963407) & m64
+        if (state >> 20) & 7 != 0:
+            buf.append(alphabet[(state >> 33) % len(alphabet)])
+        else:
+            buf.append((state >> 40) & 0xFF)
+    text = bytes(buf).decode("utf-8", "replace")
+    h = 0xCBF29CE484222325
+    for ch in text:
+        for b in ord(ch).to_bytes(4, "little"):
+            h = ((h ^ b) * 0x100000001B3) & m64
+    with open(path, "w") as f:
+        f.write("count %d\nfnv %016X\n" % (len(text), h))
+
+
 
 def main():
     orc = Oracle()
@@ -1106,6 +1294,9 @@ def main():
     liberation_oracle(lo)
     lo.write(os.path.join(HERE, "liberation.oracle"))
     utf8_cases(os.path.join(HERE, "utf8.cases"))
+    utf8_digest(os.path.join(HERE, "utf8.digest"))
+    linebreak_ranges(os.path.join(HERE, "linebreak.ranges"))
+    break_cases(os.path.join(HERE, "break.cases"))
 
 
 if __name__ == "__main__":
