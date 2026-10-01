@@ -32,13 +32,14 @@ BIOS_CFLAGS := --target=i386-unknown-elf -m32 -march=i686 -std=c17 -ffreestandin
 
 BIOS_STAGE2_C_SOURCES := $(wildcard boot/bios/stage2/*.c)
 BIOS_STAGE2_HW_SOURCES := boot/common/hw/serial.c boot/common/hw/libc-shim.c boot/common/hw/cpu.c \
-                          boot/common/hw/menu-ui.c
+                          boot/common/hw/menu-ui.c boot/common/hw/loader-kaslr.c
 BIOS_STAGE2_COMMON_SOURCES := boot/common/bootmem.c boot/common/memmap.c boot/common/bootheap.c \
                                boot/common/boot-status.c boot/common/bootcrc32.c \
                                boot/common/bootgpt.c boot/common/bootfat.c boot/common/bootcfg.c \
                                boot/common/bootvideo.c boot/common/elf.c boot/common/paging.c \
                                boot/common/boothandoff.c boot/common/bootacpi.c \
-                               boot/common/fbtext.c boot/common/bootmenu.c boot/common/bootkey.c
+                               boot/common/fbtext.c boot/common/bootmenu.c boot/common/bootkey.c \
+                               boot/common/elf-reloc.c boot/common/bootkaslr.c
 BIOS_STAGE2_ASM_SOURCES := boot/bios/stage2/entry.asm boot/bios/stage2/rm.asm \
                            boot/bios/stage2/trampoline.asm
 # fbtext.c links against the generated font data (mk/font.mk's $(CONSOLE_FONT_C)), not a

@@ -10,6 +10,9 @@
 #define BOOTINFO_PAGE_SIZE   4096ULL
 #define BOOTINFO_KASLR_ALIGN (2ULL * 1024 * 1024)
 #define BOOTINFO_MEMMAP_MAX  8192u
+/* The kernel window is [BOOTINFO_KERNEL_WINDOW_BASE, BOOTINFO_KERNEL_WINDOW_END) = 512 MiB; the
+ * loader's bootKaslrPickSlide() never places the (2 MiB-rounded) image outside it. */
+#define BOOTINFO_KERNEL_WINDOW_SIZE (BOOTINFO_KERNEL_WINDOW_END - BOOTINFO_KERNEL_WINDOW_BASE)
 
 Status bootInfoCheckHeader(const BootInfo *bi, const char **why) {
     if (bi->magic != BOOTINFO_MAGIC) {
@@ -35,6 +38,18 @@ Status bootInfoCheckHeader(const BootInfo *bi, const char **why) {
 
     if ((bi->kaslrSlide % BOOTINFO_KASLR_ALIGN) != 0) {
         *why = "kaslrSlide is not 2 MiB aligned";
+        return STATUS_ERR_INVALID;
+    }
+    /* The 2 MiB-rounded image must fit in the window at this slide (mirrors
+     * bootKaslrPickSlide()'s range). Checked before the kernelVirtBase/kernelSize comparisons,
+     * on bounded arithmetic only, so it neither depends on nor can overflow from them. */
+    if (bi->kernelSize > BOOTINFO_KERNEL_WINDOW_SIZE) {
+        *why = "kernel image exceeds the kernel window (kernelSize too large)";
+        return STATUS_ERR_INVALID;
+    }
+    uint64_t needed = (bi->kernelSize + BOOTINFO_KASLR_ALIGN - 1) & ~(BOOTINFO_KASLR_ALIGN - 1);
+    if (bi->kaslrSlide > BOOTINFO_KERNEL_WINDOW_SIZE - needed) {
+        *why = "kernel image exceeds the kernel window (kaslrSlide too large)";
         return STATUS_ERR_INVALID;
     }
     if (bi->kernelVirtBase != (uint64_t)(uintptr_t)kernelImageStart) {

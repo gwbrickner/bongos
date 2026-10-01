@@ -184,7 +184,7 @@ workflow is green on the PR.
 enable CSM and try the USB. If it won't come up, report what you see; the BIOS path stays
 QEMU-verified only.
 
-### [ ] M2.6 KASLR + kernel RNG `needs-owner`
+### [x] M2.6 KASLR + kernel RNG `needs-owner`
 **Needs:** M2.4, M2.5
 1. Loaders: pick a 2 MiB-aligned slide inside the kernel window from the random seed, and apply the relocations from `--emit-relocs` (`R_X86_64_64`, `R_X86_64_32S`). Honor `kaslr=off`.
 2. Kernel: the entropy pool (RDSEED/RDRAND, boot seed, interrupt timing later), a ChaCha20 CSPRNG, and `randomGetBytes`.
@@ -741,6 +741,15 @@ your network, `ping` your router, and resolve and ping a public hostname.
    - `cryptoEqual`, `cryptoWipe`
 2. Host tests with the official vectors (§17), plus a check that `cryptoEqual` runs in constant time.
 3. The kernel CSPRNG switches to the shared ChaCha20 implementation.
+
+> **Note (M2.6):** SHA-256 (`sha256Init/Update/Final`), ChaCha20 (`chacha20Block`, `chacha20Xor`)
+> and `cryptoWipe` already exist in `libs/crypto` (files `sha256.c`, `chacha20.c`, `wipe.c`, headers
+> under `libs/crypto/include/crypto/`, vectors in `libs/crypto/test/crypto-vectors.h`), and the kernel
+> RNG (`kernel/core/random-core.c`) already runs on them (D-122). Any M11.1 lane must adopt those
+> files and keep those names and APIs rather than re-implementing them; item 3 is therefore done
+> except for whatever the new Poly1305/AEAD work changes. `cryptoWipe` is a volatile-store loop
+> with no inline asm (ARCHITECTURE §4); `cryptoEqual` does not exist yet. The RFC 8439 vector
+> inputs there are cross-checked against independent transcriptions (Nettle, Mbed TLS, pyca, Linux testmgr, Crypto++); not yet diffed against the RFC text itself (see STATUS.md).
 
 **Done when:** every vector test passes.
 

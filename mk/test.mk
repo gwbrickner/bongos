@@ -7,7 +7,7 @@
 # GUI screenshot tests (D-070, tests/gui/run.sh) and a countdown smoke test against the shipped
 # boot.cfg, on top of the ktest matrix.
 .PHONY: test test-full _check-ktest-pass gui-test update-refs screenshot
-test: image imgdiff
+test: image imgdiff kaslr-reloc-check
 	tests/harness/run-matrix.sh tests/harness/matrix.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix.conf
 	tests/gui/run.sh --fw uefi
@@ -16,10 +16,14 @@ test: image imgdiff
 		--expect-serial "loader: timeout, booting default" --expect-serial "kernel: init done"
 	tests/harness/run-qemu.sh --fw bios --image $(IMAGE) --name countdown-smoke-bios --timeout 30 \
 		--expect-serial "loader: timeout, booting default" --expect-serial "kernel: init done"
+	tests/harness/kaslr-check.sh --fw uefi
+	tests/harness/kaslr-check.sh --fw bios
 
-test-full: image
+test-full: image kaslr-reloc-check
 	tests/harness/run-matrix.sh tests/harness/matrix-full.conf --image $(KTEST_IMAGE)
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix-full.conf
+	tests/harness/kaslr-check.sh --fw uefi
+	tests/harness/kaslr-check.sh --fw bios
 
 # Re-runs the GUI tests alone (skips the ktest matrix and countdown smoke) -- useful while
 # iterating on a screenshot test without waiting on the rest of `make test`. FW selects the
@@ -65,6 +69,37 @@ PMM_REQUIRED_KTESTS := pmm_alloc_free_stress pmm_no_leak pmm_zone_correctness pm
 PAGING_REQUIRED_KTESTS := paging_text_write_faults paging_data_exec_faults paging_fb_wc \
                          paging_wx_verify paging_text_hhdm_alias_readonly vmm_map_unmap \
                          loader_reclaimed
+# M2.4's Done-when clauses (ROADMAP.md): stress, alignment, redzone overflow detected, a guard page
+# write faults -- plus the rest of kmalloc_test.c / vmalloc_test.c. Same reasoning: exit 33 alone
+# wouldn't notice a dropped test file.
+SLAB_REQUIRED_KTESTS := kmalloc_stress kmalloc_alignment kmalloc_double_free slab_ctor_dtor \
+                        vmalloc_guard_page_faults vmalloc_map_free_no_leak \
+                        vmalloc_interior_free_rejected vmalloc_not_vmalloc_page_rejected \
+                        vmalloc_oom_rollback
+# These two only exist in debug builds (kmalloc_test.c compiles them under KERNEL_DEBUG), so a
+# RELEASE=1 build can't be required to pass them; debug (the default, `make test`) still does.
+ifneq ($(RELEASE),1)
+SLAB_REQUIRED_KTESTS += kmalloc_redzone_overflow kmalloc_poison_detects_uaf
+endif
+# M2.6 (KASLR + kernel RNG): the ktests its Done-when clauses rest on
+# (bootinfo_rejects_bad carries the kernel-window bound on kaslrSlide). Every matrix log must also
+# show the kernel's kaslr line (kernelMain), so a kernel that stops reporting its slide cannot
+# pass, and the slide header backtracePrint() puts before every backtrace (ROADMAP M2.6 item 3:
+# panic output accounts for the slide; the trap ktests always print at least one backtrace), and
+# the loader's own `kaslr: slide=` line: the matrix boots build/bongos-ktest.img, whose boot.cfg
+# (tests/harness/ktest-boot.cfg) leaves KASLR at its default (on), so a loader that fell back
+# ("kaslr: disabled") or stopped sliding fails here (tests/harness/kaslr-check.sh, run by `make
+# test`/`test-full` after the matrix, checks the slide values across several boots and kaslr=off).
+# The crypto primitives' vector ktests (kernel/test/crypto_test.c, vectors in
+# libs/crypto/test/crypto-vectors.h) are required too: they are the CSPRNG's foundation, and so are
+# the RNG's own ktests (kernel/test/random_test.c) plus the `random: seeded` log line every boot
+# must print (kernelMain -> randomInit: a kernel that stops seeding its RNG cannot pass).
+M26_REQUIRED_KTESTS := ksym_slide_accounted bootinfo_rejects_bad kaslr_slide_consistent \
+                       kaslr_relocs_applied chacha20_rfc8439_block chacha20_rfc8439_encrypt \
+                       sha256_fips180_vectors random_drbg_fast_key_erasure \
+                       random_add_entropy_reseeds random_sanity \
+                       random_drbg_key_erased_before_output random_boot_seed_wiped \
+                       hwrandom_matches_cpuid random_get_bytes_long_request
 _check-ktest-pass:
 	@status=0; \
 	while read -r fw cpus mem; do \
@@ -103,5 +138,33 @@ _check-ktest-pass:
 	            status=1; \
 	        fi; \
 	    done; \
+	    for t in $(SLAB_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M2.4 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
+	    for t in $(M26_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M2.6 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^\[info\] kaslr: virtBase=0x[0-9a-f]{16} slide=0x[0-9a-f]{16}$$'; then \
+	        echo "make test: $$log does not contain the kernel's 'kaslr: virtBase=... slide=...' line (ROADMAP M2.6 Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^loader: kaslr: slide=0x[0-9a-f]{16} base=0x[0-9a-f]{16} relocs=[0-9]+$$'; then \
+	        echo "make test: $$log does not contain the loader's 'kaslr: slide=... base=... relocs=...' line (ROADMAP M2.6 Done-when guarantee not met; KASLR is on by default)"; \
+	        status=1; \
+	    fi; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^\[info\] random: seeded'; then \
+	        echo "make test: $$log does not contain the kernel's 'random: seeded ...' line (ROADMAP M2.6 Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^  kaslr slide 0x[0-9a-f]{16} \(link address = address - slide\)$$'; then \
+	        echo "make test: $$log does not contain backtracePrint's 'kaslr slide 0x...' header (ROADMAP M2.6 Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
 	done < "$(MATRIX)"; \
 	exit $$status

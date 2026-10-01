@@ -7,6 +7,8 @@
 #ifndef KERNEL_SECTIONS_H
 #define KERNEL_SECTIONS_H
 
+#include "bootinfo.h" /* BOOTINFO_KERNEL_WINDOW_BASE, via kernel.mk's include path */
+
 #include <stdint.h>
 
 extern const uint8_t kernelImageStart[];
@@ -27,5 +29,17 @@ extern const uint8_t kernelIst3Bottom[];
 extern const uint8_t kernelIst3Top[];
 extern const uint8_t ksymsStart[];
 extern const uint8_t ksymsEnd[];
+
+/* The KASLR slide this boot (ARCHITECTURE §5.5/§6.6, M2.6): how far the loader moved the kernel
+ * image from its link address, i.e. where kernelImageStart really is minus where the linker put
+ * it. Computed straight from the linker symbol, deliberately not from BootInfo, so it is valid at
+ * any point (including inside panic() and the trap reporter, before or after the BootInfo copy
+ * exists) and cannot be corrupted by a bad BootInfo. Link-time addresses (the KSYM blob, kernel.elf
+ * for gdb) are `runtime address - kernelSlide()`. BOOTINFO_KERNEL_WINDOW_BASE must equal
+ * KERNEL_LINK_BASE in kernel.ld (kernel.ld ASSERTs .text starts there; bootInfoCheckHeader checks
+ * it against the loader's own report). Zero when the loader did not slide the image. */
+static inline uint64_t kernelSlide(void) {
+    return (uint64_t)(uintptr_t)kernelImageStart - BOOTINFO_KERNEL_WINDOW_BASE;
+}
 
 #endif

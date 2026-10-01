@@ -42,6 +42,8 @@ const char *bootStatusString(BootStatus s) {
             return "not found";
         case BOOT_ERR_TOO_LARGE:
             return "destination buffer too small";
+        case BOOT_ERR_ELF_RELOC:
+            return "ELF relocation table invalid or unsupported";
         default:
             return "unknown boot status";
     }

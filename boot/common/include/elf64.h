@@ -45,4 +45,53 @@ BootStatus elfParse(const uint8_t *file, uint64_t fileSize, ElfImage *out);
  * locks, boot-time or host-test only. */
 BootStatus elfLoad(const ElfImage *img, const uint8_t *file, uint8_t *dest);
 
+/* What elfRelocate() found, for the loader's log line and the tests. Filled only on BOOT_OK
+ * (zeroed on entry, so a failed call leaves zeros). */
+typedef struct {
+    uint32_t relaSections; /* SHT_RELA sections whose target is SHF_ALLOC (the ones processed) */
+    uint32_t total;        /* relocation entries in those sections, every type */
+    uint32_t applied; /* entries that move a value with the slide (64 / 32S against a SEC symbol) */
+    uint32_t execApplied; /* the subset of `applied` whose target section is SHF_EXECINSTR */
+    uint32_t skipped;     /* NONE, PC-relative against a SEC symbol, and anything against ABS/UND */
+} ElfRelocStats;
+
+/* Rebases the kernel image `dest` (already filled by elfLoad from the same `file`) by `slide`
+ * bytes, using the --emit-relocs SHT_RELA sections still present in `file` (the whole ELF, as read
+ * from disk). The image was linked at img->linkBase, is about to run at img->linkBase + slide, and
+ * is position-dependent (mcmodel=kernel, no PIC), so every absolute address stored in it must
+ * grow by `slide`. Because the link-time content is already S+A, nothing is recomputed from
+ * symbols: each affected location just gets `slide` added to what elfLoad put there.
+ *
+ * Two passes over every SHT_RELA whose target section (sh_info) is SHF_ALLOC (debug relocations
+ * are ignored, sections are classified by type and flags, never by name): pass 1 validates the
+ * whole table and writes nothing, pass 2 applies. Accepted: R_X86_64_NONE (skipped);
+ * R_X86_64_64 against a section symbol (value += slide, error if it wraps); R_X86_64_32S against
+ * a section symbol (sign-extended value + slide must still fit int32); R_X86_64_PC32/PLT32/PC64
+ * against a section symbol (both ends move together, nothing to do); R_X86_64_64/32S/32 against an
+ * ABS or UND symbol (the value does not move, skipped). Rejected with BOOT_ERR_ELF_RELOC:
+ * R_X86_64_32 against a section symbol (cannot be slid), PC-relative against ABS/UND (the
+ * distance changes), any other type, SHT_REL sections, a symbol in a non-alloc section or with a
+ * reserved shndx, a location outside the file-backed part of a PT_LOAD or outside its target
+ * section, an SHT_NOBITS target, and malformed section-header/symbol-table bounds (e_shentsize
+ * 64, 1..256 sections, every offset/size overflow-checked, sh_entsize 24, sh_link naming an
+ * SHT_SYMTAB). It also fails if not one 64/32S was applied into an SHF_EXECINSTR target: a kernel
+ * linked without --emit-relocs would otherwise "relocate" nothing and then run with stale
+ * absolute addresses. `slide` must be 4 KiB aligned and keep the image inside the kernel window,
+ * else BOOT_ERR_ELF_RANGE; slide 0 still validates the table but changes no byte.
+ *
+ * `dest` must be img->span bytes, exactly as elfLoad left it: every relocated location must still
+ * hold the bytes elfLoad copied from `file`, else BOOT_ERR_ELF_RELOC (so an already-slid image is
+ * rejected, not slid twice). `stats` may be NULL. On a pass-1 failure `dest` is untouched. Pass 2
+ * fails only when an entry names bytes an earlier entry already rewrote (every exact duplicate,
+ * and any overlap of an earlier entry's low 32 bits, which a non-zero slide always changes; pass
+ * 1, reading the untouched image, cannot see these). An overlap of only the upper half of a 64 is
+ * not detectable without per-byte state (the toolchain never emits one, and kaslr-reloc-check
+ * would show it). After a pass-2 failure `dest` is partly slid, so after ANY failure the caller
+ * must discard `dest` (re-run elfLoad for the slide-0 fallback) rather than boot it. No
+ * locks, never sleeps, boot-time or host-test only (interrupts are not in play); does not allocate;
+ * no 64-bit division (i386 stage2 links no libgcc). Returns BOOT_ERR_ELF_HEADER for NULL arguments
+ * or a bad ELF magic/class. */
+BootStatus elfRelocate(const ElfImage *img, const uint8_t *file, uint64_t fileSize, uint8_t *dest,
+                       uint64_t slide, ElfRelocStats *stats);
+
 #endif
