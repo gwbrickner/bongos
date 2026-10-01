@@ -1,1 +1,3 @@
-Stored ACPI tables (QEMU q35, and later the reference board's) used by the host-side AML interpreter tests. Arrives starting M3.1.
+Stored ACPI tables used by host-side tests. `qemu-q35/` (M3.1) holds QEMU's tables for UEFI and BIOS
+boots, with its own README for provenance; the reference board's tables arrive with the AML
+interpreter milestones.
