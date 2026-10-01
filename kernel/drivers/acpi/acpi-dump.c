@@ -12,22 +12,22 @@ typedef struct {
     size_t n;
 } Line;
 
-static void putc_(Line *l, char c) {
+static void linePutc(Line *l, char c) {
     if (l->n < DUMP_LINE_MAX - 1) {
         l->buf[l->n++] = c;
     }
 }
 
-static void puts_(Line *l, const char *s) {
+static void linePuts(Line *l, const char *s) {
     while (*s != '\0') {
-        putc_(l, *s++);
+        linePutc(l, *s++);
     }
 }
 
 static void putHex(Line *l, uint64_t v, int digits) {
     static const char hex[] = "0123456789abcdef";
     for (int i = digits - 1; i >= 0; i--) {
-        putc_(l, hex[(v >> (4 * i)) & 0xF]);
+        linePutc(l, hex[(v >> (4 * i)) & 0xF]);
     }
 }
 
@@ -39,7 +39,7 @@ static void putDec(Line *l, uint32_t v) {
         v /= 10;
     } while (v != 0);
     while (n > 0) {
-        putc_(l, tmp[--n]);
+        linePutc(l, tmp[--n]);
     }
 }
 
@@ -53,37 +53,37 @@ static void putSig(Line *l, const uint8_t *sig) {
     for (int i = 0; i < 4; i++) {
         uint8_t c = sig[i];
         bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
-        putc_(l, ok ? (char)c : '_');
+        linePutc(l, ok ? (char)c : '_');
     }
 }
 
 static void emitTable(AcpiDumpEmit emit, void *ctx, const char *sigName, const uint8_t *sig4,
                       uint64_t phys, const uint8_t *data, uint32_t len) {
     Line l = {{0}, 0};
-    puts_(&l, "ACPIDUMP TABLE ");
+    linePuts(&l, "ACPIDUMP TABLE ");
     if (sigName != NULL) {
-        puts_(&l, sigName);
+        linePuts(&l, sigName);
     } else {
         putSig(&l, sig4);
     }
-    puts_(&l, " phys=0x");
+    linePuts(&l, " phys=0x");
     putHex(&l, phys, 16);
-    puts_(&l, " len=");
+    linePuts(&l, " len=");
     putDec(&l, len);
     flush(&l, emit, ctx);
     for (uint32_t off = 0; off < len; off += DUMP_BYTES_PER_LINE) {
         uint32_t n = len - off < DUMP_BYTES_PER_LINE ? len - off : DUMP_BYTES_PER_LINE;
-        puts_(&l, "ACPIDUMP ");
+        linePuts(&l, "ACPIDUMP ");
         putHex(&l, off, 8);
-        putc_(&l, ' ');
+        linePutc(&l, ' ');
         for (uint32_t i = 0; i < n; i++) {
             putHex(&l, data[off + i], 2);
         }
         flush(&l, emit, ctx);
     }
-    puts_(&l, "ACPIDUMP TABLE-END ");
+    linePuts(&l, "ACPIDUMP TABLE-END ");
     if (sigName != NULL) {
-        puts_(&l, sigName);
+        linePuts(&l, sigName);
     } else {
         putSig(&l, sig4);
     }
@@ -92,7 +92,7 @@ static void emitTable(AcpiDumpEmit emit, void *ctx, const char *sigName, const u
 
 void acpiDumpTables(const AcpiTableSet *s, AcpiDumpEmit emit, void *ctx) {
     Line l = {{0}, 0};
-    puts_(&l, "ACPIDUMP BEGIN v1 rsdp=0x");
+    linePuts(&l, "ACPIDUMP BEGIN v1 rsdp=0x");
     putHex(&l, s->rsdpPhys, 16);
     flush(&l, emit, ctx);
     emitTable(emit, ctx, "RSDP", NULL, s->rsdpPhys, s->rsdpRaw, s->rsdpLength);
@@ -100,7 +100,7 @@ void acpiDumpTables(const AcpiTableSet *s, AcpiDumpEmit emit, void *ctx) {
         const AcpiTable *t = &s->tables[i];
         emitTable(emit, ctx, NULL, (const uint8_t *)t->signature, t->phys, t->data, t->length);
     }
-    puts_(&l, "ACPIDUMP END tables=");
+    linePuts(&l, "ACPIDUMP END tables=");
     putDec(&l, s->count + 1);
     flush(&l, emit, ctx);
 }

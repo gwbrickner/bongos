@@ -198,6 +198,11 @@ static void logInfo(const AcpiInfo *a) {
 
 Status acpiInit(const BootInfo *bi, const BootMemRegion *map, uint32_t mapCount,
                 const char *cmdline) {
+    static bool called;
+    if (called) {
+        panic("acpi: acpiInit called twice");
+    }
+    called = true;
     AcpiKernelCtx ctx = {map, mapCount};
     AcpiPhysOps ops = {&ctx, acpiReadPhys, acpiAlloc, acpiFree};
     Status st = acpiTablesLoad(&ops, bi->rsdpPhys, &acpiTableSet);

@@ -26,7 +26,9 @@ void vmallocInit(void);
  * over VMALLOC_MAX_SIZE; size 0 or an unknown flag panics via panicBug(). No locks required of
  * the caller; never sleeps. Must not be called from IRQ context or with IRQs already disabled
  * (load-bearing once M3.5 adds a real TLB shootdown to vfree() -- today's single-CPU/IF=0 kernel
- * can't yet violate this itself, but no caller should rely on that). */
+ * can't yet violate this itself, but no caller should rely on that). The one sanctioned exception
+ * is boot-time code on the BSP before any AP exists, where vfree()'s local INVLPG is already a full
+ * shootdown (acpiInit(), D-170); it must still never be called from IRQ context. */
 void *vmalloc(size_t size, VmallocFlags flags);
 
 /* Frees a pointer vmalloc() returned. NULL is a no-op. Any other misuse (a pointer this subsystem

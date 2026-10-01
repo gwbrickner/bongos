@@ -26,26 +26,12 @@ KTEST(acpi_tables_loaded) {
     KTEST_ASSERT_EQ(s->rejected, 0u);
 }
 
-/* The BSP's APIC ID: CPUID leaf 0xB's x2APIC ID when that leaf is populated, else leaf 1's. */
-static uint32_t bspApicId(void) {
-    uint32_t r[4];
-    archCpuid(0, 0, r);
-    if (r[0] >= 0xB) {
-        archCpuid(0xB, 0, r);
-        if ((r[1] & 0xFFFF) != 0) {
-            return r[3];
-        }
-    }
-    archCpuid(1, 0, r);
-    return r[1] >> 24;
-}
-
 KTEST(acpi_madt_lists_bsp) {
     const AcpiInfo *a = acpiGetInfo();
     KTEST_ASSERT(a != NULL);
     KTEST_ASSERT(a->madtStatus == STATUS_OK);
     KTEST_ASSERT(a->madt.cpuCount >= 1);
-    uint32_t id = bspApicId();
+    uint32_t id = archCpuApicId();
     bool found = false;
     for (uint32_t i = 0; i < a->madt.cpuCount; i++) {
         found = found || a->madt.cpus[i].apicId == id;
@@ -486,14 +472,15 @@ KTEST(acpi_reload_matches_and_frees) {
 
 /* D-168: exactly the ACPI_RECLAIM pages pmmReclaimAcpiMemory() may free were freed, and nothing
  * else: the first PMM_MAX_RECLAIM_RANGES ACPI_RECLAIM regions in map order, clipped to [1 MiB,
- * HHDM), and only if acpiInit succeeded (acpiGetTables() != NULL). Every other ACPI_RECLAIM page
- * (below 1 MiB, an overflow region, or a failed acpiInit) and every ACPI_NVS/RESERVED page with a
- * Page entry is still RESERVED. On BIOS there is no ACPI_RECLAIM at all (SeaBIOS reports its tables
- * RESERVED), which is legitimate: then only the RESERVED/NVS side and the 0 count are checked. */
+ * HHDM), and only if acpiInit succeeded (acpiGetTables() != NULL) without dropping tables. Every
+ * other ACPI_RECLAIM page (below 1 MiB, an overflow region, or a failed acpiInit) and every
+ * ACPI_NVS/RESERVED page with a Page entry is still RESERVED. On BIOS there is no ACPI_RECLAIM at
+ * all (SeaBIOS reports its tables RESERVED), which is legitimate: then only the RESERVED/NVS side
+ * and the 0 count are checked. */
 KTEST(acpi_reclaimed) {
     uint32_t count;
     const BootMemRegion *regions = kernelBootMemMap(&count);
-    bool acpiOk = acpiGetTables() != NULL;
+    bool acpiOk = acpiGetTables() != NULL && acpiGetTables()->dropped == 0;
     /* Page entries exist only up to the last managed region (plus span padding), so the RESERVED
      * walk stops there instead of crawling multi-GiB holes. */
     uint64_t managedEnd = 0;

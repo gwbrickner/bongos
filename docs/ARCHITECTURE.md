@@ -543,8 +543,9 @@ copies these 256 entries by value rather than syncing individual mappings into t
    one BootInfo page used to be kept reserved until the random seed was consumed (D-089); since
    M2.6 (D-123) the kernel wipes the seed on the live page right after `randomInit`, so the page is
    reclaimed and zeroed like every other `LOADER_RECLAIM` page at or above 1 MiB (below 1 MiB
-   nothing is reclaimed, D-080); `ACPI_RECLAIM` once ACPI tables are parsed (M3.1); `INITRD` once
-   it's no longer needed (M5.5).
+   nothing is reclaimed, D-080); `ACPI_RECLAIM` (M3.1, D-168) via `pmmReclaimAcpiMemory()`, only
+   after `acpiInit` returned OK with no table dropped, only the first 16 recorded regions, clipped
+   to >= 1 MiB, and never `ACPI_NVS`; `INITRD` once it's no longer needed (M5.5).
 
 ### 6.3 Paging
 - 4-level paging. Kernel mappings are marked global.

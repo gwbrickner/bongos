@@ -19,7 +19,7 @@ ACPIDUMP END tables=<decimal: number of TABLE blocks, RSDP included>
 ```
 `SIG4`: the RSDP block uses `RSDP`. Otherwise the four signature bytes with each byte outside
 `[A-Za-z0-9]` replaced by `_`; the true signature is always the first 4 data bytes. The RSDP
-block's `len` is 20 (revision 0/1) or its Length field (revision 2+).
+block's `len` is 20 (revision 0/1, or a revision 2+ RSDP whose v2 extension is absent or invalid) or its Length field (a valid v2 extension).
 
 **Reader rules.** Use the last BEGIN..END block (earlier ones are ignored); it must be complete. Data offsets are contiguous from 0 and the
 byte total equals `len`. The END count matches the number of TABLE blocks. Checksums: the RSDP over

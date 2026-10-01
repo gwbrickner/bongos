@@ -13,9 +13,10 @@
  * no RSDP), INVALID (no usable RSDP/root) or NO_MEMORY; on a non-OK return nothing is kept and the
  * accessors below return NULL. On OK no mapping of, and no pointer into, firmware memory survives:
  * every table is a kmalloc/vmalloc copy kept for the kernel's lifetime. Must be called once, after
- * vmallocInit() and before any AP exists (the temporary KVA mappings are flushed on this CPU only).
- * Boot-time only, BSP, IF=0. Locks: none of its own (vmmLock and pmmLock are taken by callees in
- * the D-088 order). May not sleep. Never panics on firmware data, only on kernel bugs. */
+ * vmallocInit() and before any AP exists (the temporary KVA mappings are flushed on this CPU only);
+ * a second call panics. Boot-time only, BSP, IF=0. Locks: none of its own (vmmLock and pmmLock are
+ * taken by callees in the D-088 order). May not sleep. Never panics on firmware data, only on
+ * kernel bugs. */
 Status acpiInit(const BootInfo *bi, const BootMemRegion *map, uint32_t mapCount,
                 const char *cmdline);
 
@@ -27,9 +28,12 @@ const AcpiTableSet *acpiGetTables(void);
 /* The `instance`-th kept table with signature `sig` (e.g. "DSDT", "SSDT" for the future AML
  * interpreter), or NULL. */
 const AcpiTable *acpiFindTable(const char sig[4], uint32_t instance);
+/* acpiGetInfo/acpiGetTables/acpiFindTable: no locks (read-only after acpiInit), IRQ-safe, never
+ * sleep. */
 
 /* The AcpiPhysOps pieces acpiInit() hands the pure loader, exposed so ktests can drive them
- * directly (and a later caller could reload tables the same way).
+ * directly. Boot-time only: they know nothing of pmmReclaimAcpiMemory() (D-168), so after the
+ * reclaim an ACPI_RECLAIM range is still "allowed" but holds freed (possibly reused) pages.
  * acpiKernelReadPhys copies [phys, phys+len) out of firmware memory through a temporary read-only
  * WB KVA mapping of the covering pages (the HHDM does not map RESERVED memory, where BIOS keeps the
  * RSDP and every table); the mapping and its KVA range are gone again before it returns. `len` 0
@@ -40,7 +44,8 @@ const AcpiTable *acpiFindTable(const char sig[4], uint32_t instance);
  * BSP before any AP exists (the TLB flush is local). May not sleep.
  * acpiKernelAlloc returns `len` (nonzero) bytes from kmalloc up to KMALLOC_MAX_SIZE, else vmalloc,
  * or NULL on OOM; acpiKernelFree(p, len) must get the same `len`, which picks the same allocator.
- * Same locking/sleep rules as kmalloc/vmalloc. */
+ * Same locking/sleep rules as kmalloc/vmalloc, except that a table over KMALLOC_MAX_SIZE reaches
+ * vmalloc with IF=0 from acpiInit(): the boot-time exception in vmalloc.h (D-170). */
 Status acpiKernelReadPhys(const BootMemRegion *map, uint32_t mapCount, uint64_t phys, void *dst,
                           uint32_t len);
 void *acpiKernelAlloc(uint32_t len);

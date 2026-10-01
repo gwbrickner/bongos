@@ -39,7 +39,8 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # way into the kernel; tests/host/crypto_test.c checks them against libs/crypto/test/crypto-vectors.h.
 # kernel/core/random-core.c: the kernel RNG's pure core (pool, reseed, fast-key-erasure generator,
 # M2.6 step 5, D-122); tests/host/kernel_random_test.c. random.c (lock + hardware) is ktest-only.
-# kernel/drivers/acpi/acpi-tables.c, acpi-dump.c: the ACPI loader/parsers and the ACPIDUMP formatter are pure (M3.1, D-166);
+# kernel/drivers/acpi/acpi-tables.c, acpi-dump.c: the ACPI loader/parsers and the ACPIDUMP
+# formatter are pure (M3.1, D-166);
 # only acpi.c (KVA reads, klog) is kernel-only, so it is not in this list.
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c tools/mkimage/biosboot.c \
                         boot/uefi/guids.c \

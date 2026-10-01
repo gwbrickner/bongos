@@ -6,9 +6,10 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-01 (M2.6 merged; M3.1 in progress)
 
 ## Next step
-**M3.1 finish gate, remaining** (see `docs/logs/M3.1.md`): tests green and sweep PASS are done; read the `reviewer`
-verdict and fix its Critical/Should-fix items, then screenshots (`docs/screenshots/M3.1.png`, `M3.1-bios.png`),
-paperwork (ROADMAP box, log Summary/Verification, STATUS), and the PR with `needs-owner: yes`.
+**M3.1 finish gate, remaining** (see `docs/logs/M3.1.md`): the reviewer's Should-fix items are fixed (D-170) but
+not yet re-verified: run qemu-tester (format-check, host-tests, `make test`, `make test-full`), then `bug-sweeper`
+in step mode on `954bfaa..HEAD`; then screenshots (`docs/screenshots/M3.1.png`, `M3.1-bios.png`), paperwork
+(ROADMAP box, log Summary/Verification), and the PR with `needs-owner: yes`.
 
 ## Current milestone
 M3.1 ACPI tables, branch `m3-1-acpi-tables` (steps 1-6 done; step 7 finish gate: tests and sweep PASS, review pending).
@@ -40,7 +41,8 @@ _(none)_
 - **M3.1:** (1) Checksum strictness: reject a bad-checksum table (D-167, as designed) or warn and use it
   like Linux? (2) OK to commit QEMU's table blobs (incl. its DSDT AML) under `tests/data/acpi/`? (3) OK to keep
   `acpidump=1` in `tests/harness/ktest-boot.cfg` (30-60 KiB extra serial per matrix row)? (4) Reclaiming
-  ACPI_RECLAIM for good means Phase-2 AML serves `DataTableRegion` from the copies; accepted?
+  ACPI_RECLAIM for good means Phase-2 AML serves `DataTableRegion`, and SSDTs it `Load`s/`LoadTable`s, from the
+  kernel copies (anything in ACPI_RECLAIM is gone); accepted?
 - `BootInfo.bootDiskGuid` and `bootPartGuid` (D-056) have no milestone that fills them yet,
   so both stay zero. Suggestion: use the UEFI PartitionInfo protocol plus a BlockIo
   GPT-header read (the BIOS loader already has a GPT reader, D-105), in M6.4 (which adds the

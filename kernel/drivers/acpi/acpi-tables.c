@@ -438,9 +438,12 @@ static bool madtHasCpu(const AcpiMadtInfo *m, uint32_t apicId) {
     return false;
 }
 
-static void madtAddCpu(AcpiMadtInfo *m, uint32_t apicId, uint32_t uid, uint32_t flags,
-                       bool x2apic) {
-    if ((flags & 3) == 0) {
+/* Bit 1 of a CPU entry's flags is Online-Capable only from MADT revision 5 (ACPI 6.3); before that
+ * it is reserved and real firmware has left junk in it (D-170), so older tables use bit 0 alone. */
+static void madtAddCpu(AcpiMadtInfo *m, uint8_t madtRev, uint32_t apicId, uint32_t uid,
+                       uint32_t flags, bool x2apic) {
+    uint32_t usableMask = madtRev >= 5 ? 3u : 1u;
+    if ((flags & usableMask) == 0) {
         m->cpusDisabled++;
         return;
     }
@@ -494,7 +497,7 @@ Status acpiParseMadt(const uint8_t *t, uint32_t len, AcpiMadtInfo *out) {
                 } else if (e[3] == 0xFF) {
                     out->malformedEntries++; /* 0xFF is the xAPIC broadcast ID */
                 } else {
-                    madtAddCpu(out, e[3], e[2], acpiRd32(e + 4), false);
+                    madtAddCpu(out, t[8], e[3], e[2], acpiRd32(e + 4), false);
                 }
                 break;
             case 1: /* I/O APIC */
@@ -552,7 +555,12 @@ Status acpiParseMadt(const uint8_t *t, uint32_t len, AcpiMadtInfo *out) {
                 if (elen < 16) {
                     out->malformedEntries++;
                 } else {
-                    madtAddCpu(out, acpiRd32(e + 4), acpiRd32(e + 12), acpiRd32(e + 8), true);
+                    if (acpiRd32(e + 4) == 0xFFFFFFFFu) {
+                        out->malformedEntries++; /* the x2APIC broadcast ID */
+                    } else {
+                        madtAddCpu(out, t[8], acpiRd32(e + 4), acpiRd32(e + 12), acpiRd32(e + 8),
+                                   true);
+                    }
                 }
                 break;
             case 0xA: /* local x2APIC NMI */

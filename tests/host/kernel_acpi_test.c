@@ -582,7 +582,7 @@ static void madtLapic(uint8_t *t, uint32_t *len, uint8_t uid, uint8_t id, uint32
 }
 
 static uint32_t madtStart(uint8_t *t) {
-    mkTable(t, "APIC", 44, 3);
+    mkTable(t, "APIC", 44, 5); /* revision 5: Online-Capable is defined */
     put32(t + 36, 0xFEE00000);
     put32(t + 40, 1);
     fixSum(t, 44);
@@ -1208,4 +1208,24 @@ TEST(acpiIvrsIvhdFields) {
     ASSERT_EQ(v.ivhd[1].featOrAttr, 0x5555u);
     ASSERT_EQ(v.ivhd[1].efr, 0u);
     ASSERT_EQ(v.malformed, 0u);
+}
+
+TEST(acpiMadtOnlineCapableNeedsRevision5) {
+    static uint8_t t[256];
+    AcpiMadtInfo *m = calloc(1, sizeof(*m));
+    for (int rev = 3; rev <= 5; rev++) {
+        uint32_t len = madtStart(t);
+        t[8] = (uint8_t)rev;
+        madtLapic(t, &len, 0, 0, 1); /* enabled */
+        madtLapic(t, &len, 1, 1, 2); /* bit 1 only: reserved before revision 5 */
+        uint8_t x2[16] = {9, 16};
+        put32(x2 + 4, 0xFFFFFFFFu); /* the x2APIC broadcast ID is never a CPU */
+        put32(x2 + 8, 1);
+        madtAdd(t, &len, x2, 16);
+        ASSERT_EQ(acpiParseMadt(t, len, m), STATUS_OK);
+        ASSERT_EQ(m->cpuCount, rev >= 5 ? 2u : 1u);
+        ASSERT_EQ(m->cpusDisabled, rev >= 5 ? 0u : 1u);
+        ASSERT_EQ(m->malformedEntries, 1u);
+    }
+    free(m);
 }

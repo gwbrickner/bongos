@@ -228,10 +228,14 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
      * since the HHDM does not map RESERVED) and parse them. A failure is logged and boot goes on
      * without ACPI: nothing in the kernel depends on it until M3.2. */
     Status acpiSt = acpiInit(&bootInfoCopy, memMapSnapshot, memMapSnapshotCount, cmdlineCopy);
-    if (acpiSt == STATUS_OK) {
+    if (acpiSt == STATUS_OK && acpiGetTables()->dropped == 0) {
         /* D-168: every table is now a kernel copy, so ACPI_RECLAIM may be freed. Never on a
-         * failed acpiInit (nothing was proven safe to drop), and ACPI_NVS never. */
+         * failed acpiInit (nothing was proven safe to drop), never when the table cap dropped
+         * some (their only copy would be lost), and ACPI_NVS never. */
         pmmReclaimAcpiMemory();
+    } else if (acpiSt == STATUS_OK) {
+        klogWrite(KLOG_WARN, "acpi", "%u tables were dropped; ACPI_RECLAIM left reserved",
+                  acpiGetTables()->dropped);
     } else {
         klogWrite(KLOG_WARN, "acpi", "ACPI unavailable (status %d); ACPI_RECLAIM left reserved",
                   (int)acpiSt);

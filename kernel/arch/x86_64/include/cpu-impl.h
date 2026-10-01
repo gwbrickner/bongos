@@ -124,6 +124,22 @@ static inline void archCpuid(uint32_t leaf, uint32_t subleaf, uint32_t regs[4]) 
                      : "a"(leaf), "c"(subleaf));
 }
 
+/* The calling CPU's initial APIC ID: CPUID leaf 0xB's x2APIC ID (EDX) when that leaf is populated,
+ * else leaf 1's EBX[31:24]. What a MADT lists for this CPU (M3.1's acpi_madt_lists_bsp ktest). No
+ * locks, IRQ-safe, pure with respect to visible kernel state. */
+static inline uint32_t archCpuApicId(void) {
+    uint32_t r[4];
+    archCpuid(0, 0, r);
+    if (r[0] >= 0xB) {
+        archCpuid(0xB, 0, r);
+        if ((r[1] & 0xFFFF) != 0) {
+            return r[3];
+        }
+    }
+    archCpuid(1, 0, r);
+    return r[1] >> 24;
+}
+
 /* SDM Vol 2 `RDMSR`/`WRMSR`. No locks; not IRQ-safe (changes/reads privileged CPU state); caller's
  * responsibility that `msr` is valid on this CPU (an invalid MSR takes #GP, unhandled here). */
 static inline uint64_t archRdmsr(uint32_t msr) {
