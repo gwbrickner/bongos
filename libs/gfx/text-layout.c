@@ -100,7 +100,10 @@ static Status layoutPass(const Ctx *c, GfxTextLine *lines, uint32_t *nLines, int
         for (; i < c->n; i++) {
             GfxTextGlyph *r = &g[i];
             if (fixedEnd != 0 && i == fixedEnd) {
-                break; /* the end of a CM run an emergency break had to step over */
+                /* past the CM run an emergency break had to step over: this record is checked
+                 * like any other, so a space hangs, a hard break stays on the line, and a visible
+                 * glyph still over the width breaks the line before it */
+                fixedEnd = 0;
             }
             const uint32_t brk = FLAG_BREAK(r->flags);
             if (i > first && fixedEnd == 0) {
@@ -164,11 +167,8 @@ static Status layoutPass(const Ctx *c, GfxTextLine *lines, uint32_t *nLines, int
                     o++;
                 }
                 /* keep placing the mark run without further overflow checks (each would rescan it:
-                 * quadratic on a megabyte of marks), then break before o if the text goes on */
+                 * quadratic on a megabyte of marks); o is then checked normally */
                 fixedEnd = o;
-                if (o < c->n) {
-                    kind = GFX_TEXT_LINE_END_EMERGENCY;
-                }
             }
         }
         uint8_t endKind = kind;

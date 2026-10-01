@@ -195,6 +195,31 @@ TEST(layoutCombiningMarksStayWithTheirBase) {
     ASSERT_EQ(fx.l.nLines, 2u);
     ASSERT_EQ(fx.l.lines[0].count, 3u);
     ASSERT_EQ(fx.l.lines[0].end, (uint8_t)GFX_TEXT_LINE_END_EMERGENCY);
+    /* after stepping over the run, the next record is treated normally: a hard break stays on the
+     * line (no line holding only the LF), a space hangs, an allowed break is a soft break */
+    ASSERT_EQ(fxLay(&fx, "a\xCC\x81\nb", PX(16), 512, 0, 0), STATUS_OK);
+    ASSERT_EQ(fx.l.nLines, 2u);
+    ASSERT_EQ(fx.l.lines[0].count, 3u);
+    ASSERT_EQ(fx.l.lines[0].end, (uint8_t)GFX_TEXT_LINE_END_HARD);
+    ASSERT_EQ(fx.l.lines[0].widthQ6, 1024);
+    ASSERT_EQ(fxLay(&fx, "a\xCC\x81\r\n", PX(16), 512, 0, 0), STATUS_OK);
+    ASSERT_EQ(fx.l.nLines, 2u);
+    ASSERT_EQ(fx.l.lines[0].count, 4u);
+    ASSERT_EQ(fx.l.lines[1].count, 0u);
+    ASSERT_EQ(fxLay(&fx, "a\xCC\x81  b", PX(16), 512, 0, 0), STATUS_OK);
+    ASSERT_EQ(fx.l.nLines, 2u);
+    ASSERT_EQ(fx.l.lines[0].count, 4u);
+    ASSERT_EQ(fx.l.lines[0].end, (uint8_t)GFX_TEXT_LINE_END_SOFT);
+    ASSERT_EQ(fx.l.lines[0].widthQ6, 1024);
+    ASSERT_TRUE(fx.l.glyphs[2].flags & fx.l.glyphs[3].flags & GFX_TEXT_GLYPH_HANGING);
+    ASSERT_EQ(fx.l.glyphs[4].xQ6, 0);
+    ASSERT_EQ(fxLay(&fx, "a\xCC\x81 ", PX(16), 512, 0, 0), STATUS_OK);
+    ASSERT_EQ(fx.l.nLines, 1u);
+    ASSERT_EQ(fx.l.lines[0].end, (uint8_t)GFX_TEXT_LINE_END_TEXT);
+    ASSERT_EQ(fxLay(&fx, "a\xCC\x81\xE4\xB8\x80", PX(16), 512, 0, 0), STATUS_OK);
+    ASSERT_EQ(fx.l.nLines, 2u); /* the ideograph's allowed break: a soft break after the run */
+    ASSERT_EQ(fx.l.lines[0].count, 2u);
+    ASSERT_EQ(fx.l.lines[0].end, (uint8_t)GFX_TEXT_LINE_END_SOFT);
     fxFree(&fx);
 }
 
@@ -474,6 +499,9 @@ static int checkLayout(const GfxTextLayout *l, const uint8_t *text, size_t len,
             {
                 CHK(brk != GFX_BREAK_NONE || pv->end == GFX_TEXT_LINE_END_EMERGENCY);
                 CHK((pv->end == GFX_TEXT_LINE_END_HARD) == (brk == GFX_BREAK_MANDATORY));
+                /* a line starts with a hard break character only after a hard break */
+                CHK(pv->end == GFX_TEXT_LINE_END_HARD ||
+                    !(l->glyphs[ln->first].flags & GFX_TEXT_GLYPH_HARD));
             }
         }
         /* hanging flags only on trailing spaces */
