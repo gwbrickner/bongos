@@ -108,7 +108,7 @@ ACPI_REQUIRED_KTESTS := acpi_reclaimed pmm_reclaim_keeps_low_memory acpi_tables_
                         acpi_tables_are_kernel_copies acpi_parse_rejects_corrupt \
                         acpi_read_phys_matches_copies acpi_read_phys_releases_kva \
                         acpi_read_phys_refuses_bad_ranges acpi_alloc_free_boundary \
-                        acpi_reload_matches_and_frees
+                        acpi_reload_matches_and_frees acpi_read_phys_offsets_exact
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \

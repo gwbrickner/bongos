@@ -221,6 +221,54 @@ KTEST(acpi_read_phys_matches_copies) {
     KTEST_ASSERT(boundaries >= 1 || skipped >= 1);
 }
 
+/* acpiKernelReadPhys's in-page offset and page-crossing arithmetic, against a ground truth that
+ * does not depend on the firmware: two contiguous pmm pages in memory the range policy allows
+ * (USABLE, or ACPI_RECLAIM that D-168 already freed) filled with a position-dependent pattern
+ * through the HHDM, then read back at odd offsets, across the page boundary, and at both ends.
+ * Needed because on UEFI every table lives in reclaimed ACPI_RECLAIM, so
+ * acpi_read_phys_matches_copies has no firmware bytes left to compare there (and OVMF keeps a
+ * rev-0 RSDP at the RSDP page's offset 0, so a read that drops the offset still "works"). */
+KTEST(acpi_read_phys_offsets_exact) {
+    uint32_t n;
+    const BootMemRegion *map = kernelBootMemMap(&n);
+    Page *held[8];
+    uint32_t heldCount = 0;
+    Page *pg = NULL;
+    while (heldCount < 8) {
+        Page *cand;
+        KTEST_ASSERT_EQ(pmmAllocPages(1, 0, &cand), STATUS_OK);
+        if (acpiPhysRangeAllowed(map, n, pmmPageToPhys(cand), 8192)) {
+            pg = cand;
+            break;
+        }
+        held[heldCount++] = cand; /* e.g. reclaimed LOADER_RECLAIM, which the policy refuses */
+    }
+    for (uint32_t i = 0; i < heldCount; i++) {
+        pmmFreePages(held[i], 1);
+    }
+    KTEST_ASSERT(pg != NULL);
+    uint64_t phys = pmmPageToPhys(pg);
+    volatile uint8_t *v = pmmPageToVirt(pg);
+    for (uint32_t i = 0; i < 8192; i++) {
+        v[i] = (uint8_t)((i * 151u) ^ (i >> 8));
+    }
+    static const struct {
+        uint32_t off, len;
+    } cases[] = {{0, 36},   {1, 1},     {0x14, 36}, {0x13, 4096}, {4095, 2},    {4094, 4},
+                 {4096, 1}, {4097, 37}, {8191, 1},  {1, 8191},    {0x123, 7000}};
+    for (uint32_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        for (uint32_t i = 0; i < cases[c].len; i++) {
+            readBuf[i] = (uint8_t)~v[cases[c].off + i];
+        }
+        KTEST_ASSERT_EQ(acpiKernelReadPhys(map, n, phys + cases[c].off, readBuf, cases[c].len),
+                        STATUS_OK);
+        for (uint32_t i = 0; i < cases[c].len; i++) {
+            KTEST_ASSERT_EQ(readBuf[i], v[cases[c].off + i]);
+        }
+    }
+    pmmFreePages(pg, 1);
+}
+
 /* Every temporary window is unmapped and its KVA range returned. The KVA allocator is first-fit
  * and coalesces, so a probe of the same size taken before and after a read lands on the same VA
  * exactly when the read returned its range; that VA must also be unmapped again. */
