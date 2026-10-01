@@ -821,3 +821,28 @@ TEST(acpiPhysRangePolicy) {
     ASSERT_TRUE(!acpiPhysRangeAllowed(map, n, 0x300000, 0));
     ASSERT_TRUE(!acpiPhysRangeAllowed(map, n, 0xFFFFFFFFFFFFFFF0ull, 0x100));
 }
+
+/* ---- bug-sweeper adversarial tests (M3.1 step 4 sweep) ----------------------------------- */
+
+/* A table whose header can't even be read has no signature: its reject record must say "????",
+ * not repeat the signature of whatever table loadOne() read before it (the root, or a sibling). */
+TEST(acpiLoadUnreadableRejectHasNoStaleSig) {
+    FakeMem m = {0};
+    uint64_t list[] = {0x300000, 0x200000, 0x301000};
+    mkRoots(&m, 0, list, 3);
+    addSimple(&m, 0x200000, "AAAA", 40);
+    /* 0x300000 and 0x301000: unreadable (never added) */
+    AcpiPhysOps ops = fakeOps(&m);
+    AcpiTableSet *s = calloc(1, sizeof(*s));
+    ASSERT_EQ(acpiTablesLoad(&ops, RSDP_PHYS, s), STATUS_OK);
+    ASSERT_EQ(s->count, 2u);
+    ASSERT_EQ(s->rejected, 2u);
+    ASSERT_EQ(s->rejects[0].phys, (uint64_t)0x300000);
+    ASSERT_TRUE(memcmp(s->rejects[0].signature, "????", 4) == 0); /* not the root's "RSDT" */
+    ASSERT_EQ(s->rejects[1].phys, (uint64_t)0x301000);
+    ASSERT_TRUE(memcmp(s->rejects[1].signature, "????", 4) == 0); /* not the sibling's "AAAA" */
+    acpiTablesFree(&ops, s);
+    ASSERT_EQ(m.live, 0);
+    free(s);
+    fakeRelease(&m);
+}

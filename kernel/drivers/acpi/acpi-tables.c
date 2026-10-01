@@ -58,9 +58,13 @@ static void recordReject(AcpiTableSet *set, uint64_t phys, const uint8_t *sig, S
     set->rejected++;
 }
 
-/* Reads, validates and copies the table at `phys` into `*out` (not yet recorded in the set). */
+/* Reads, validates and copies the table at `phys` into `*out` (not yet recorded in the set).
+ * `sigOut` always gets a value: the header's signature, or "????" if the header was unreadable. */
 static Status loadOne(const AcpiPhysOps *ops, uint64_t phys, const char *expectSig,
                       uint8_t sigOut[4], AcpiTable *out) {
+    for (int i = 0; i < 4; i++) {
+        sigOut[i] = '?';
+    }
     uint8_t hdr[ACPI_TABLE_HEADER_LEN];
     Status st = ops->readPhys(ops->ctx, phys, hdr, ACPI_TABLE_HEADER_LEN);
     if (st == STATUS_ERR_NO_MEMORY) {
