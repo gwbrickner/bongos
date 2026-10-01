@@ -239,20 +239,24 @@ static void checkParserFuzz(const FwCase *c) {
     for (unsigned si = 0; si < 4; si++) {
         const AcpiTable *t = acpiTablesFind(&l->set, sigs[si], 0);
         ASSERT_TRUE(t != NULL);
-        uint8_t *buf = malloc(t->length);
         for (uint32_t cut = 0; cut <= t->length; cut++) {
-            memcpy(buf, t->data, cut); /* a table of `cut` bytes (Length field still says full) */
-            Status st = parseBySig(sigs[si], buf, cut);
+            /* A table of exactly `cut` heap bytes (so ASan sees any read past `cut`), first with
+             * the Length field still saying full, then with it saying `cut`. */
+            uint8_t *cutBuf = malloc(cut == 0 ? 1 : cut);
+            memcpy(cutBuf, t->data, cut);
+            Status st = parseBySig(sigs[si], cutBuf, cut);
             ASSERT_TRUE(st == STATUS_OK || st == STATUS_ERR_INVALID);
             if (cut >= 8) {
-                buf[4] = (uint8_t)cut;
-                buf[5] = (uint8_t)(cut >> 8);
-                buf[6] = (uint8_t)(cut >> 16);
-                buf[7] = 0;
-                st = parseBySig(sigs[si], buf, cut);
+                cutBuf[4] = (uint8_t)cut;
+                cutBuf[5] = (uint8_t)(cut >> 8);
+                cutBuf[6] = (uint8_t)(cut >> 16);
+                cutBuf[7] = 0;
+                st = parseBySig(sigs[si], cutBuf, cut);
                 ASSERT_TRUE(st == STATUS_OK || st == STATUS_ERR_INVALID);
             }
+            free(cutBuf);
         }
+        uint8_t *buf = malloc(t->length);
         for (int iter = 0; iter < 1500; iter++) {
             memcpy(buf, t->data, t->length);
             int flips = 1 + (int)(rnd() % 4);
