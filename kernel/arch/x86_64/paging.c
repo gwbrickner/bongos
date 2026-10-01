@@ -220,13 +220,13 @@ void archPatInit(void) {
 
     /* SDM Vol 3A §11.11.8/§11.12.4's MP-safe MSR-write procedure: disable/flush caching around the
      * WRMSR so no stale line survives under the old PAT interpretation. Both preconditions this
-     * relies on are asserted, not just assumed: IF must already be 0 (no IRQ source exists before
-     * M3.2, so a set IF here would mean that contract broke silently -- panic rather than mask it
-     * by disabling interrupts anyway) and this is the BSP alone (SMP is M3.5, so there's no other
-     * CPU to race). CR4.PGE toggling below is what performs the required TLB flush around the
-     * WRMSR (SDM step 5) -- that only works if PGE was actually 1 to begin with, which
-     * ARCHITECTURE §5.4 guarantees the loader always leaves set; asserted rather than trusted
-     * silently, the same way. */
+     * relies on are asserted, not just assumed: IF must already be 0 (archPatInit runs before
+     * irqInit() enables interrupts, so a set IF here would mean that contract broke silently --
+     * panic rather than mask it by disabling interrupts anyway) and this is the BSP alone (SMP is
+     * M3.5, so there's no other CPU to race). CR4.PGE toggling below is what performs the required
+     * TLB flush around the WRMSR (SDM step 5) -- that only works if PGE was actually 1 to begin
+     * with, which ARCHITECTURE §5.4 guarantees the loader always leaves set; asserted rather than
+     * trusted silently, the same way. */
     uint64_t rflags = archIrqSave(); /* restored below -- this is an assertion, not a lock */
     if (rflags & (1ULL << 9)) {
         panic("archPatInit: interrupts are enabled (IF=1), violating the boot-time contract");
@@ -678,7 +678,7 @@ static void clearLeaf(uint64_t va) {
 /* Looks up `pa`'s current HHDM alias (via hhdmLeafEntry(), any leaf size, bounded to the HHDM
  * window) and reports its cache type (VMM_CACHE_WB/WC/UC, decoded from PWT/PCD). `*outPresent` is
  * false if `pa` is past the window or the HHDM rebuild simply never mapped it (a RESERVED/BAD
- * range, D-086). Used by archMapPages' anti- aliasing check (SDM Vol 3A §11.12.4): checking
+ * range, D-086). Used by archMapPages' anti-aliasing check (SDM Vol 3A §11.12.4): checking
  * `pmmPhysToPage() != NULL` alone is wrong in both directions (ACPI_NVS is HHDM-WB but not
  * pmm-managed; FRAMEBUFFER is HHDM-WC and pmm-unmanaged), where this walks the real mapping instead
  * of a proxy for it. */

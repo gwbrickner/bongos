@@ -408,6 +408,9 @@ KTEST(irq_ioapic_pit_routed) {
         ktestFail(ktestCtx, __FILE__, __LINE__,
                   pitOutHigh() ? "PIT reached terminal count but the IRQ was not delivered"
                                : "PIT never reached terminal count");
+        (void)irqUnrouteGsi(gsi);
+        (void)irqUnregister(v);
+        (void)irqFreeVector(v);
         return;
     }
     KTEST_ASSERT_EQ(seen.lastVector, v);

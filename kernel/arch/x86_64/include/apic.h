@@ -42,12 +42,12 @@
  * the IMR, so the remap must come first). Harmless when no 8259 exists. Boot-time, IF=0. */
 void pic8259RemapAndMask(void);
 /* The interrupt mask register of the master (slave = 0) or slave (slave != 0). */
-uint8_t pic8259ReadImr(int slave);
+uint8_t pic8259ReadImr(int slave); /* no locks; IRQ-safe; may not sleep */
 /* The in-service register (OCW3) of the master or slave: how a spurious IRQ7/IRQ15 is told from a
  * real one. No locks; IF must be 0 (the OCW3 select and the read are two port accesses). */
 uint8_t pic8259ReadIsr(int slave);
 /* End-of-interrupt to the master 8259 only. */
-void pic8259EoiMaster(void);
+void pic8259EoiMaster(void); /* no locks; IRQ-safe; may not sleep */
 
 /* --- local APIC (lapic.c) ------------------------------------------------------------------ */
 
@@ -60,6 +60,7 @@ void pic8259EoiMaster(void);
  * made once, by the first call). */
 void lapicInit(const AcpiMadtInfo *madt);
 
+/* True once lapicInit() chose x2APIC mode. No locks; IRQ-safe; may not sleep. */
 bool lapicIsX2apic(void);
 /* This CPU's APIC ID (32-bit in x2APIC mode, 8-bit in xAPIC mode). No locks, IRQ-safe. */
 uint32_t lapicId(void);
@@ -86,19 +87,21 @@ uint32_t lapicReadEsr(void);
  * An IOAPIC that cannot be mapped, or whose GSI range overlaps an earlier one, is logged and
  * skipped. `madt` may be NULL (nothing is mapped). Boot-time, IF=0. */
 void ioapicInitAll(const AcpiMadtInfo *madt);
-/* How many IOAPICs were successfully initialized. */
+/* How many IOAPICs were successfully initialized. ioapicCount/ioapicGsiUsable/ioapicInfo read
+ * state that is immutable after ioapicInitAll(): no locks, IRQ-safe, may not sleep. */
 uint32_t ioapicCount(void);
 /* True iff `gsi` belongs to an initialized IOAPIC and is not a reserved NMI-source GSI. */
 bool ioapicGsiUsable(uint32_t gsi);
 /* Programs `gsi`'s redirection entry to `rte` (written masked first, then the final value, so the
  * pin never fires half-programmed). STATUS_ERR_NOT_FOUND if no initialized IOAPIC owns `gsi`.
- * Takes the IOAPIC lock (IRQ-disable); IRQ-safe. */
+ * IRQ-disable section around the index/data pair; IRQ-safe; may not sleep. */
 Status ioapicWriteRte(uint32_t gsi, uint64_t rte);
 /* Sets or clears only the mask bit of `gsi`'s entry. Same errors and locking. */
 Status ioapicSetMask(uint32_t gsi, bool masked);
 /* Reads `gsi`'s 64-bit entry. Same errors and locking. */
 Status ioapicReadRte(uint32_t gsi, uint64_t *out);
-/* The number of pins and GSI base of IOAPIC `index` (< ioapicCount()). */
+/* The GSI base and pin count of IOAPIC `index`; false (outputs untouched) if `index` >=
+ * ioapicCount(). */
 bool ioapicInfo(uint32_t index, uint32_t *gsiBase, uint32_t *pins);
 
 #endif

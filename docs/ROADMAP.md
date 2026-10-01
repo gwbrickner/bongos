@@ -206,7 +206,7 @@ QEMU-verified only.
 
 **Done when:** the host tests pass, and the boot log lists the CPUs from the MADT and the MCFG base.
 
-### [ ] M3.2 Interrupt controllers `needs-owner`
+### [x] M3.2 Interrupt controllers `needs-owner`
 **Needs:** M3.1
 1. Remap and fully mask the 8259.
 2. Local APIC: x2APIC when supported, otherwise xAPIC through MMIO mapped UC.

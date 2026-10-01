@@ -26,10 +26,11 @@ typedef void (*IrqHandler)(uint32_t vector, void *ctx);
  * local APIC or its registers cannot be mapped. */
 void irqInit(void);
 
-/* Every function below returns STATUS_ERR_INVALID before irqInit() and from IRQ context
- * (irqDepth() > 0). Locks: irqLock and/or the IOAPIC lock, both IRQ-disable only, never nested
- * the other way round (irqLock -> ioapic lock); vmmLock/pmmLock are never taken under either.
- * IRQ-safe with respect to IF (callable with IF=0 or 1). May sleep: no. */
+/* Every Status-returning function below returns STATUS_ERR_INVALID before irqInit() and from IRQ
+ * context (irqDepth() > 0). Locks: none named; the tables (irq.c) and then the IOAPIC index/data
+ * pair (ioapic.c) are protected by IRQ-disable sections (archIrqSave), single CPU until M3.4, in
+ * that order; vmmLock/pmmLock are never taken inside one. IRQ-safe with respect to IF (callable
+ * with IF=0 or 1). May sleep: no. */
 
 /* Allocates the lowest free dynamic vector in [48, 239]. STATUS_ERR_NO_MEMORY if none is left. */
 Status irqAllocVector(uint32_t *outVector);
@@ -61,7 +62,10 @@ Status irqRouteGsi(uint32_t gsi, uint32_t vector, uint32_t flags);
 Status irqUnmaskGsi(uint32_t gsi);
 Status irqMaskGsi(uint32_t gsi); /* STATUS_ERR_NOT_FOUND if `gsi` is not routed */
 /* Masks the pin, waits (bounded) for a level pin's Remote IRR to clear, resets the entry and
- * forgets the route. STATUS_ERR_NOT_FOUND if `gsi` is not routed. */
+ * forgets the route. STATUS_ERR_NOT_FOUND if `gsi` is not routed. Caveat: the wait runs with IRQs
+ * off, so on one CPU a level pin that is still in service never clears and the full bound (about
+ * a million IOAPIC reads) is spent before a warning; unroute level pins only once drained. Edge
+ * pins are never polled. */
 Status irqUnrouteGsi(uint32_t gsi);
 
 /* 1 while an interrupt handler is running on this CPU, else 0 (BSP-global until M3.5 moves it to

@@ -698,8 +698,9 @@ does not feed the canary) -- never reseeded afterward.
   of boot and every ktest run with interrupts enabled.
 
 ### 7.2 Interrupt vectors
-All 256 IDT gates are populated (interrupt gates, DPL0 except vector 3's DPL3); an unregistered
-vector still reports a diagnosable panic rather than triple-faulting. #BP (int3) resumes normally
+All 256 IDT gates are populated (interrupt gates, DPL0 except vector 3's DPL3); an unexpected
+exception (0-31) reports a diagnosable panic rather than triple-faulting (vectors 32-255 follow the
+dispatch policy below). #BP (int3) resumes normally
 (a trap, not a fault: the saved RIP already points past the `int3` byte); every other exception
 panics unless a ktest has armed `archTrapCatch()` for it (§23) -- NMI/#DF/#MC can never be caught
 this way and always panic, since M2.1 has no legitimate source for any of them and CR4.MCE isn't

@@ -116,7 +116,7 @@ ACPI_REQUIRED_KTESTS := acpi_reclaimed pmm_reclaim_keeps_low_memory acpi_tables_
 # every row must show, and a negative check: the only irq/lapic/ioapic warning or error a clean boot
 # may print is the single, expected "unhandled vector" line from irq_unhandled_vector_eoi (a second
 # one would mean a stray or stale interrupt reached the kernel).
-IRQ_REQUIRED_KTESTS := vmm_map_uc irq_pic_masked irq_legacy_spurious_counted irq_lapic_state \
+IRQ_REQUIRED_KTESTS := vmm_map_uc vmm_mmio_edges vmm_mmio_unmap_misuse paging_mmio_uc_pat irq_pic_masked irq_legacy_spurious_counted irq_lapic_state \
                        irq_vector_alloc_exhaust irq_register_rules irq_self_ipi_delivered \
                        irq_self_ipi_pending_while_if0 irq_spurious_vector_no_eoi \
                        irq_unhandled_vector_eoi irq_ioapic_masked_at_init \

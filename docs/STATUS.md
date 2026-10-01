@@ -3,16 +3,17 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-01 (M3.1 merged; M3.2 started)
+**Last updated:** 2026-10-01 (M3.2 finished, awaiting owner merge; M3.3 is next)
 
 ## Next step
-**M3.2 Interrupt controllers** is code-complete and swept on branch `claude/nifty-bell-wrb444` (tests green, `SWEEP: PASS`);
-remaining finish items are in `docs/logs/M3.2.md`: the `reviewer` verdict (fix Criticals), the D-175 wording fix (CI
-may run KVM, so the x2APIC path may run there), `make screenshot` PNGs, ROADMAP box + log Summary, then the PR (not
-opened yet: the owner has not asked for it).
+**M3.2 Interrupt controllers is finished** (sweep PASS, review PASS, all tests green) on branch `claude/nifty-bell-wrb444`
+and waits for the owner: no PR is open yet because the session was not asked to open one. Open it with the template in
+`.github/pull_request_template.md` (title `M3.2: Interrupt controllers`, `needs-owner: yes`, lines `Sweeper: PASS
+(docs/sweeps/M3.2.md)` and `Reviewer: PASS`, screenshot `docs/screenshots/M3.2.png`). Then start **M3.3 Timekeeping**
+(Needs M3.2) and **M3.4 Locking + lock validator** (Needs M3.2): lowest-numbered first is M3.3.
 
 ## Current milestone
-M3.2 Interrupt controllers (finishing; M3.1 is merged, PR #19).
+None in progress (M3.2 is awaiting owner merge).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -31,6 +32,7 @@ M3.2 Interrupt controllers (finishing; M3.1 is merged, PR #19).
 | M2.5 | [#11](https://github.com/gwbrickner/bongos/pull/11) | BIOS loader: stage1 MBR, stage2 with a real-mode thunk, E820/VBE, a GPT+FAT32 reader, the shared menu and handoff. One image boots both ways |
 | M2.6 | [#16](https://github.com/gwbrickner/bongos/pull/16) | KASLR in both loaders (2 MiB slide, `--emit-relocs` relocation, `kaslr=off`), slide-aware symbolizer, `libs/crypto` (SHA-256, ChaCha20), kernel RNG (`randomGetBytes`) |
 | M3.1 | [#19](https://github.com/gwbrickner/bongos/pull/19) | ACPI tables: RSDP/XSDT/RSDT loader, FADT/MADT/MCFG/HPET/IVRS parsers, tables copied through temporary KVA windows (works on BIOS and UEFI), ACPI_RECLAIM freed after the copy, `acpidump=1` + `tools/acpiextract`, stored QEMU q35 tables, D-166..D-170 |
+| M3.2 | (PR not opened yet) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
 
 The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB and 4-CPU rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
@@ -39,6 +41,7 @@ boot screens are in `docs/screenshots/`.
 _(none)_
 
 ## Questions for owner
+- **M3.2:** (1) LINT1 is programmed as NMI/unmasked per the MADT (any NMI still panics, D-074); OK, or keep it masked until a watchdog milestone? (2) LVT Error stays masked (no handler); OK? (3) Unregistered vectors are logged once, counted and EOI'd in every build, never a panic; OK? (4) `irqUnrouteGsi` of a level pin stalls (sweep lead S4); fix at the first level-pin user. (5) CI may run KVM, so the x2APIC path may run there for the first time: check the CI log for `lapic: mode=x2apic`.
 - **M3.1:** (1) Checksum strictness: reject a bad-checksum table (D-167, as designed) or warn and use it
   like Linux? (2) OK to commit QEMU's table blobs (incl. its DSDT AML) under `tests/data/acpi/`? (3) OK to keep
   `acpidump=1` in `tests/harness/ktest-boot.cfg` (30-60 KiB extra serial per matrix row)? (4) Reclaiming
@@ -60,6 +63,9 @@ _(none)_
   someone with network access should still diff it against RFC 8439 2.3.2/2.4.2/A.1/A.2 and FIPS 180-4.
 
 ## Waiting on owner (hardware checks and other owner-only steps)
+- **M3.2 hardware check** (optional; never blocks): boot the USB stick on the reference PC and check the `lapic:`
+  (expect `mode=x2apic`), `ioapic:`, `irq:` lines and that boot reaches `kernel: init done` with no irq/lapic/ioapic
+  warnings. Full steps are in `docs/logs/M3.2.md`, "Owner hardware check".
 - **M3.1 hardware check** (optional; never blocks): boot the USB stick on the reference PC with `acpidump=1` in
   `boot.cfg`'s `cmdline`, check the `acpi:` lines (CPU list, MCFG base, no rejected tables), and ideally save the
   serial log for `tools/acpiextract`. Full steps are in `docs/logs/M3.1.md`, "Owner hardware check".

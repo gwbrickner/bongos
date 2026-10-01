@@ -252,14 +252,19 @@ Status irqUnrouteGsi(uint32_t gsi) {
             /* A level pin whose Remote IRR is still set must not be reprogrammed (82093AA §3.2.4);
              * the EOI that clears it arrives only once its in-service vector retires. */
             uint64_t rte = 0;
-            for (uint32_t i = 0; i < 1000000; i++) {
-                if (ioapicReadRte(gsi, &rte) != STATUS_OK || (rte & (1ULL << 14)) == 0) {
-                    break;
+            /* Remote IRR is undefined for an edge entry, so only a level pin is polled. IRQs are
+             * off here, so on one CPU the EOI that clears it cannot run: the bound is a stall
+             * (D-174, sweep lead S4); the first level-pin user must unroute only drained pins. */
+            if (ioapicReadRte(gsi, &rte) == STATUS_OK && (rte & (1ULL << 15)) != 0) {
+                for (uint32_t i = 0; i < 1000000; i++) {
+                    if (ioapicReadRte(gsi, &rte) != STATUS_OK || (rte & (1ULL << 14)) == 0) {
+                        break;
+                    }
+                    archPause();
                 }
-                archPause();
-            }
-            if (rte & (1ULL << 14)) {
-                klogWrite(KLOG_WARN, "irq", "GSI %u: Remote IRR still set at unroute", gsi);
+                if (rte & (1ULL << 14)) {
+                    klogWrite(KLOG_WARN, "irq", "GSI %u: Remote IRR still set at unroute", gsi);
+                }
             }
             st = ioapicWriteRte(gsi, irqCoreRteEncode(0, false, false, true, 0));
             vectorGsi[v] = NO_GSI;

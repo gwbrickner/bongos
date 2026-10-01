@@ -15,6 +15,7 @@
 #define IOAPIC_REG_ID       0x00u
 #define IOAPIC_REG_VER      0x01u
 #define IOAPIC_REG_REDIR    0x10u /* entry p: low dword 0x10 + 2p, high dword 0x11 + 2p */
+#define IOAPIC_MAX_PINS     120u  /* (0xFF - 0x10 + 1) / 2 */
 #define IOAPIC_MMIO_SIZE    0x50u /* IOREGSEL 0x00, IOWIN 0x10, EOI 0x40 (version >= 0x20) */
 #define IOAPIC_RTE_MASK_BIT (1u << 16)
 
@@ -65,6 +66,13 @@ void ioapicInitAll(const AcpiMadtInfo *madt) {
         uint32_t ver = regRead(&io, IOAPIC_REG_VER);
         archIrqRestore(f);
         IrqGsiRange range = {a->gsiBase, irqCoreIoapicPins(ver)};
+        if (range.pins > IOAPIC_MAX_PINS) {
+            /* IOREGSEL is 8 bits: entry p occupies registers 0x10+2p and 0x11+2p, so only 120
+             * entries are addressable. A larger count is a garbage version register. */
+            klogWrite(KLOG_WARN, "ioapic", "id %u: version register claims %u pins; using %u",
+                      a->id, range.pins, IOAPIC_MAX_PINS);
+            range.pins = IOAPIC_MAX_PINS;
+        }
         if (irqCoreGsiOverlaps(ranges, count, range)) {
             klogWrite(KLOG_ERROR, "ioapic", "id %u: GSIs %u-%u overlap an earlier IOAPIC, skipped",
                       a->id, range.gsiBase, range.gsiBase + range.pins - 1);
