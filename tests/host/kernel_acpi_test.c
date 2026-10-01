@@ -877,3 +877,151 @@ TEST(acpiPhysRangePolicyEdges) {
     ASSERT_TRUE(!acpiPhysRangeAllowed(map, n, 0xFFFFFFFFFFFFF000ull, 0x1000)); /* wraps to 0 */
     ASSERT_TRUE(!acpiPhysRangeAllowed(map, n, 0xFFFFFFFFFFFFFFFFull, 1));
 }
+
+static uint64_t fuzzState = 0x9E3779B97F4A7C15ull;
+static uint32_t fuzzNext(void) {
+    fuzzState ^= fuzzState << 13;
+    fuzzState ^= fuzzState >> 7;
+    fuzzState ^= fuzzState << 17;
+    return (uint32_t)(fuzzState >> 16);
+}
+
+/* Every parser, fed random bodies of every length from 0 to 600 behind a header whose signature
+ * and Length are right (so the body is actually parsed), must stay inside `len` bytes (ASan: the
+ * buffer is exactly `len` bytes on the heap) and return OK or INVALID. Entry-structured bodies
+ * (small, plausible entry lengths) reach the MADT/IVRS per-type paths. */
+TEST(acpiParsersSurviveRandomBodies) {
+    static const char *sigs[] = {"FACP", "APIC", "MCFG", "HPET", "IVRS"};
+    AcpiFadtInfo *fadt = malloc(sizeof(*fadt));
+    AcpiMadtInfo *madt = malloc(sizeof(*madt));
+    AcpiMcfgInfo *mcfg = malloc(sizeof(*mcfg));
+    AcpiHpetInfo *hpet = malloc(sizeof(*hpet));
+    AcpiIvrsInfo *ivrs = malloc(sizeof(*ivrs));
+    for (uint32_t len = 0; len <= 600; len++) {
+        for (int iter = 0; iter < 8; iter++) {
+            uint8_t *t = malloc(len == 0 ? 1 : len);
+            for (uint32_t i = 0; i < len; i++) {
+                t[i] = (uint8_t)fuzzNext();
+            }
+            if (iter & 1) { /* plausible entry lengths: 0..24 */
+                for (uint32_t i = 44; i + 1 < len; i += 2) {
+                    t[i + 1] = (uint8_t)(fuzzNext() % 25);
+                }
+            }
+            for (int k = 0; k < 5; k++) {
+                if (len >= 8) {
+                    memcpy(t, sigs[k], 4);
+                    put32(t + 4, len);
+                }
+                Status st[5];
+                st[0] = acpiParseFadt(t, len, fadt);
+                st[1] = acpiParseMadt(t, len, madt);
+                st[2] = acpiParseMcfg(t, len, mcfg);
+                st[3] = acpiParseHpet(t, len, hpet);
+                st[4] = acpiParseIvrs(t, len, ivrs);
+                for (int j = 0; j < 5; j++) {
+                    ASSERT_TRUE(st[j] == STATUS_OK || st[j] == STATUS_ERR_INVALID);
+                    if (j != k) {
+                        ASSERT_EQ(st[j], STATUS_ERR_INVALID); /* wrong signature */
+                    }
+                }
+                if (st[1] == STATUS_OK) {
+                    ASSERT_TRUE(madt->cpuCount <= ACPI_MAX_CPUS);
+                    ASSERT_TRUE(madt->ioapicCount <= ACPI_MAX_IOAPICS);
+                    ASSERT_TRUE(madt->isoCount <= ACPI_MAX_ISOS);
+                    ASSERT_TRUE(madt->nmiSourceCount <= ACPI_MAX_NMI_SOURCES);
+                    ASSERT_TRUE(madt->lapicNmiCount <= ACPI_MAX_LAPIC_NMIS);
+                }
+                if (st[4] == STATUS_OK) {
+                    ASSERT_TRUE(ivrs->ivhdCount <= ACPI_MAX_IVHD);
+                    ASSERT_TRUE(ivrs->raw == t && ivrs->rawLen == len);
+                }
+            }
+            free(t);
+        }
+    }
+    free(fadt);
+    free(madt);
+    free(mcfg);
+    free(hpet);
+    free(ivrs);
+}
+
+/* The loader over a random fake memory: random RSDP revision and root, random entries that point
+ * at random (often garbage, sometimes valid) tables, random allocation failures. Whatever happens,
+ * the result is OK/INVALID/NO_MEMORY, every kept table is checksum-valid with a matching header,
+ * and freeing the set returns every allocation (and a non-OK result leaves none behind). */
+TEST(acpiLoadSurvivesRandomMemory) {
+    static const char *sigs[] = {"FACP", "APIC", "DSDT", "SSDT", "XSDT", "RSDT", "MCFG"};
+    for (int iter = 0; iter < 400; iter++) {
+        FakeMem m = {0};
+        uint64_t list[24];
+        int n = (int)(fuzzNext() % 24);
+        for (int i = 0; i < n; i++) {
+            uint32_t r = fuzzNext() % 16;
+            list[i] = r < 12 ? 0x200000 + (uint64_t)r * 0x1000 : (uint64_t)fuzzNext() << 8;
+        }
+        for (int i = 0; i < 12; i++) {
+            uint32_t len = 36 + fuzzNext() % 300;
+            uint8_t *t = malloc(len);
+            if (fuzzNext() % 4 == 0) {
+                for (uint32_t j = 0; j < len; j++) {
+                    t[j] = (uint8_t)fuzzNext();
+                }
+            } else {
+                const char *sig = sigs[fuzzNext() % 7];
+                if (sig[0] == 'F' && len < 148) {
+                    len = 148 + fuzzNext() % 140;
+                    free(t);
+                    t = malloc(len);
+                }
+                mkTable(t, sig, len, (uint8_t)(fuzzNext() % 7));
+                for (uint32_t j = 36; j < len; j++) {
+                    t[j] = (uint8_t)fuzzNext();
+                }
+                if (sig[0] == 'F') { /* DSDT / X_DSDT at one of the random blocks, or garbage */
+                    put32(t + 40, 0x200000 + (fuzzNext() % 14) * 0x1000);
+                    put64(t + 140, fuzzNext() % 2 ? 0 : 0x200000 + (fuzzNext() % 14) * 0x1000);
+                }
+                if (fuzzNext() % 8 != 0) {
+                    fixSum(t, len);
+                }
+            }
+            if (fuzzNext() % 6 == 0) {
+                put32(t + 4, fuzzNext()); /* a hostile Length */
+            }
+            fakePut(&m, 0x200000 + (uint64_t)i * 0x1000, t, len);
+            free(t);
+        }
+        mkRoots(&m, (uint8_t)(fuzzNext() % 4), list, n);
+        m.failAllocAt = fuzzNext() % 3 == 0 ? (int)(1 + fuzzNext() % 10) : 0;
+        AcpiPhysOps ops = fakeOps(&m);
+        AcpiTableSet *s = calloc(1, sizeof(*s));
+        Status st = acpiTablesLoad(&ops, RSDP_PHYS, s);
+        ASSERT_TRUE(st == STATUS_OK || st == STATUS_ERR_INVALID || st == STATUS_ERR_NO_MEMORY);
+        if (st != STATUS_OK) {
+            ASSERT_EQ(s->count, 0u);
+            ASSERT_EQ(m.live, 0);
+        } else {
+            ASSERT_TRUE(s->count >= 1 && s->count <= ACPI_MAX_TABLES);
+            for (uint32_t i = 0; i < s->count; i++) {
+                const AcpiTable *t = &s->tables[i];
+                ASSERT_TRUE(t->length >= ACPI_TABLE_HEADER_LEN);
+                ASSERT_EQ(acpiRd32(t->data + 4), t->length);
+                ASSERT_TRUE(memcmp(t->data, t->signature, 4) == 0);
+                ASSERT_EQ(acpiChecksum(t->data, t->length), 0u);
+            }
+            ASSERT_TRUE(s->dsdtIndex < 0 ||
+                        memcmp(s->tables[s->dsdtIndex].signature, "DSDT", 4) == 0);
+            ASSERT_TRUE(s->fadtIndex < 0 ||
+                        memcmp(s->tables[s->fadtIndex].signature, "FACP", 4) == 0);
+            AcpiInfo *info = malloc(sizeof(*info));
+            acpiParseAll(s, info);
+            free(info);
+            acpiTablesFree(&ops, s);
+            ASSERT_EQ(m.live, 0);
+        }
+        free(s);
+        fakeRelease(&m);
+    }
+}
