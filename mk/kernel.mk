@@ -47,7 +47,8 @@ KERNEL_UBSAN_FLAGS := $(if $(filter 1,$(RELEASE)),,-fsanitize=$(KERNEL_UBSAN_CHE
 # deliberately NOT in this list -- it needs a different object per link pass, so it's added
 # explicitly at each $(ld.lld) invocation instead of once here.
 KERNEL_C_SOURCES := $(sort $(wildcard kernel/core/*.c) $(wildcard kernel/drivers/serial/*.c) \
-                           $(wildcard kernel/drivers/fbcon/*.c) $(wildcard kernel/test/*.c) \
+                           $(wildcard kernel/drivers/fbcon/*.c) $(wildcard kernel/drivers/acpi/*.c) \
+                           $(wildcard kernel/test/*.c) \
                            $(wildcard kernel/arch/x86_64/*.c) $(wildcard kernel/arch/x86_64/test/*.c) \
                            $(wildcard kernel/mm/*.c) $(wildcard libs/crypto/*.c) \
                            boot/common/fbtext.c boot/common/boot-status.c) $(CONSOLE_FONT_C)
