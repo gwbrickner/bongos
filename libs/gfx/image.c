@@ -93,5 +93,11 @@ Status gfxImageDecode(const uint8_t *data, size_t size, const GfxDecodeLimits *l
     if (size >= 2 && data[0] == 'B' && data[1] == 'M') {
         return gfxBmpDecode(data, size, lim, a, out);
     }
+    if (size >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) {
+        return gfxJpegDecode(data, size, lim, a, out);
+    }
+    if (size >= 6 && (memcmp(data, "GIF87a", 6) == 0 || memcmp(data, "GIF89a", 6) == 0)) {
+        return gfxGifDecode(data, size, lim, a, out);
+    }
     return STATUS_ERR_UNSUPPORTED;
 }
