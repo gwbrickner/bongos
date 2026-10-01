@@ -3,17 +3,16 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-09-30 (M2.6 finished and awaiting owner merge; M3.1 is next)
+**Last updated:** 2026-10-01 (M2.6 merged; M3.1 in progress)
 
 ## Next step
-Start **M3.1 ACPI tables** (its Need, M2.4, is done), after the owner merges the M2.6 PR
-(`needs-owner`). M2.6's finish gate is complete except that the owner waived the finish-mode
-`bug-sweeper` (see `docs/logs/M2.6.md` "Verification" for exactly what no sweep covered).
-1. `git fetch origin main && git switch -c m3-1-acpi-tables origin/main`
-2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M3.1.md` and write its Plan from ROADMAP.md.
+**M3.1 step 2** (see `docs/logs/M3.1.md`): create `kernel/include/acpi-tables.h` and
+`kernel/drivers/acpi/acpi-tables.c` (pure core: `acpiTablesLoad`, FADT/MADT/MCFG/HPET/IVRS parsers),
+add `tests/host/kernel_acpi_test.c` with synthetic-table tests, and wire `mk/kernel.mk` and
+`mk/host-tests.mk`. Check with `make host-tests`.
 
 ## Current milestone
-None in progress (M2.6 is awaiting owner merge).
+M3.1 ACPI tables, branch `m3-1-acpi-tables` (plan and design done, step 1 of 7).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -39,6 +38,10 @@ boot screens are in `docs/screenshots/`.
 _(none)_
 
 ## Questions for owner
+- **M3.1:** (1) Checksum strictness: reject a bad-checksum table (D-167, as designed) or warn and use it
+  like Linux? (2) OK to commit QEMU's table blobs (incl. its DSDT AML) under `tests/data/acpi/`? (3) OK to keep
+  `acpidump=1` in `tests/harness/ktest-boot.cfg` (30-60 KiB extra serial per matrix row)? (4) Reclaiming
+  ACPI_RECLAIM for good means Phase-2 AML serves `DataTableRegion` from the copies; accepted?
 - `BootInfo.bootDiskGuid` and `bootPartGuid` (D-056) have no milestone that fills them yet,
   so both stay zero. Suggestion: use the UEFI PartitionInfo protocol plus a BlockIo
   GPT-header read (the BIOS loader already has a GPT reader, D-105), in M6.4 (which adds the

@@ -959,6 +959,13 @@ then a triple fault. No sleep states in v1.
 - A **minimal AML evaluator**, enough to evaluate `\_S5_` for shutdown.
 - The SCI and the power-button fixed event, which trigger an orderly shutdown through `svcd`.
 
+**Table access (M3.1, D-166..D-168):** the kernel never reads firmware memory through the HHDM (it
+does not map RESERVED, where BIOS keeps the RSDP and all tables). It copies each validated table
+through a temporary read-only KVA mapping into kmalloc/vmalloc memory and keeps only the copies;
+the parsers (`kernel/drivers/acpi/acpi-tables.c`, host-tested) work on copies. `ACPI_RECLAIM` is
+freed (`pmmReclaimAcpiMemory`) only after `acpiInit` succeeds; `ACPI_NVS` never. `acpidump=1` dumps
+the tables over serial (`docs/specs/acpidump.md`).
+
 **Phase 2 (full interpreter):**
 - The complete ACPI 6.x AML opcode set, the namespace, methods with locals and args, and
   `Mutex`/`Event`.
