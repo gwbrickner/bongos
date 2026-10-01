@@ -26,9 +26,9 @@ static inline PmmZoneId pmmZoneOfPfn(uint64_t pfn) {
 
 /* --- pmm-map.c: pure BootInfo-map scan (host-tested by tests/host/kernel_pmm_map_test.c) --- */
 
-#define PMM_MAX_SPANS          128
-#define PMM_MAX_USABLE_RANGES  256
-#define PMM_MAX_RECLAIM_RANGES 16
+#define PMM_MAX_SPANS         128
+#define PMM_MAX_USABLE_RANGES 256
+/* PMM_MAX_RECLAIM_RANGES lives in pmm.h (ktests model which ACPI_RECLAIM regions D-168 frees). */
 
 typedef struct {
     uint64_t startPfn, endPfn; /* [start, end), order-10 aligned and merged */

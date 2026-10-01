@@ -16,6 +16,12 @@
 #define PMM_MAX_ORDER   10
 #define PMM_ORDER_COUNT (PMM_MAX_ORDER + 1)
 
+/* How many LOADER_RECLAIM and, separately, ACPI_RECLAIM regions pmmMapScan() records (PmmMap in
+ * kernel/mm/pmm-internal.h). Only the first this-many ACPI_RECLAIM regions in map order are ever
+ * freed by pmmReclaimAcpiMemory(); later ones stay RESERVED (D-168). Public so ktests can model
+ * exactly which ACPI_RECLAIM pages must have been freed. */
+#define PMM_MAX_RECLAIM_RANGES 16
+
 /* The Page array (VM_PAGE_ARRAY_BASE..VM_PAGE_ARRAY_END, page.h) must be able to hold one Page
  * per frame across the entire 64 TiB HHDM window -- confirms the fixed VA region ARCHITECTURE
  * §6.1 sets aside for it is actually big enough (1 TiB needed, 16 TiB available). */

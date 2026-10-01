@@ -144,15 +144,27 @@ static bool hhdmContains(uint64_t va, uint64_t hhdm) {
  * vmalloc buffer of its own); windows are used for everything else. */
 static uint8_t readBuf[16384];
 
-/* True if [phys, phys+len) touches an ACPI_RECLAIM region. After pmmReclaimAcpiMemory() (D-168)
- * such memory is zeroed, freed and possibly reused -- including by the kernel's own table copies --
- * so firmware bytes can no longer be compared against it. Everything else (RESERVED on BIOS,
- * ACPI_NVS) still holds the firmware's bytes. */
-static bool touchesAcpiReclaim(const BootMemRegion *map, uint32_t n, uint64_t phys, uint64_t len) {
+/* True if [phys, phys+len) touches an ACPI_RECLAIM page pmmReclaimAcpiMemory() (D-168) actually
+ * freed: such memory is zeroed, freed and possibly reused -- including by the kernel's own table
+ * copies -- so firmware bytes can no longer be compared against it. Decided by the page's state,
+ * not by the map type alone: ACPI_RECLAIM below 1 MiB, past the HHDM window, beyond the
+ * PMM_MAX_RECLAIM_RANGES recorded regions, or on a boot whose acpiInit failed is never freed and
+ * still holds the firmware's bytes (acpi_reclaimed proves the states match that model). */
+static bool touchesFreedAcpiReclaim(const BootMemRegion *map, uint32_t n, uint64_t phys,
+                                    uint64_t len) {
     for (uint32_t i = 0; i < n; i++) {
-        if (map[i].type == BOOT_MEM_ACPI_RECLAIM && phys < map[i].base + map[i].length &&
-            phys + len > map[i].base) {
-            return true;
+        if (map[i].type != BOOT_MEM_ACPI_RECLAIM || phys >= map[i].base + map[i].length ||
+            phys + len <= map[i].base) {
+            continue;
+        }
+        uint64_t lo = phys > map[i].base ? phys : map[i].base;
+        uint64_t hi =
+            phys + len < map[i].base + map[i].length ? phys + len : map[i].base + map[i].length;
+        for (uint64_t page = lo & ~(uint64_t)0xFFF; page < hi; page += 4096) {
+            Page *p = page < BOOTINFO_HHDM_SIZE ? pmmPhysToPage(page) : NULL;
+            if (p != NULL && p->state != PAGE_STATE_RESERVED) {
+                return true;
+            }
         }
     }
     return false;
@@ -168,7 +180,7 @@ KTEST(acpi_read_phys_matches_copies) {
     uint32_t n;
     const BootMemRegion *map = kernelBootMemMap(&n);
     uint32_t boundaries = 0, skipped = 0;
-    if (touchesAcpiReclaim(map, n, s->rsdpPhys, s->rsdpLength)) {
+    if (touchesFreedAcpiReclaim(map, n, s->rsdpPhys, s->rsdpLength)) {
         skipped++;
     } else {
         KTEST_ASSERT_EQ(acpiKernelReadPhys(map, n, s->rsdpPhys, readBuf, s->rsdpLength), STATUS_OK);
@@ -178,7 +190,7 @@ KTEST(acpi_read_phys_matches_copies) {
     }
     for (uint32_t ti = 0; ti < s->count; ti++) {
         const AcpiTable *t = &s->tables[ti];
-        if (touchesAcpiReclaim(map, n, t->phys, t->length)) {
+        if (touchesFreedAcpiReclaim(map, n, t->phys, t->length)) {
             skipped++; /* reclaimed and zeroed (UEFI); the BIOS boot checks these tables */
             continue;
         }
@@ -369,14 +381,27 @@ KTEST(acpi_reload_matches_and_frees) {
     AcpiPhysOps ops = {NULL, reloadRead, reloadAlloc, reloadFree};
     uint32_t mapCount;
     const BootMemRegion *map = kernelBootMemMap(&mapCount);
-    if (touchesAcpiReclaim(map, mapCount, s->rsdpPhys, s->rsdpLength)) {
-        /* UEFI: the RSDP lived in ACPI_RECLAIM, now zeroed and freed (D-168), so a second load
-         * must fail cleanly (no RSDP) and leak nothing. */
+    bool rsdpFreed = touchesFreedAcpiReclaim(map, mapCount, s->rsdpPhys, s->rsdpLength);
+    bool tableFreed = false;
+    for (uint32_t i = 0; i < s->count; i++) {
+        tableFreed = tableFreed ||
+                     touchesFreedAcpiReclaim(map, mapCount, s->tables[i].phys, s->tables[i].length);
+    }
+    if (rsdpFreed || tableFreed) {
+        /* UEFI: the tables lived in ACPI_RECLAIM, now zeroed and freed (D-168), so a second load
+         * cannot reproduce them. With the RSDP itself gone it must fail cleanly (no RSDP); with
+         * only some tables gone (an RSDP below 1 MiB, say) its result is unspecified. Either way
+         * it must not crash and must leak nothing. */
         VmallocStats vBefore, vAfter;
         vmallocGetStats(&vBefore);
         uint64_t kBefore = kmallocLiveForTables(s);
-        KTEST_ASSERT(acpiTablesLoad(&ops, kernelBootInfo()->rsdpPhys, &reloadSet) ==
-                     STATUS_ERR_INVALID);
+        Status st = acpiTablesLoad(&ops, kernelBootInfo()->rsdpPhys, &reloadSet);
+        if (rsdpFreed) {
+            KTEST_ASSERT(st == STATUS_ERR_INVALID);
+        }
+        if (st == STATUS_OK) {
+            acpiTablesFree(&ops, &reloadSet);
+        }
         KTEST_ASSERT_EQ(reloadSet.count, 0u);
         vmallocGetStats(&vAfter);
         KTEST_ASSERT_EQ(vAfter.areas, vBefore.areas);
@@ -408,31 +433,51 @@ KTEST(acpi_reload_matches_and_frees) {
     }
 }
 
-/* D-168: ACPI_RECLAIM was freed (after acpiInit copied the tables), ACPI_NVS and RESERVED never
- * were. On BIOS there is no ACPI_RECLAIM at all (SeaBIOS reports its tables RESERVED), which is
- * legitimate: then nothing is checked beyond the count being 0. */
+/* D-168: exactly the ACPI_RECLAIM pages pmmReclaimAcpiMemory() may free were freed, and nothing
+ * else: the first PMM_MAX_RECLAIM_RANGES ACPI_RECLAIM regions in map order, clipped to [1 MiB,
+ * HHDM), and only if acpiInit succeeded (acpiGetTables() != NULL). Every other ACPI_RECLAIM page
+ * (below 1 MiB, an overflow region, or a failed acpiInit) and every ACPI_NVS/RESERVED page with a
+ * Page entry is still RESERVED. On BIOS there is no ACPI_RECLAIM at all (SeaBIOS reports its tables
+ * RESERVED), which is legitimate: then only the RESERVED/NVS side and the 0 count are checked. */
 KTEST(acpi_reclaimed) {
     uint32_t count;
     const BootMemRegion *regions = kernelBootMemMap(&count);
+    bool acpiOk = acpiGetTables() != NULL;
+    /* Page entries exist only up to the last managed region (plus span padding), so the RESERVED
+     * walk stops there instead of crawling multi-GiB holes. */
+    uint64_t managedEnd = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t t = regions[i].type;
+        if (t == BOOT_MEM_USABLE || t == BOOT_MEM_LOADER_RECLAIM || t == BOOT_MEM_KERNEL ||
+            t == BOOT_MEM_INITRD || t == BOOT_MEM_ACPI_RECLAIM) {
+            managedEnd = regions[i].base + regions[i].length;
+        }
+    }
+    if (managedEnd > BOOTINFO_HHDM_SIZE) {
+        managedEnd = BOOTINFO_HHDM_SIZE;
+    }
+    managedEnd = (managedEnd + (4096ull << PMM_MAX_ORDER) - 1) & ~((4096ull << PMM_MAX_ORDER) - 1);
+
     uint64_t expectPages = 0;
+    uint32_t acpiOrdinal = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint64_t base = regions[i].base;
         uint64_t end = base + regions[i].length;
         if (regions[i].type == BOOT_MEM_ACPI_RECLAIM) {
-            if (base < 0x100000) {
-                base = 0x100000;
-            }
-            if (end > BOOTINFO_HHDM_SIZE) {
-                end = BOOTINFO_HHDM_SIZE;
-            }
-            for (uint64_t phys = base; phys < end; phys += 4096) {
+            bool freed = acpiOk && acpiOrdinal < PMM_MAX_RECLAIM_RANGES;
+            acpiOrdinal++;
+            for (uint64_t phys = base; phys < end && phys < BOOTINFO_HHDM_SIZE; phys += 4096) {
                 Page *p = pmmPhysToPage(phys);
                 KTEST_ASSERT(p != NULL);
-                KTEST_ASSERT(p->state != PAGE_STATE_RESERVED);
-                expectPages++;
+                if (freed && phys >= 0x100000) {
+                    KTEST_ASSERT(p->state != PAGE_STATE_RESERVED);
+                    expectPages++;
+                } else {
+                    KTEST_ASSERT(p->state == PAGE_STATE_RESERVED);
+                }
             }
-        } else if (regions[i].type == BOOT_MEM_ACPI_NVS) {
-            for (uint64_t phys = base; phys < end; phys += 4096) {
+        } else if (regions[i].type == BOOT_MEM_ACPI_NVS || regions[i].type == BOOT_MEM_RESERVED) {
+            for (uint64_t phys = base; phys < end && phys < managedEnd; phys += 4096) {
                 Page *p = pmmPhysToPage(phys);
                 KTEST_ASSERT(p == NULL || p->state == PAGE_STATE_RESERVED);
             }
@@ -443,6 +488,6 @@ KTEST(acpi_reclaimed) {
     KTEST_ASSERT_EQ(st.acpiReclaimedPages, expectPages);
     KTEST_ASSERT(st.reclaimedPages >= st.acpiReclaimedPages);
     if (expectPages == 0) {
-        klogWrite(KLOG_INFO, "ktest", "acpi_reclaimed: no ACPI_RECLAIM in this memory map");
+        klogWrite(KLOG_INFO, "ktest", "acpi_reclaimed: no ACPI_RECLAIM freed in this boot");
     }
 }
