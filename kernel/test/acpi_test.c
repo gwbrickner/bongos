@@ -231,10 +231,13 @@ KTEST(acpi_read_phys_matches_copies) {
 KTEST(acpi_read_phys_offsets_exact) {
     uint32_t n;
     const BootMemRegion *map = kernelBootMemMap(&n);
-    Page *held[8];
+    /* Reclaimed LOADER_RECLAIM (~4 MiB on QEMU, i.e. up to ~530 order-1 blocks) is refused by
+     * the policy and may sit at the head of the free lists, so hold refused blocks until an
+     * allowed one turns up. */
+    static Page *held[1024];
     uint32_t heldCount = 0;
     Page *pg = NULL;
-    while (heldCount < 8) {
+    while (heldCount < sizeof(held) / sizeof(held[0])) {
         Page *cand;
         KTEST_ASSERT_EQ(pmmAllocPages(1, 0, &cand), STATUS_OK);
         if (acpiPhysRangeAllowed(map, n, pmmPageToPhys(cand), 8192)) {
