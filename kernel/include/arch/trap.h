@@ -44,13 +44,18 @@ typedef struct {
  * #BP (vector 3; trapDispatch() resumes it unconditionally before archTrapCatch ever sees it, so
  * a catch could never fire -- panics if `mask` includes it) or any bit outside the vectors 0-31 /
  * TRAP_CATCH_STACK_SMASH / TRAP_CATCH_UBSAN range (panics on any other set bit, so a typo'd mask
- * fails loudly instead of silently matching nothing). No locks; not reentrant. */
+ * fails loudly instead of silently matching nothing). Interrupt context (D-173, M3.2): a fault or
+ * trip raised inside an interrupt handler is never caught (resuming would longjmp out of the
+ * handler and strand its in-service bit), so it panics even while a catch is armed; a caught fault
+ * restores IF=1 if it was 1 when archTrapCatch was called (the longjmp may skip an
+ * archIrqSave()/archIrqRestore() pair in `fn`). No locks; not reentrant. */
 bool archTrapCatch(uint64_t mask, void (*fn)(void *), void *arg, TrapCatchInfo *out);
 
 /* For __stack_chk_fail()/the UBSan handlers only: if a catch is armed and its mask includes
  * `kind` (TRAP_CATCH_STACK_SMASH or TRAP_CATCH_UBSAN), redirects execution back to the matching
  * archTrapCatch() call (never returns to the caller) and fills its `out`. Otherwise returns false,
- * so the caller proceeds to its own normal (fatal) panic. `pc` is the caller's own return address
+ * so the caller proceeds to its own normal (fatal) panic; it also returns false whenever an
+ * interrupt handler is running (irqDepth() != 0, D-173). `pc` is the caller's own return address
  * (`__builtin_return_address(0)`), recorded as `TrapCatchInfo.rip`. */
 bool archTrapCatchSoftware(uint64_t kind, uint64_t pc);
 
