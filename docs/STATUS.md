@@ -3,15 +3,16 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-02 (M3.3 merged; M3.4 started)
+**Last updated:** 2026-10-02 (M3.3 merged; M3.4 finished, no PR yet)
 
 ## Next step
-**M3.4 is implemented and WIP-committed** (log `docs/logs/M3.4.md`). Remaining: `make test` on both firmwares and the
-release profile (`make clean && make RELEASE=1 && make test RELEASE=1` style, via `qemu-tester`), a `bug-sweeper` step
-pass, then the finish protocol (one full sweep, fix, re-sweep, reviewer, screenshot, PR).
+**M3.4 Locking + lock validator is finished** (log `docs/logs/M3.4.md`; two finish sweeps `SWEEP: PASS`, reviewer
+`VERDICT: PASS`) on the session branch `claude/resume-bongos-dev-prrfwz`; **no PR has been opened** (the session was
+told not to), `needs-owner`. Next: owner opens/merges the PR and answers the M3.4 questions below, then start **M3.5 SMP
+bring-up** (Needs M3.3 and M3.4 are done).
 
 ## Current milestone
-M3.4 Locking + lock validator (M3.3 merged as #21).
+None in progress (M3.4 awaits the owner's PR and merge).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -32,6 +33,7 @@ M3.4 Locking + lock validator (M3.3 merged as #21).
 | M3.1 | [#19](https://github.com/gwbrickner/bongos/pull/19) | ACPI tables: RSDP/XSDT/RSDT loader, FADT/MADT/MCFG/HPET/IVRS parsers, tables copied through temporary KVA windows (works on BIOS and UEFI), ACPI_RECLAIM freed after the copy, `acpidump=1` + `tools/acpiextract`, stored QEMU q35 tables, D-166..D-170 |
 | M3.2 | [#20](https://github.com/gwbrickner/bongos/pull/20) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
 | M3.3 | [#21](https://github.com/gwbrickner/bongos/pull/21) | Timekeeping: TSC calibrated against the PM timer (HPET optional), `timeMonotonicNs`, LAPIC timer (one-shot or TSC-deadline) + per-CPU 256-entry timer heap (`timerArm`/`timerCancel`), CMOS RTC `timeWallNs`, harness wall-clock-vs-host check, 25 ktests, D-176..D-182 |
+| M3.4 | (not opened) | Locking: ticket `Spinlock` (irqsave, trylock), `preemptCount` via an interim `CpuSync`, `atomic.h`, the debug lock validator (classes by init site, order graph with both stacks on an inversion, recursion, IRQ-safety; ktest expect mode), klog/pmm/vmm/slab/vmalloc/random converted to real spinlocks, D-183..D-189 |
 
 The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB and 4-CPU rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
@@ -40,6 +42,7 @@ boot screens are in `docs/screenshots/`.
 _(none)_
 
 ## Questions for owner
+- **M3.4:** (1) D-183: a profile-dependent `Spinlock` size (8 bytes release, 32 debug), so `.kmod`s must be built with the kernel's profile: OK? (2) D-186: about 110 KiB of debug-only `.bss` for the validator tables: OK? (3) D-188 (supersedes D-081/D-088/D-094 text): keep D-173's ban on allocating in IRQ handlers until M3.5 fixes D-085(1) and the slab's two-section free? (4) Same-class nesting is reported as recursion until a real user needs a `spinLockNested`: OK? (5) The D-187 balance checks in `irqDispatch`/`archTrapCatch` panic, and the harness has no expected-panic mode, so they have no permanent test (each was shown to fire with a temporary ktest): add an expected-panic harness row later?
 - **M3.3:** (1) The wall-clock ktest cannot take host time on the cmdline (it is fixed in the image before the firmware
   runs): accept D-181 (the harness timestamps the kernel's `time: wall-check` serial line, <= 2 s) and update the
   ROADMAP wording? (2) Panic on bare metal when the TSC is not invariant (ARCH 1.3 says required), warn only under a
@@ -85,6 +88,7 @@ Optional hardware checks never block a merge; the full steps are in each milesto
   `/etc/apt/sources.list.d/` if apt fails).
 
 ## Open leads (for the next `bug-sweeper` or `/milestone-sweep` to triage)
+- M3.4 leads for M3.5: the validator's expect-mode state is global (another CPU's real report of the armed kind would be swallowed); the deferred IRQ-safe -> IRQ-unsafe dependency check (D-186) is the real SMP deadlock class and should land with SMP; an exception between `klogHeld = 0` and the raw release in klog's sink section would self-deadlock (nothing can raise one there today); `panicEnter` is now an atomic exchange but the rest of the panic path is single-CPU.
 - M3.3 sweep leads: SIGTERM to `tests/harness/run-qemu.sh` leaves `timeout`/QEMU running until `--timeout` (pre-existing); `clockref.c` would map a PM-timer GAS with a space id other than 0/1 as MMIO (unreachable: the ACPI parser only accepts 0/1); `timerInit` on a still-armed timer corrupts the queue (documented, not checked).
 - `make analyze` on main reports 5 warnings: `kernel/include/list.h:50` (a possible NULL
   `prev` dereference), `kernel/test/kmalloc_test.c:68,143,365`, and

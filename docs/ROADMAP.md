@@ -228,7 +228,7 @@ QEMU-verified only.
 **Owner hardware check:** boot on the PC and report the logged TSC frequency (expect about
 4.5 GHz), whether the TSC is invariant, and whether an HPET was found.
 
-### [ ] M3.4 Locking + lock validator `needs-owner`
+### [x] M3.4 Locking + lock validator `needs-owner`
 **Needs:** M3.2
 1. Ticket spinlocks, with irqsave/irqrestore, `preemptCount` plumbing (not preempting yet), and C11 atomics wrappers.
 2. The lock validator (debug builds):

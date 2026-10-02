@@ -338,9 +338,9 @@ KTEST(lockdep_spininit_stack_locks) {
 }
 
 /* ARCHITECTURE 7.6's documented kernel lock order holds in the recorded graph after real use:
- * vmm -> pmm, slab -> pmm, never the reverse, and klog (a leaf) precedes nothing. */
+ * the pmm never precedes vmm, slab or random, and klog (a leaf) precedes nothing. */
 KTEST(lockdep_kernel_lock_order) {
-    /* Exercise vmm -> pmm (a KVA map may allocate a table page) and slab growth -> pmm. */
+    /* Exercise the vmm, vmalloc, slab and pmm paths. */
     void *v = vmalloc(3 * 4096, 0);
     KTEST_ASSERT(v != NULL);
     vfree(v);

@@ -181,9 +181,7 @@ KTEST(spin_assert_held) {
 
 /* preemptInAtomic also covers IF=0 with a zero count. */
 KTEST(preempt_in_atomic_irqs_off) {
-    if (preemptCount() != 0) {
-        return;
-    }
+    KTEST_ASSERT_EQ(preemptCount(), 0);
     uint64_t f = archIrqSave();
     bool atomicIrqsOff = preemptInAtomic();
     archIrqRestore(f);

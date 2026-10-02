@@ -58,21 +58,24 @@ void spinLock(Spinlock *l);
  * dependency in the validator. Any context. */
 bool spinTryLock(Spinlock *l);
 
-/* Release. The caller must hold `l`: unlocking a free lock panics (panicBug, always on). */
+/* Release. The caller must hold `l`: unlocking a free lock panics (panicBug, always on). Never
+ * sleeps; any context the matching acquire ran in. */
 void spinUnlock(Spinlock *l);
 
 /* Saves RFLAGS and disables IRQs, then acquires; returns the saved RFLAGS for
- * spinUnlockIrqRestore() (the same value archIrqSave() returns). */
+ * spinUnlockIrqRestore() (the same value archIrqSave() returns). May spin; never sleeps; any
+ * context. */
 uint64_t spinLockIrqSave(Spinlock *l);
 
-/* Releases `l`, then restores the interrupt state `flags` captured. */
+/* Releases `l`, then restores the interrupt state `flags` captured. `flags` must come from the
+ * matching spinLockIrqSave(). Never sleeps; any context. */
 void spinUnlockIrqRestore(Spinlock *l, uint64_t flags);
 
-/* True iff `l` is held or waited for; a hint only once SMP exists. */
+/* True iff `l` is held or waited for; a hint only once SMP exists. No locks; any context. */
 bool spinIsLocked(const Spinlock *l);
 
 /* Panics (panicBug) unless `l` is held (debug: by this CPU, per the validator; release:
- * spinIsLocked). For "caller must hold X" contracts. */
+ * spinIsLocked). For "caller must hold X" contracts. No locks; any context. */
 void spinAssertHeld(const Spinlock *l);
 
 #endif

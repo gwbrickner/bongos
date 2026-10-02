@@ -283,7 +283,7 @@ uint32_t lockdepHeldDepth(void) {
 }
 
 void lockdepExpectBegin(LockdepVerdict kind) {
-    if (!ktestIsActive() || irqDepth() != 0 || expect.armed ||
+    if (ktestCurrentName() == NULL || irqDepth() != 0 || expect.armed ||
         (kind != LOCKDEP_REPORT_INVERSION && kind != LOCKDEP_REPORT_RECURSION &&
          kind != LOCKDEP_REPORT_IRQ_INCONSISTENT && kind != LOCKDEP_REPORT_NOT_HELD)) {
         panic("lockdepExpectBegin: not in a ktest, in a handler, already armed, or bad kind");
@@ -311,7 +311,8 @@ bool lockdepExpectArmed(void) {
 static bool testOff;
 
 void lockdepTestOff(void) {
-    if (!ktestIsActive() || irqDepth() != 0 || testOff || ATOMIC_LOAD(&lockdepOff, MEM_RELAXED)) {
+    if (ktestCurrentName() == NULL || irqDepth() != 0 || testOff ||
+        ATOMIC_LOAD(&lockdepOff, MEM_RELAXED)) {
         panic("lockdepTestOff: not in a ktest, in a handler, or the validator is already off");
     }
     testOff = true;
@@ -319,7 +320,7 @@ void lockdepTestOff(void) {
 }
 
 void lockdepTestOn(void) {
-    if (!ktestIsActive() || irqDepth() != 0 || !testOff) {
+    if (ktestCurrentName() == NULL || irqDepth() != 0 || !testOff) {
         panic("lockdepTestOn: not in a ktest, in a handler, or not turned off by lockdepTestOff");
     }
     testOff = false;

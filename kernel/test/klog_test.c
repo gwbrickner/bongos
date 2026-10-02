@@ -5,6 +5,8 @@
 #include "ktest.h"
 #include "preempt.h"
 
+#include <arch/cpu.h>
+
 KTEST(klog_format) {
     char buf[128];
 
@@ -43,7 +45,7 @@ static void klogBreakpointInSection(void *arg) {
     KlogSectionProbe *p = arg;
     p->heldBefore = cpuSync()->klogHeld;
     p->preemptInside = preemptCount(); /* klogLock is really held: preemption is off */
-    __asm__ volatile("int3");          /* #BP logs through klogWrite() and resumes */
+    archBreakpoint();                  /* #BP logs through klogWrite() and resumes */
     p->heldAfter = cpuSync()->klogHeld;
 }
 

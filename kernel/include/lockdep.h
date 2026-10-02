@@ -46,10 +46,11 @@ uint32_t lockdepHeldDepth(void);
 
 /* ktest only (D-187): from now on a report of `kind` is printed as "LOCKDEP (expected by ktest)"
  * and execution continues instead of panicking; the offending dependency edge is not recorded.
- * Panics unless a ktest is running, no handler is running, nothing is armed yet, and `kind` is one
- * of INVERSION, RECURSION, IRQ_INCONSISTENT, NOT_HELD. lockdepExpectEnd() disarms and returns how
- * many reports of that kind were swallowed. Another kind still panics, and so does a RECURSION on
- * the very same lock (it would deadlock). A swallowed report records no dependency edges. */
+ * Panics unless a ktest is running (ktestCurrentName() != NULL), no handler is running, nothing is
+ * armed yet, and `kind` is one of INVERSION, RECURSION, IRQ_INCONSISTENT, NOT_HELD.
+ * lockdepExpectEnd() disarms and returns how many reports of that kind were swallowed. Another kind
+ * still panics, and so does a RECURSION on the very same lock (it would deadlock). A swallowed
+ * report records no dependency edges. */
 void lockdepExpectBegin(LockdepVerdict kind);
 uint32_t lockdepExpectEnd(void);
 bool lockdepExpectArmed(void);
@@ -62,7 +63,11 @@ bool lockdepExpectArmed(void);
 void lockdepTestOff(void);
 void lockdepTestOn(void);
 
-/* ktest queries (by class name, first match). */
+/* ktest queries (by class name, first match). Both take the validator's raw graph lock with IRQs
+ * off for the duration, so they are IRQ-safe and never sleep, but must not be called from inside
+ * the validator or klog's sink section. lockdepClassRegistered: true iff a class of that name has
+ * been registered. lockdepDependsOn: true iff the graph has a chain of order edges from the first
+ * class to the second (false if either is unknown). */
 bool lockdepClassRegistered(const char *name);
 bool lockdepDependsOn(const char *fromName, const char *toName);
 
@@ -70,6 +75,8 @@ typedef struct LockdepStats {
     bool enabled; /* false once a table filled up */
     uint32_t classes, edges, expectedReports;
 } LockdepStats;
+/* Snapshot of the validator's counters, for the ktest runner's summary line. Same locking and
+ * contexts as the queries above. */
 void lockdepGetStats(LockdepStats *out);
 
 #else

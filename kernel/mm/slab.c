@@ -34,9 +34,9 @@ static const bool slabDebugBuild = false;
 
 /* --- lock: one coarse irqsave Spinlock for the whole subsystem (registry + every cache + every
  * magazine) -- D-094's deliberate simplification of the architect's proposed three-tier lock
- * split, now a real lock (D-188). Safe to call into pmmAllocPages()/pmmFreePages() while held
- * (order slab -> pmm). The growth and release paths drop and retake it; the validator allows
- * out-of-order and repeated acquisition. */
+ * split, now a real lock (D-188). The growth and release paths drop it before calling
+ * pmmAllocPages()/pmmFreePages() and retake it afterwards (so no slab -> pmm order is ever
+ * recorded); the validator allows that repeated and out-of-order acquisition. */
 static Spinlock slabLockObj = SPINLOCK_INIT("slab");
 static uint64_t slabLock(void) {
     return spinLockIrqSave(&slabLockObj);
