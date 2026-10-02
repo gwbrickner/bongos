@@ -88,7 +88,10 @@ SPIN_NOINLINE bool spinIsLocked(const Spinlock *l) {
 
 SPIN_NOINLINE void spinAssertHeld(const Spinlock *l) {
 #ifdef KERNEL_DEBUG
-    if (!lockdepIsHeld(&l->dep)) {
+    /* The validator's held list is only maintained while it is active (a full table or a panic
+     * stops it); then all that can be checked is that somebody holds the lock. */
+    bool held = lockdepActive() ? lockdepIsHeld(&l->dep) : rawSpinIsLocked(&l->raw);
+    if (!held) {
         panicBug("spinlock: assertion failed, lock %llx not held by this CPU",
                  (unsigned long long)(uintptr_t)l);
     }

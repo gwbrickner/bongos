@@ -14,6 +14,8 @@
  * changes. */
 typedef struct CpuSync {
     uint32_t preemptCount;
+    uint32_t klogHeld; /* klog's sink section is open on this CPU (klog.c: lets an exception that
+                          logs and resumes re-enter) */
 #ifdef KERNEL_DEBUG
     uint32_t lockdepRecursion; /* validator re-entry guard; IRQs are off while it is nonzero */
     LockdepHeldStack held;     /* this CPU's held locks, for the validator */

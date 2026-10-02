@@ -150,7 +150,7 @@ TIME_LOG_REGEX_FILE := tests/harness/time-log-regexes.txt
 LOCK_REQUIRED_KTESTS := spin_trylock_semantics spin_irqsave_restores_if preempt_count_balance \
                         spin_unlock_unlocked_caught spin_ticket_wraparound \
                         spin_unlock_irqrestore_unlocked_caught spin_assert_held \
-                        preempt_in_atomic_irqs_off
+                        preempt_in_atomic_irqs_off klog_exception_in_section_does_not_hang
 LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_unsafe_in_irq_reported \
                            lockdep_irq_safe_then_irqs_on_reported lockdep_class_recursion_reported \
                            lockdep_trylock_records_no_edge lockdep_out_of_order_release \
@@ -159,7 +159,8 @@ LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_unsafe_in_irq_
                            lockdep_transitive_inversion_reported lockdep_irq_segment_records_no_edge \
                            lockdep_trylock_same_class_allowed \
                            lockdep_trylock_irqs_on_then_irq_reported lockdep_repeat_order_adds_nothing \
-                           lockdep_spininit_stack_locks lockdep_kernel_lock_order
+                           lockdep_spininit_stack_locks lockdep_kernel_lock_order \
+                           lockdep_expected_report_records_no_edge
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \

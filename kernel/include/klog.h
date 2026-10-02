@@ -24,4 +24,9 @@ void klogWrite(KlogLevel level, const char *tag, const char *fmt, ...);
  * like klogWrite(). */
 void klogRaw(const char *s);
 
+/* ktest only: runs `fn(arg)` inside klog's sink section (klogLock held, IRQs off), to test that an
+ * exception which logs and resumes (#BP) can re-enter it without hanging. Same contexts as
+ * klogWrite(). */
+void klogTestRunInSection(void (*fn)(void *), void *arg);
+
 #endif

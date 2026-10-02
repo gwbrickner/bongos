@@ -1,7 +1,9 @@
 /* ktests for the kernel's tiny printf (kernel/core/format.c), exercised through ksnprintf(). */
 #include "cmdline.h"
 #include "format.h"
+#include "klog.h"
 #include "ktest.h"
+#include "preempt.h"
 
 KTEST(klog_format) {
     char buf[128];
@@ -31,4 +33,19 @@ KTEST(klog_format) {
      * advanced past it. */
     ksnprintf(buf, sizeof(buf), "%l");
     KTEST_ASSERT(cmdlineStrEq(buf, ""));
+}
+
+static void klogBreakpointInSection(void *arg) {
+    (void)arg;
+    __asm__ volatile("int3"); /* #BP logs through klogWrite() and resumes */
+}
+
+/* M3.4 sweep S4 #2: an exception that logs and resumes while this CPU is inside klog's sink section
+ * must not spin on klog's own lock (it hung with interrupts off before the per-CPU re-entry check).
+ */
+KTEST(klog_exception_in_section_does_not_hang) {
+    uint32_t base = preemptCount();
+    klogTestRunInSection(klogBreakpointInSection, NULL);
+    KTEST_ASSERT_EQ(preemptCount(), base);
+    klogWrite(KLOG_INFO, "klog-test", "section released after a nested exception");
 }

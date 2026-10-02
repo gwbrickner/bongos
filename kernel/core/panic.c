@@ -18,11 +18,7 @@ static bool panicking = false;
 
 bool panicEnter(void) {
     archDisableInterrupts();
-    if (panicking) {
-        return false;
-    }
-    ATOMIC_STORE(&panicking, true, MEM_SEQ_CST);
-    return true;
+    return !ATOMIC_XCHG(&panicking, true, MEM_SEQ_CST); /* atomic: two CPUs must not both enter */
 }
 
 bool panicInProgress(void) {

@@ -4,6 +4,7 @@
 #include "branding.h"
 #include "format.h"
 #include "panic.h"
+#include "preempt.h"
 #include "spinlock.h"
 
 #include <arch/cpu.h>
@@ -21,18 +22,30 @@
 static Spinlock klogLock = SPINLOCK_INIT("klog");
 
 /* Begins/ends the sink section. `*locked` records whether klogLock was taken (false only during a
- * panic). Returns the saved RFLAGS for klogOutputEnd(). */
+ * panic, or when this CPU is already inside the section: an exception that logs nested in it).
+ * Returns the saved RFLAGS for klogOutputEnd(). */
 static uint64_t klogOutputBegin(bool *locked) {
     if (panicInProgress()) {
         *locked = false;
         return archIrqSave();
     }
+    CpuSync *s = cpuSync();
+    if (s->klogHeld != 0) {
+        /* This CPU is already inside the sink section with IRQs off, so only an exception or NMI
+         * can be here: #BP (which logs and resumes) or the report of a caught fault. Spinning on
+         * our own lock would hang; instead nest unlocked, as klog did before M3.4. */
+        *locked = false;
+        return archIrqSave();
+    }
+    uint64_t flags = spinLockIrqSave(&klogLock);
+    s->klogHeld = 1;
     *locked = true;
-    return spinLockIrqSave(&klogLock);
+    return flags;
 }
 
 static void klogOutputEnd(bool locked, uint64_t irqFlags) {
     if (locked) {
+        cpuSync()->klogHeld = 0;
         spinUnlockIrqRestore(&klogLock, irqFlags);
     } else {
         archIrqRestore(irqFlags);
@@ -124,5 +137,12 @@ void klogRaw(const char *s) {
         fbconSetColor(7, 0);
         fbconWrite(s, n);
     }
+    klogOutputEnd(locked, irqFlags);
+}
+
+void klogTestRunInSection(void (*fn)(void *), void *arg) {
+    bool locked;
+    uint64_t irqFlags = klogOutputBegin(&locked);
+    fn(arg);
     klogOutputEnd(locked, irqFlags);
 }

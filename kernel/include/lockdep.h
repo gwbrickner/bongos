@@ -33,6 +33,10 @@ typedef struct LockdepMap {
 void lockdepAcquire(LockdepMap *m, bool trylock, uint64_t ip);
 void lockdepRelease(LockdepMap *m, uint64_t ip);
 
+/* True while the validator is tracking locks (not disabled by a full table, no panic in progress);
+ * its held-lock stacks are only meaningful then. IRQ-safe. */
+bool lockdepActive(void);
+
 /* True iff this CPU's held-lock stack has `m`. IRQ-safe. */
 bool lockdepIsHeld(const LockdepMap *m);
 
@@ -43,7 +47,8 @@ uint32_t lockdepHeldDepth(void);
  * and execution continues instead of panicking; the offending dependency edge is not recorded.
  * Panics unless a ktest is running, no handler is running, nothing is armed yet, and `kind` is one
  * of INVERSION, RECURSION, IRQ_INCONSISTENT, NOT_HELD. lockdepExpectEnd() disarms and returns how
- * many reports of that kind were swallowed. Another kind still panics. */
+ * many reports of that kind were swallowed. Another kind still panics, and so does a RECURSION on
+ * the very same lock (it would deadlock). A swallowed report records no dependency edges. */
 void lockdepExpectBegin(LockdepVerdict kind);
 uint32_t lockdepExpectEnd(void);
 bool lockdepExpectArmed(void);

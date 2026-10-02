@@ -38,7 +38,7 @@ static inline void rawSpinLock(RawSpinlock *l) {
 /* Takes the lock only if it is free right now (no ticket is consumed on failure). Acquire
  * ordering on success. Never spins. Any context. */
 static inline bool rawSpinTryLock(RawSpinlock *l) {
-    uint32_t o = ATOMIC_LOAD(&l->owner, MEM_RELAXED);
+    uint32_t o = ATOMIC_LOAD(&l->owner, MEM_ACQUIRE);
     uint32_t expected = o;
     /* Succeeds only if next == owner (nobody holds or waits), claiming the ticket `o`. */
     return ATOMIC_CMPXCHG(&l->next, &expected, o + 1u, MEM_ACQUIRE, MEM_RELAXED);

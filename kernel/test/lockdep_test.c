@@ -360,4 +360,41 @@ KTEST(lockdep_kernel_lock_order) {
     KTEST_ASSERT(!lockdepDependsOn("pmm", "random"));
 }
 
+static Spinlock neP = SPINLOCK_INIT("lt-ne-p");
+static Spinlock neQ = SPINLOCK_INIT("lt-ne-q");
+static volatile uint32_t neRan;
+
+static __attribute__((noinline)) void lockdepTestNeCallback(TimerObj *t, void *ctx) {
+    (void)t;
+    (void)ctx;
+    spinLock(&neP);
+    spinLock(&neQ); /* IRQ-unsafe lock in a handler, taken under neP */
+    spinUnlock(&neQ);
+    spinUnlock(&neP);
+    neRan = 1;
+}
+
+/* A report that an expect window swallows must not record the dependency edge (D-187): later code
+ * would otherwise inherit an order the validator had just called wrong. */
+KTEST(lockdep_expected_report_records_no_edge) {
+    static TimerObj timer;
+    lockdepTestTakeIrqsOn(&neQ);
+    neRan = 0;
+    timerInit(&timer, lockdepTestNeCallback, NULL);
+    lockdepExpectBegin(LOCKDEP_REPORT_IRQ_INCONSISTENT);
+    bool armed = timerArm(&timer, timeMonotonicNs()) == STATUS_OK;
+    uint64_t deadline = timeMonotonicNs() + 1000000000ull;
+    while (armed && !neRan && timeMonotonicNs() < deadline) {
+        archPause();
+    }
+    if (!neRan) {
+        (void)timerCancel(&timer);
+    }
+    uint32_t reports = lockdepExpectEnd();
+    KTEST_ASSERT(armed);
+    KTEST_ASSERT(neRan);
+    KTEST_ASSERT_EQ(reports, 1);
+    KTEST_ASSERT(!lockdepDependsOn("lt-ne-p", "lt-ne-q"));
+}
+
 #endif /* KERNEL_DEBUG */

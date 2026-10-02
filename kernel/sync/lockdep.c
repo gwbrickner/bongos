@@ -101,7 +101,10 @@ static void printHeld(const LockdepHeldStack *hs) {
  * klogLock) is not validated. Uses panic(), never panicBug(): a longjmp out of here would strand
  * graphLock and lockdepRecursion. */
 static void report(const LockdepFinding *f, const LockdepHeldStack *hs) {
-    bool expected = expect.armed && expect.kind == f->kind;
+    /* Re-taking the very same lock would spin forever once the report returns, so that one is never
+     * swallowed. */
+    bool expected = expect.armed && expect.kind == f->kind &&
+                    !(f->kind == LOCKDEP_REPORT_RECURSION && f->sameInstance);
     outLine("%s: %s\n", expected ? "LOCKDEP (expected by ktest)" : "LOCKDEP", kindName(f->kind));
     switch (f->kind) {
         case LOCKDEP_REPORT_INVERSION:
@@ -211,9 +214,8 @@ void lockdepAcquire(LockdepMap *m, bool trylock, uint64_t ip) {
         if (v != LOCKDEP_OK) {
             report(&f, &s->held);
         }
-        if (lockdepCoreCommitAcquire(&graph, &s->held, m, id, ctx, irqsOn, trylock,
-                                     v != LOCKDEP_REPORT_INVERSION, ip,
-                                     captureTrace) == LOCKDEP_FULL) {
+        if (lockdepCoreCommitAcquire(&graph, &s->held, m, id, ctx, irqsOn, trylock, v == LOCKDEP_OK,
+                                     ip, captureTrace) == LOCKDEP_FULL) {
             disable("edge", LOCKDEP_MAX_EDGES);
         }
     }
@@ -248,6 +250,10 @@ void lockdepRelease(LockdepMap *m, uint64_t ip) {
     rawSpinUnlock(&graphLock);
     s->lockdepRecursion = 0;
     archIrqRestore(flags);
+}
+
+bool lockdepActive(void) {
+    return !ATOMIC_LOAD(&lockdepOff, MEM_RELAXED) && !panicInProgress();
 }
 
 bool lockdepIsHeld(const LockdepMap *m) {
