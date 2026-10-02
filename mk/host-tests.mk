@@ -46,6 +46,7 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # ISA IRQ -> GSI resolution, GSI lookup; M3.2, D-174); the hardware side is kernel-only.
 # kernel/core/time-core.c: the timekeeping core (scaling/calibration math, RTC decode, timer heap;
 # M3.3, D-176..D-180); the clock hardware and the IRQ glue are kernel-only.
+# kernel/include/spinlock-raw.h and atomic.h (M3.4, D-183/D-185): the ticket-lock core, header-only.
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c tools/mkimage/biosboot.c \
                         boot/uefi/guids.c \
                         $(wildcard boot/common/*.c) $(CONSOLE_FONT_C) \
@@ -55,7 +56,7 @@ HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c tools/mkimage/
                         kernel/mm/slab-core.c kernel/mm/slab-debug.c boot/common/hw/loader-kaslr.c \
                         $(wildcard libs/crypto/*.c) kernel/core/random-core.c \
                         kernel/drivers/acpi/acpi-tables.c kernel/drivers/acpi/acpi-dump.c \
-                        kernel/arch/x86_64/irq-core.c kernel/core/time-core.c \
+                        kernel/arch/x86_64/irq-core.c kernel/core/time-core.c kernel/sync/lockdep-core.c \
                         $(filter-out tools/acpiextract/main.c,$(wildcard tools/acpiextract/*.c))
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/biosboot.h \
                         $(wildcard boot/uefi/include/efi/*.h) \
@@ -68,6 +69,7 @@ HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/
                         $(wildcard libs/crypto/include/crypto/*.h) $(wildcard libs/crypto/test/*.h) \
                         kernel/include/random-core.h $(wildcard kernel/include/acpi*.h) \
                         kernel/arch/x86_64/include/irq-core.h kernel/include/time-core.h \
+                        kernel/include/atomic.h kernel/include/spinlock-raw.h kernel/include/lockdep-core.h \
                         $(wildcard tools/acpiextract/*.h)
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
                             -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms \
@@ -89,5 +91,5 @@ $(HOST_TEST_BIN): $(HOST_TEST_SRCS) $(HOST_TEST_HDRS) $(HOST_TEST_EXTRA_SRCS) \
                   $(HOST_TEST_EXTRA_HDRS) $(BRANDING_HDR) Makefile mk/host-tests.mk
 	@mkdir -p $(dir $@)
 	$(HOST_CC) -std=c17 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
-		-fno-sanitize-recover=all -DHOSTED -I$(HOST_TEST_DIR) -I$(BUILD)/include \
+		-fno-sanitize-recover=all -pthread -DHOSTED -I$(HOST_TEST_DIR) -I$(BUILD)/include \
 		$(HOST_TEST_EXTRA_INCLUDES) -o $@ $(HOST_TEST_SRCS) $(HOST_TEST_EXTRA_SRCS)

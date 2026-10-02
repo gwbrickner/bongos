@@ -3,6 +3,7 @@
 
 #include "backtrace.h"
 #include "format.h"
+#include "atomic.h"
 #include "klog.h"
 #include "ktest.h"
 
@@ -20,8 +21,12 @@ bool panicEnter(void) {
     if (panicking) {
         return false;
     }
-    panicking = true;
+    ATOMIC_STORE(&panicking, true, MEM_SEQ_CST);
     return true;
+}
+
+bool panicInProgress(void) {
+    return ATOMIC_LOAD(&panicking, MEM_RELAXED);
 }
 
 _Noreturn void panicNested(void) {

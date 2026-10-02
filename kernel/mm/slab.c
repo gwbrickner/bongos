@@ -8,6 +8,7 @@
 #include "klog.h"
 #include "panic.h"
 #include "pmm.h"
+#include "spinlock.h"
 #include "vmm.h"
 
 #include <arch/cpu.h>
@@ -31,16 +32,17 @@ static const bool slabDebugBuild = true;
 static const bool slabDebugBuild = false;
 #endif
 
-/* --- lock: one coarse IRQ-disable-only lock for the whole subsystem (registry + every cache +
- * every magazine) -- D-094's deliberate simplification of the architect's proposed three-tier
- * lock split, for M2.4's honest single-CPU scope (same D-081/D-088 justification). Safe to
- * call into pmmAllocPages()/pmmFreePages() while held: archIrqSave()/archIrqRestore() already
- * nest correctly (vmm.c calls into the pmm while vmmLock is held today, the same pattern). */
+/* --- lock: one coarse irqsave Spinlock for the whole subsystem (registry + every cache + every
+ * magazine) -- D-094's deliberate simplification of the architect's proposed three-tier lock
+ * split, now a real lock (D-188). Safe to call into pmmAllocPages()/pmmFreePages() while held
+ * (order slab -> pmm). The growth and release paths drop and retake it; the validator allows
+ * out-of-order and repeated acquisition. */
+static Spinlock slabLockObj = SPINLOCK_INIT("slab");
 static uint64_t slabLock(void) {
-    return archIrqSave();
+    return spinLockIrqSave(&slabLockObj);
 }
 static void slabUnlock(uint64_t flags) {
-    archIrqRestore(flags);
+    spinUnlockIrqRestore(&slabLockObj, flags);
 }
 
 static _Noreturn void slabBug(SlabBugKind kind, const void *obj) {

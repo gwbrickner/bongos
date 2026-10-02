@@ -11,10 +11,11 @@ typedef enum { KLOG_ERROR, KLOG_WARN, KLOG_INFO, KLOG_DEBUG, KLOG_TRACE } KlogLe
  * locks, boot-time only; not reentrant. */
 void klogInit(void);
 
-/* Formats and writes one log line: "[<level>] <tag>: <message>\r\n". The output section runs with
- * IRQs disabled (D-173), so it is safe from an interrupt handler and lines never interleave on one
- * CPU; M3.4 adds a real lock for SMP, and a ring-buffer sink. May not sleep. Truncates silently if
- * the formatted line exceeds the internal line buffer (256 bytes). */
+/* Formats and writes one log line: "[<level>] <tag>: <message>\r\n". The output section runs under
+ * klog's leaf Spinlock with IRQs disabled (D-173, D-188), so it is safe from an interrupt handler
+ * and lines never interleave; the lock is bypassed once a panic is in progress. A ring-buffer sink
+ * comes later. May not sleep. Truncates silently if the formatted line exceeds the internal line
+ * buffer (256 bytes). */
 void klogWrite(KlogLevel level, const char *tag, const char *fmt, ...);
 
 /* Writes `s` straight to serial with no level prefix and no added newline handling beyond

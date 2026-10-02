@@ -122,6 +122,12 @@ void backtracePrint(uint64_t pc, uint64_t fp) {
     walkFrames(fp, start, printCallback, NULL);
 }
 
+void backtracePrintAddrs(const uint64_t *pcs, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        printFrame((int)i, pcs[i], true);
+    }
+}
+
 typedef struct {
     uint64_t *out;
     size_t max;

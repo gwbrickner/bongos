@@ -6,6 +6,7 @@
 #include "kmalloc.h"
 #include "panic.h"
 #include "pmm.h"
+#include "spinlock.h"
 #include "vmm.h"
 
 #include <arch/cpu.h>
@@ -25,11 +26,12 @@ static VmallocBugKind vmallocLastBugKind = VMALLOC_BUG_NONE;
 static uint64_t vmallocAreaCountValue;
 static uint64_t vmallocPageCountValue;
 
+static Spinlock vmallocLockObj = SPINLOCK_INIT("vmalloc");
 static uint64_t vmallocLock(void) {
-    return archIrqSave();
+    return spinLockIrqSave(&vmallocLockObj);
 }
 static void vmallocUnlock(uint64_t flags) {
-    archIrqRestore(flags);
+    spinUnlockIrqRestore(&vmallocLockObj, flags);
 }
 
 static _Noreturn void vmallocBug(VmallocBugKind kind) {

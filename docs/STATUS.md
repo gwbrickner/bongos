@@ -6,9 +6,9 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-02 (M3.3 merged; M3.4 started)
 
 ## Next step
-**M3.4 Locking + lock validator is in progress** (log `docs/logs/M3.4.md`, session branch `claude/resume-bongos-dev-prrfwz`).
-Step 1: `kernel/include/atomic.h`, `kernel/include/spinlock-raw.h`, add `kernel/sync/*.c` to `mk/kernel.mk`,
-`tests/host/kernel_spinlock_test.c` (+`-pthread` in `mk/host-tests.mk`). Command: `make host-tests`.
+**M3.4 is implemented and WIP-committed** (log `docs/logs/M3.4.md`). Remaining: `make test` on both firmwares and the
+release profile (`make clean && make RELEASE=1 && make test RELEASE=1` style, via `qemu-tester`), a `bug-sweeper` step
+pass, then the finish protocol (one full sweep, fix, re-sweep, reviewer, screenshot, PR).
 
 ## Current milestone
 M3.4 Locking + lock validator (M3.3 merged as #21).

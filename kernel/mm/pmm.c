@@ -5,6 +5,7 @@
 #include "bootinfo-validate.h" /* bootMemTypeName */
 #include "klog.h"
 #include "panic.h"
+#include "spinlock.h"
 #include "pmm-internal.h"
 #include "vmm.h" /* vmmKernelTablesActive() -- pmmReclaimLoaderMemory()'s precondition, D-089 */
 
@@ -45,15 +46,15 @@ static void pmmCacheInitAll(void) {
     }
 }
 
-/* --- lock: IRQ-disable only (single CPU; since M3.2 IF=1 after irqInit(), D-173, so this is real
- * exclusion against handlers, which in any case never allocate) -- a real spinlock arrives with
- * SMP (M3.4/M3.5). Every entry point below still follows the
- * IRQ-safe contract now so that later upgrade needs no rewrite. */
+/* --- lock: a real irqsave Spinlock since M3.4 (D-188). Handlers still never allocate (D-173):
+ * D-085(1) (validation outside the lock) and the slab's two-section free stay open until M3.5. Lock
+ * order: vmm -> pmm (see vmm.c); klog is a leaf below everything. */
+static Spinlock pmmLockObj = SPINLOCK_INIT("pmm");
 static uint64_t pmmLock(void) {
-    return archIrqSave();
+    return spinLockIrqSave(&pmmLockObj);
 }
 static void pmmUnlock(uint64_t flags) {
-    archIrqRestore(flags);
+    spinUnlockIrqRestore(&pmmLockObj, flags);
 }
 
 #ifdef KERNEL_DEBUG

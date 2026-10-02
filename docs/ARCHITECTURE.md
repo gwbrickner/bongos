@@ -787,6 +787,23 @@ handler. `kernelMain` enables interrupts right after `irqInit()`.
   preemption. Preemption points are on IRQ return and in `preemptEnable()` when
   `needResched` is set.
 
+**M3.4 status (D-183..D-188).** Implemented so far: the ticket `Spinlock` (`kernel/include/spinlock.h`,
+`spinlock-raw.h`; irqsave variants, `spinTryLock`, `spinAssertHeld`), `preemptCount` through an interim
+`CpuSync` (`preempt.h`; the `CpuLocal` field arrives with M3.5, §7.1), the `atomic.h` wrappers and the
+lock validator. `Mutex`, `RwLock`, `Semaphore`, `WaitQueue` and `Completion` need a scheduler and move
+to M4; `preemptEnable()` does not reschedule yet.
+- **Validator (debug builds, `kernel/sync/lockdep*.c`):** classes by init site (the static lock's
+  address, or one `static LockClassKey` per `spinInit()` call site), a bit-matrix order graph with a
+  BFS on each new edge, and per-CPU held-lock stacks. Reports: order inversion (with the stored
+  stack of every edge on the existing chain and the current stack), recursive locking, IRQ-unsafe
+  use (a lock taken in a hard IRQ and also with IRQs enabled), unlock of a lock not held. Every
+  report panics; ktests use `lockdepExpectBegin()`/`lockdepExpectEnd()` to assert one (D-187).
+- **Lock order:** `vmm -> pmm`, `slab -> pmm`, anything `-> klog` (a leaf, bypassed in a panic). The
+  validator's own raw graph lock is innermost.
+- **Which code uses them:** klog, pmm, vmm, slab, vmalloc and random hold real irqsave spinlocks;
+  timekeeping, the irq/IOAPIC tables, the RTC and LAPIC code stay IRQ-disable sections until M3.5
+  (D-188). Handlers still must not call the allocators until M3.5.
+
 ---
 
 ## 8. Scheduler
