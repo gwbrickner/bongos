@@ -581,37 +581,52 @@ typedef struct {
     TimerObj *victim;
     Fire *victimFire;
     volatile uint32_t count;
+    volatile uint64_t vec; /* the ARCH_TIMER_VECTOR count A's callback saw */
 } Reinit;
+
+static volatile uint64_t reinitVecC;
 
 static void reinitCb(TimerObj *t, void *ctx) {
     (void)t;
     Reinit *r = (Reinit *)ctx;
+    r->vec = irqVectorCount(ARCH_TIMER_VECTOR);
     r->count++;
     timerInit(r->victim, fireCb, r->victimFire); /* a popped, not-yet-run sibling in this batch */
 }
 
+static void reinitCbC(TimerObj *t, void *ctx) {
+    reinitVecC = irqVectorCount(ARCH_TIMER_VECTOR);
+    fireCb(t, ctx);
+}
+
 /* Reviewer finding (M3.3): timerInit() on an EXPIRED sibling used to clear its batch link and cut
- * the rest of the batch off, so the timer behind it never ran. */
+ * the rest of the batch off, so the timer behind it never ran. A, B and C are armed with IRQs off
+ * and one deadline, so however long the arming takes (a stalled vCPU under TCG), the interrupt
+ * collects all three into one batch, in arm order: A runs first and re-initialises B. */
 KTEST(time_timer_batch_reinit_sibling) {
     static Reinit r;
     static Fire fB, fC;
     static TimerObj a, b, c;
     r.count = 0;
+    r.vec = 0;
+    reinitVecC = 0;
     fB.count = 0;
     fC.count = 0;
     r.victim = &b;
     r.victimFire = &fB;
     timerInit(&a, reinitCb, &r);
     timerInit(&b, fireCb, &fB);
-    timerInit(&c, fireCb, &fC);
-    uint64_t when = timeMonotonicNs() + 10 * MS; /* one deadline: one batch, in arm order */
+    timerInit(&c, reinitCbC, &fC);
+    uint64_t f = archIrqSave();
+    uint64_t when = timeMonotonicNs() + 10 * MS;
     Status sa = timerArm(&a, when);
     Status sb = timerArm(&b, when);
     Status sc = timerArm(&c, when);
+    archIrqRestore(f);
     bool done = waitCount(&fC.count, 1, 500 * MS);
     spinNs(20 * MS);
     uint32_t bCount = fB.count;
-    bool cArmedOrExpired = timerIsArmed(&c);
+    bool cArmed = timerIsArmed(&c);
     (void)timerCancel(&a);
     (void)timerCancel(&b);
     (void)timerCancel(&c);
@@ -619,5 +634,7 @@ KTEST(time_timer_batch_reinit_sibling) {
     KTEST_ASSERT(done); /* C ran: the batch was not cut off at B */
     KTEST_ASSERT_EQ(r.count, 1);
     KTEST_ASSERT_EQ(bCount, 0); /* B was re-initialised before it ran: its callback never does */
-    KTEST_ASSERT(!cArmedOrExpired);
+    KTEST_ASSERT(!cArmed);
+    KTEST_ASSERT(r.vec != 0);
+    KTEST_ASSERT_EQ(reinitVecC, r.vec); /* C ran in A's batch, not from a later interrupt */
 }
