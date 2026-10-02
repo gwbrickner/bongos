@@ -234,8 +234,10 @@ TEST(timeRtcDecodeRejectsGarbage) {
     r.min = 0x60;
     ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_ERR_INVALID);
     r = bcdRaw();
-    r.century = 0x1A; /* bad century nibble */
-    ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_ERR_INVALID);
+    r.century = 0x1A; /* bad century nibble: ignored, the year is 20yy (D-180), not INVALID */
+    ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_OK);
+    ASSERT_EQ(e, timeCivilToEpoch(2026, 10, 2, 13, 45, 59));
+    e = 12345; /* the check below: a failing decode must leave it alone */
     r = bcdRaw();
     r.regB = 0x06; /* binary: 0x59 = 89 s */
     ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_ERR_INVALID);

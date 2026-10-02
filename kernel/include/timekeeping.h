@@ -36,7 +36,9 @@ uint64_t timeTscHz(void);
  * IF=0 and irqDepth()==1, after the kernel has popped the timer: no allocation, no sleeping, no
  * klog needed, no ktest assertions (the irq.h handler rules). It may call timerArm()/timerCancel()
  * on any timer, itself included. */
-void timerInit(TimerObj *t, TimerFn fn, void *ctx); /* `fn` must not be NULL (panicBug) */
+/* `fn` must not be NULL (panicBug). `t` must be fresh or idle: calling this on a timer that is
+ * still armed leaves a dangling queue entry and corrupts the queue (timerCancel() it first). */
+void timerInit(TimerObj *t, TimerFn fn, void *ctx);
 
 /* Arms `t` to fire at the absolute timeMonotonicNs() value `deadlineNs`, re-arming it if it is
  * already armed or waiting to run. A deadline in the past fires from the timer interrupt as soon

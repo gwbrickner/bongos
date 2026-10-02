@@ -95,9 +95,10 @@ Status timeRtcDecode(const TimeRtcRaw *raw, uint64_t *epoch, TimeCivil *civil) {
         !rtcField(raw->mon, binary, &mon) || !rtcField(raw->year, binary, &yy)) {
         return STATUS_ERR_INVALID;
     }
-    if (raw->hasCentury && !rtcField(raw->century, binary, &cent)) {
-        return STATUS_ERR_INVALID;
-    }
+    /* A century byte that is not valid BCD/binary is firmware junk like an implausible one:
+     * ignored, so the year falls back to 20yy (D-180), rather than making the whole RTC unusable.
+     */
+    bool haveCentury = raw->hasCentury && rtcField(raw->century, binary, &cent);
     if (!h24) {
         if (hour < 1 || hour > 12) {
             return STATUS_ERR_INVALID;
@@ -107,7 +108,7 @@ Status timeRtcDecode(const TimeRtcRaw *raw, uint64_t *epoch, TimeCivil *civil) {
     if (yy > 99) {
         return STATUS_ERR_INVALID;
     }
-    uint32_t year = (raw->hasCentury && cent >= 19 && cent <= 29) ? cent * 100 + yy : 2000 + yy;
+    uint32_t year = (haveCentury && cent >= 19 && cent <= 29) ? cent * 100 + yy : 2000 + yy;
     if (year < 1970 || sec > 59 || min > 59 || hour > 23 || mon < 1 || mon > 12 || day < 1 ||
         day > timeDaysInMonth(year, mon)) {
         return STATUS_ERR_INVALID;

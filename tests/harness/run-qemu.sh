@@ -253,6 +253,10 @@ rm -f "$LOG" "$WALLFILE"
     done
 ) &
 wallwatcher=$!
+# QEMU's RTC counts whole seconds from the moment QEMU starts, so it lags the host's clock by the
+# fraction of the host second QEMU was launched in (0..1 s: measured +0.43 s on average). Launch just
+# after a host second boundary so that artifact is about zero and the check measures the kernel (D-181).
+sleep "$(awk -v n="$(date +%N)" 'BEGIN { printf "%.3f", (1000000000 - n) / 1000000000 + 0.005 }')"
 # shellcheck disable=SC2086
 timeout --foreground "$TIMEOUT" "${BASE[@]}" -rtc base=utc,clock=host -display none -serial "file:$LOG" $EXTRA < /dev/null
 code=$?
