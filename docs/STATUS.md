@@ -3,14 +3,15 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-02 (M3.3 finished, awaiting owner merge; M3.4 or M3.5 prep is next)
+**Last updated:** 2026-10-02 (M3.3 merged; M3.4 started)
 
 ## Next step
-**M3.3 is finished and PR [#21](https://github.com/gwbrickner/bongos/pull/21) is open** (`needs-owner`), waiting on the owner's merge and answers to the M3.3 questions below.
-After it merges, start **M3.4 Locking + lock validator** (Needs M3.2, can start now from `origin/main`); M3.5 SMP needs M3.3 and M3.4.
+**M3.4 Locking + lock validator is in progress** (log `docs/logs/M3.4.md`, session branch `claude/resume-bongos-dev-prrfwz`).
+Step 1: `kernel/include/atomic.h`, `kernel/include/spinlock-raw.h`, add `kernel/sync/*.c` to `mk/kernel.mk`,
+`tests/host/kernel_spinlock_test.c` (+`-pthread` in `mk/host-tests.mk`). Command: `make host-tests`.
 
 ## Current milestone
-None in progress (M3.3 is awaiting owner merge).
+M3.4 Locking + lock validator (M3.3 merged as #21).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
