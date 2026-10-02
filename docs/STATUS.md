@@ -3,16 +3,14 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-02 (M3.2 merged; M3.3 started)
+**Last updated:** 2026-10-02 (M3.3 finished, awaiting owner merge; M3.4 or M3.5 prep is next)
 
 ## Next step
-**M3.3 Timekeeping is code-complete, swept twice (`SWEEP: PASS`) and reviewed (`VERDICT: PASS`)** on branch `m3-3-timekeeping`
-(log: `docs/logs/M3.3.md`). Remaining: re-run the full tests and a step-mode `bug-sweeper` on the reviewer-follow-up changes
-(everything after 65c13e3), then screenshots (`make screenshot SHOT=docs/screenshots/M3.3.png`, plus `FW=bios`), paperwork,
-and the PR (`needs-owner: yes`).
+**M3.3 is finished and its PR is open** (`needs-owner`), waiting on the owner's merge and answers to the M3.3 questions below.
+After it merges, start **M3.4 Locking + lock validator** (Needs M3.2, can start now from `origin/main`); M3.5 SMP needs M3.3 and M3.4.
 
 ## Current milestone
-M3.3 Timekeeping (finishing).
+None in progress (M3.3 is awaiting owner merge).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -31,7 +29,8 @@ M3.3 Timekeeping (finishing).
 | M2.5 | [#11](https://github.com/gwbrickner/bongos/pull/11) | BIOS loader: stage1 MBR, stage2 with a real-mode thunk, E820/VBE, a GPT+FAT32 reader, the shared menu and handoff. One image boots both ways |
 | M2.6 | [#16](https://github.com/gwbrickner/bongos/pull/16) | KASLR in both loaders (2 MiB slide, `--emit-relocs` relocation, `kaslr=off`), slide-aware symbolizer, `libs/crypto` (SHA-256, ChaCha20), kernel RNG (`randomGetBytes`) |
 | M3.1 | [#19](https://github.com/gwbrickner/bongos/pull/19) | ACPI tables: RSDP/XSDT/RSDT loader, FADT/MADT/MCFG/HPET/IVRS parsers, tables copied through temporary KVA windows (works on BIOS and UEFI), ACPI_RECLAIM freed after the copy, `acpidump=1` + `tools/acpiextract`, stored QEMU q35 tables, D-166..D-170 |
-| M3.2 | [#20](https://github.com/gwbrickner/bongos/pull/20) (merged) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
+| M3.2 | [#20](https://github.com/gwbrickner/bongos/pull/20) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
+| M3.3 | (PR open) | Timekeeping: TSC calibrated against the PM timer (HPET optional), `timeMonotonicNs`, LAPIC timer (one-shot or TSC-deadline) + per-CPU 256-entry timer heap (`timerArm`/`timerCancel`), CMOS RTC `timeWallNs`, harness wall-clock-vs-host check, 25 ktests, D-176..D-182 |
 
 The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB and 4-CPU rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
@@ -72,6 +71,7 @@ _(none)_
 
 ## Waiting on owner (hardware checks and other owner-only steps)
 Optional hardware checks never block a merge; the full steps are in each milestone log ("Owner hardware check").
+- **M3.3:** boot the USB stick on the reference PC; report the `time: tsc ... Hz` line (expect ~4.5e9), `tsc invariant=`, the `time: hpet` line, `lapic timer mode=` and the `time: rtc` line vs real UTC; no `time:` warn/error lines expected. Also check the first CI/KVM run shows `lapic timer mode=tsc-deadline` and green time ktests (that path cannot run under TCG).
 - **M3.2:** boot the USB stick on the reference PC; expect `lapic: mode=x2apic`, `ioapic:` line(s), `irq: interrupts enabled`,
   `kernel: init done`, and no irq/lapic/ioapic warnings.
 - **M3.1:** boot with `acpidump=1` in `boot.cfg`'s `cmdline`; check the `acpi:` lines; ideally save the serial log.
@@ -84,6 +84,7 @@ Optional hardware checks never block a merge; the full steps are in each milesto
   `/etc/apt/sources.list.d/` if apt fails).
 
 ## Open leads (for the next `bug-sweeper` or `/milestone-sweep` to triage)
+- M3.3 sweep leads: SIGTERM to `tests/harness/run-qemu.sh` leaves `timeout`/QEMU running until `--timeout` (pre-existing); `clockref.c` would map a PM-timer GAS with a space id other than 0/1 as MMIO (unreachable: the ACPI parser only accepts 0/1); `timerInit` on a still-armed timer corrupts the queue (documented, not checked).
 - `make analyze` on main reports 5 warnings: `kernel/include/list.h:50` (a possible NULL
   `prev` dereference), `kernel/test/kmalloc_test.c:68,143,365`, and
   `kernel/test/pmm_test.c:405`. The test-file hits are probably deliberate misuse, but none has

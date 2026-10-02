@@ -216,7 +216,7 @@ QEMU-verified only.
 
 **Done when:** the ktests pass under both firmwares.
 
-### [ ] M3.3 Timekeeping `needs-owner`
+### [x] M3.3 Timekeeping `needs-owner`
 **Needs:** M3.2
 1. ACPI PM timer driver, plus an optional HPET driver.
 2. TSC: invariance check and calibration against the PM timer, with the frequency logged.
