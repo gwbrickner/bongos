@@ -6,12 +6,12 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-02 (M3.2 merged; M3.3 started)
 
 ## Next step
-**M3.3 Timekeeping is in progress** on branch `m3-3-timekeeping` (log: `docs/logs/M3.3.md`). M3.2 merged as #20.
-Next: step 1, the pure `kernel/core/time-core.{h,c}` plus `tests/host/kernel_time_core_test.c` and
-`kernel_timer_heap_test.c` (`make host-tests`).
+**M3.3 Timekeeping is code-complete and green** (`make format-check`, `host-tests`, `test`, `test-full` all pass) on branch
+`m3-3-timekeeping` (log: `docs/logs/M3.3.md`). Remaining: the finish protocol: one `bug-sweeper` finish pass against
+`origin/main` (fix everything, re-run until `SWEEP: PASS`), `reviewer`, screenshots, paperwork, PR (`needs-owner: yes`).
 
 ## Current milestone
-M3.3 Timekeeping (step 1 of 6).
+M3.3 Timekeeping (finishing).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
