@@ -6,11 +6,9 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-01 (M3.2 finished, awaiting owner merge; M3.3 is next)
 
 ## Next step
-**M3.2 Interrupt controllers is finished** (sweep PASS, review PASS, all tests green) on branch `claude/nifty-bell-wrb444`
-and waits for the owner: no PR is open yet because the session was not asked to open one. Open it with the template in
-`.github/pull_request_template.md` (title `M3.2: Interrupt controllers`, `needs-owner: yes`, lines `Sweeper: PASS
-(docs/sweeps/M3.2.md)` and `Reviewer: PASS`, screenshot `docs/screenshots/M3.2.png`). Then start **M3.3 Timekeeping**
-(Needs M3.2) and **M3.4 Locking + lock validator** (Needs M3.2): lowest-numbered first is M3.3.
+**M3.2 is finished and PR [#20](https://github.com/gwbrickner/bongos/pull/20) is open** (`needs-owner`), waiting on the
+owner's merge and answers to the M3.2 questions below. After it merges, start **M3.3 Timekeeping** (Needs M3.2)
+from an up-to-date `origin/main` (M3.4 Locking also needs only M3.2).
 
 ## Current milestone
 None in progress (M3.2 is awaiting owner merge).
@@ -32,7 +30,7 @@ None in progress (M3.2 is awaiting owner merge).
 | M2.5 | [#11](https://github.com/gwbrickner/bongos/pull/11) | BIOS loader: stage1 MBR, stage2 with a real-mode thunk, E820/VBE, a GPT+FAT32 reader, the shared menu and handoff. One image boots both ways |
 | M2.6 | [#16](https://github.com/gwbrickner/bongos/pull/16) | KASLR in both loaders (2 MiB slide, `--emit-relocs` relocation, `kaslr=off`), slide-aware symbolizer, `libs/crypto` (SHA-256, ChaCha20), kernel RNG (`randomGetBytes`) |
 | M3.1 | [#19](https://github.com/gwbrickner/bongos/pull/19) | ACPI tables: RSDP/XSDT/RSDT loader, FADT/MADT/MCFG/HPET/IVRS parsers, tables copied through temporary KVA windows (works on BIOS and UEFI), ACPI_RECLAIM freed after the copy, `acpidump=1` + `tools/acpiextract`, stored QEMU q35 tables, D-166..D-170 |
-| M3.2 | (PR not opened yet) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
+| M3.2 | [#20](https://github.com/gwbrickner/bongos/pull/20) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
 
 The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB and 4-CPU rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
