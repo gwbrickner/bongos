@@ -128,6 +128,22 @@ static inline uint64_t archReadTsc(void) {
     return ((uint64_t)hi << 32) | lo;
 }
 
+/* RDTSC ordered after all earlier instructions (LFENCE first): what timekeeping reads (M3.3,
+ * ARCHITECTURE §7.5). Orders against this CPU's own earlier loads only; on AMD LFENCE is
+ * dispatch-serializing only when DE_CFG[1] is set, which M3.5 revisits per CPU. The "memory"
+ * clobber keeps the compiler from moving memory accesses across it. No locks, IRQ-safe. */
+static inline uint64_t archReadTscOrdered(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("lfence\n\trdtsc" : "=a"(lo), "=d"(hi) : : "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
+
+/* SDM Vol 2 `MFENCE`: orders every earlier load/store before every later one (used between the
+ * xAPIC LVT write and the TSC-deadline WRMSR, SDM Vol 3A §10.5.4.1). */
+static inline void archMfence(void) {
+    __asm__ volatile("mfence" : : : "memory");
+}
+
 /* SDM Vol 2 `CPUID`: `regs[0..3]` receive EAX/EBX/ECX/EDX for leaf `leaf`, subleaf `subleaf`
  * (ECX on entry; pass 0 for leaves that don't use it). No red-zone/PIC concerns here (the kernel
  * is built -fno-pic, -mno-red-zone), so EBX is an ordinary clobberable GPR. No locks, IRQ-safe,

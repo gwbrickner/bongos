@@ -54,12 +54,17 @@ typedef struct {
     bool hasCentury;
 } TimeRtcRaw;
 
+/* A broken-down UTC date and time. */
+typedef struct {
+    uint32_t year, mon, day, hour, min, sec;
+} TimeCivil;
+
 /* Decodes `raw`: status B bit 2 set means binary, else BCD (a nibble above 9 is INVALID); bit 1
  * clear means 12-hour mode (hour bit 7 = PM, 12 -> 0, PM adds 12). The year is century * 100 + yy
  * when `hasCentury` and the decoded century is 19..29, else 2000 + yy. Every field is range-checked
  * (days per month included) and the year must be >= 1970. STATUS_ERR_INVALID otherwise, `*epoch`
- * untouched. Pure. */
-Status timeRtcDecode(const TimeRtcRaw *raw, uint64_t *epoch, uint32_t *yearOut);
+ * untouched. `civil` may be NULL. Pure. */
+Status timeRtcDecode(const TimeRtcRaw *raw, uint64_t *epoch, TimeCivil *civil);
 
 /* --- timer heap ---------------------------------------------------------------------------- */
 

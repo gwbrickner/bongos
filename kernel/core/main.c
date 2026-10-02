@@ -11,6 +11,7 @@
 #include "random.h"
 #include "sections.h"
 #include "stack-protector.h"
+#include "timekeeping.h"
 
 #include <arch/cpu-init.h>
 #include <arch/cpu.h>
@@ -246,6 +247,7 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
     irqInit();
     archEnableInterrupts();
     klogWrite(KLOG_INFO, "irq", "interrupts enabled");
+    timeInit(); /* M3.3, D-176..D-180: TSC/LAPIC-timer calibration, RTC wall clock */
 
     pmmPrintMeminfo(); /* the post-reclaim totals (both reclaims); panics if the check fails */
 

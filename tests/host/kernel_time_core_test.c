@@ -147,10 +147,15 @@ static TimeRtcRaw bcdRaw(void) {
 TEST(timeRtcDecodeBcd24h) {
     TimeRtcRaw r = bcdRaw();
     uint64_t e = 0;
-    uint32_t y = 0;
-    ASSERT_EQ(timeRtcDecode(&r, &e, &y), STATUS_OK);
+    TimeCivil c = {0};
+    ASSERT_EQ(timeRtcDecode(&r, &e, &c), STATUS_OK);
     ASSERT_EQ(e, timeCivilToEpoch(2026, 10, 2, 13, 45, 59));
-    ASSERT_EQ(y, 2026u);
+    ASSERT_EQ(c.year, 2026u);
+    ASSERT_EQ(c.mon, 10u);
+    ASSERT_EQ(c.day, 2u);
+    ASSERT_EQ(c.hour, 13u);
+    ASSERT_EQ(c.min, 45u);
+    ASSERT_EQ(c.sec, 59u);
 }
 
 TEST(timeRtcDecodeBinary24h) {

@@ -18,4 +18,11 @@ static inline uint8_t ioInByte(uint16_t port) {
     return value;
 }
 
+/* 32-bit port read (the ACPI PM timer, M3.3). Same rules as above. */
+static inline uint32_t ioInLong(uint16_t port) {
+    uint32_t value;
+    __asm__ volatile("inl %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
 #endif

@@ -30,11 +30,16 @@
 #define LAPIC_REG_LINT1      0x360
 #define LAPIC_REG_ERROR      0x370
 #define LAPIC_REG_TIMER_INIT 0x380
+#define LAPIC_REG_TIMER_CUR  0x390
+#define LAPIC_REG_TIMER_DIV  0x3E0
 
 #define LAPIC_LVT_MASKED      (1u << 16)
 #define LAPIC_LVT_NMI_MODE    (4u << 8)
 #define LAPIC_SVR_VALUE       0x1FFu /* APIC software-enabled, spurious vector 0xFF */
 #define LAPIC_SPURIOUS_VECTOR 0xFFu
+#define LAPIC_TIMER_VECTOR    0xFEu      /* ARCHITECTURE §7.2; owned by timekeeping (D-179) */
+#define LAPIC_LVT_TIMER_TSCDL (2u << 17) /* LVT timer mode bits 18:17 = 10: TSC-deadline */
+#define MSR_IA32_TSC_DEADLINE 0x6E0u
 
 /* --- 8259 (pic8259.c) ---------------------------------------------------------------------- */
 
@@ -80,6 +85,16 @@ bool lapicIrrBit(uint8_t v);
 bool lapicTmrBit(uint8_t v);
 /* The error status register (writes 0 first, as the SDM requires, then reads). */
 uint32_t lapicReadEsr(void);
+
+/* Re-programs this CPU's LAPIC timer registers (divide, LVT mode and vector) for the mode
+ * archTimerInit() chose, leaving the count stopped; for a CPU whose lapicInit() just masked the
+ * timer (M3.5's APs, and the M3.2 re-init ktest). Before archTimerInit() it does nothing. Boot-time
+ * or test, IF=0 on entry. */
+void lapicTimerCpuSetup(void);
+/* The calibrated LAPIC timer rate at divide 16 (0 before archTimerInit()), and whether the timer
+ * runs in TSC-deadline mode. No locks; IRQ-safe. */
+uint64_t lapicTimerHz(void);
+bool lapicTimerDeadlineMode(void);
 
 /* --- IOAPIC (ioapic.c) --------------------------------------------------------------------- */
 

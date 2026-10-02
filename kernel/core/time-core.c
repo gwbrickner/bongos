@@ -84,7 +84,7 @@ static bool rtcField(uint8_t v, bool binary, uint32_t *out) {
     return true;
 }
 
-Status timeRtcDecode(const TimeRtcRaw *raw, uint64_t *epoch, uint32_t *yearOut) {
+Status timeRtcDecode(const TimeRtcRaw *raw, uint64_t *epoch, TimeCivil *civil) {
     bool binary = (raw->regB & 0x04) != 0;
     bool h24 = (raw->regB & 0x02) != 0;
     uint32_t sec, min, hour, day, mon, yy, cent = 0;
@@ -113,8 +113,8 @@ Status timeRtcDecode(const TimeRtcRaw *raw, uint64_t *epoch, uint32_t *yearOut) 
         return STATUS_ERR_INVALID;
     }
     *epoch = timeCivilToEpoch(year, mon, day, hour, min, sec);
-    if (yearOut != NULL) {
-        *yearOut = year;
+    if (civil != NULL) {
+        *civil = (TimeCivil){year, mon, day, hour, min, sec};
     }
     return STATUS_OK;
 }
