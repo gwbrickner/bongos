@@ -3,15 +3,15 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-01 (M3.2 finished, awaiting owner merge; M3.3 is next)
+**Last updated:** 2026-10-02 (M3.2 merged; M3.3 started)
 
 ## Next step
-**M3.2 is finished and PR [#20](https://github.com/gwbrickner/bongos/pull/20) is open** (`needs-owner`), waiting on the
-owner's merge and answers to the M3.2 questions below. After it merges, start **M3.3 Timekeeping** (Needs M3.2)
-from an up-to-date `origin/main` (M3.4 Locking also needs only M3.2).
+**M3.3 Timekeeping is in progress** on branch `m3-3-timekeeping` (log: `docs/logs/M3.3.md`). M3.2 merged as #20.
+Next: step 1, the pure `kernel/core/time-core.{h,c}` plus `tests/host/kernel_time_core_test.c` and
+`kernel_timer_heap_test.c` (`make host-tests`).
 
 ## Current milestone
-None in progress (M3.2 is awaiting owner merge).
+M3.3 Timekeeping (step 1 of 6).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -30,7 +30,7 @@ None in progress (M3.2 is awaiting owner merge).
 | M2.5 | [#11](https://github.com/gwbrickner/bongos/pull/11) | BIOS loader: stage1 MBR, stage2 with a real-mode thunk, E820/VBE, a GPT+FAT32 reader, the shared menu and handoff. One image boots both ways |
 | M2.6 | [#16](https://github.com/gwbrickner/bongos/pull/16) | KASLR in both loaders (2 MiB slide, `--emit-relocs` relocation, `kaslr=off`), slide-aware symbolizer, `libs/crypto` (SHA-256, ChaCha20), kernel RNG (`randomGetBytes`) |
 | M3.1 | [#19](https://github.com/gwbrickner/bongos/pull/19) | ACPI tables: RSDP/XSDT/RSDT loader, FADT/MADT/MCFG/HPET/IVRS parsers, tables copied through temporary KVA windows (works on BIOS and UEFI), ACPI_RECLAIM freed after the copy, `acpidump=1` + `tools/acpiextract`, stored QEMU q35 tables, D-166..D-170 |
-| M3.2 | [#20](https://github.com/gwbrickner/bongos/pull/20) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
+| M3.2 | [#20](https://github.com/gwbrickner/bongos/pull/20) (merged) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
 
 The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB and 4-CPU rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
@@ -39,6 +39,11 @@ boot screens are in `docs/screenshots/`.
 _(none)_
 
 ## Questions for owner
+- **M3.3:** (1) The wall-clock ktest cannot take host time on the cmdline (it is fixed in the image before the firmware
+  runs): accept D-181 (the harness timestamps the kernel's `time: wall-check` serial line, <= 2 s) and update the
+  ROADMAP wording? (2) Panic on bare metal when the TSC is not invariant (ARCH 1.3 says required), warn only under a
+  hypervisor? (3) Is the reference PC's RTC kept in UTC (no Windows dual-boot)? (4) With no PM timer and no HPET,
+  boot panics until PIT/CPUID-0x15 fallbacks exist: OK? (5) The 100 ms one-shot ktest retries up to 3 times (D-182): OK?
 - **M3.2:** (1) LINT1 is programmed NMI/unmasked per the MADT (an NMI still panics, D-074): OK, or keep it masked
   until a watchdog milestone? (2) LVT Error stays masked (no handler): OK? (3) An unregistered vector is logged once,
   counted and EOI'd in every build, never a panic: OK? (4) `irqUnrouteGsi` of a level pin stalls (sweep lead S4):
