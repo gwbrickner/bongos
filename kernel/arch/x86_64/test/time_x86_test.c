@@ -154,3 +154,180 @@ KTEST(time_wall_matches_rtc) {
     klogWrite(KLOG_INFO, "time", "wall-check epoch=%llu.%09llu", (unsigned long long)wallSec,
               (unsigned long long)(wallNs % 1000000000ull));
 }
+
+/* --- bug-sweeper (M3.3 finish): adversarial hardware-facing tests --------------------------- */
+
+/* timerArm()/timerCancel() from another interrupt handler (IRQ context, not the timer's own): the
+ * arm takes effect (it reprograms, since only the timer handler defers that) and fires once. */
+typedef struct {
+    TimerObj *t;
+    volatile uint64_t deadline;
+    volatile int32_t armSt, cancelSt;
+    volatile uint32_t ran;
+    volatile uint32_t doCancel;
+} ArmFromIrq;
+
+static ArmFromIrq armIrq;
+static volatile uint32_t armIrqFired;
+static volatile uint64_t armIrqFiredAt;
+
+static void armIrqTimerCb(TimerObj *t, void *ctx) {
+    (void)t;
+    (void)ctx;
+    armIrqFiredAt = timeMonotonicNs();
+    armIrqFired++;
+}
+
+static void armIrqHandler(uint32_t vector, void *ctx) {
+    (void)vector;
+    ArmFromIrq *a = (ArmFromIrq *)ctx;
+    if (a->doCancel) {
+        a->cancelSt = (int32_t)timerCancel(a->t);
+    } else {
+        a->deadline = timeMonotonicNs() + 10 * MS;
+        a->armSt = (int32_t)timerArm(a->t, a->deadline);
+    }
+    a->ran++;
+}
+
+KTEST(time_timer_arm_from_other_irq) {
+    static TimerObj t;
+    uint32_t vec;
+    KTEST_ASSERT(irqAllocVector(&vec) == STATUS_OK);
+    armIrq.t = &t;
+    armIrq.armSt = armIrq.cancelSt = 99;
+    armIrq.ran = 0;
+    armIrq.doCancel = 0;
+    armIrqFired = 0;
+    timerInit(&t, armIrqTimerCb, NULL);
+    Status reg = irqRegister(vec, armIrqHandler, &armIrq);
+    lapicSendSelfIpi((uint8_t)vec);
+    bool ran = waitCount(&armIrq.ran, 1, 200 * MS);
+    bool fired = waitCount(&armIrqFired, 1, 500 * MS);
+    uint64_t firedAt = armIrqFiredAt;
+    /* now arm far away from thread context and cancel it from the handler */
+    Status farArm = timerArm(&t, timeMonotonicNs() + 200 * MS);
+    armIrq.doCancel = 1;
+    lapicSendSelfIpi((uint8_t)vec);
+    bool ran2 = waitCount(&armIrq.ran, 2, 200 * MS);
+    uint32_t before = armIrqFired;
+    uint64_t start = timeMonotonicNs();
+    while (timeMonotonicNs() - start < 300 * MS) {
+        archPause();
+    }
+    uint32_t after = armIrqFired;
+    (void)timerCancel(&t);
+    (void)irqUnregister(vec);
+    (void)irqFreeVector(vec);
+    KTEST_ASSERT(reg == STATUS_OK);
+    KTEST_ASSERT(ran && ran2);
+    KTEST_ASSERT_EQ(armIrq.armSt, STATUS_OK);
+    KTEST_ASSERT(fired);
+    KTEST_ASSERT(firedAt >= armIrq.deadline);
+    KTEST_ASSERT(farArm == STATUS_OK);
+    KTEST_ASSERT_EQ(armIrq.cancelSt, STATUS_OK);
+    KTEST_ASSERT_EQ(after, before); /* the cancelled timer never fired */
+    KTEST_ASSERT_EQ(after, 1);
+}
+
+/* The hardware is always programmed for the queue's root: arming an earlier timer shortens the
+ * programmed interval, cancelling the root lengthens it to the next one, and an empty queue stops
+ * the timer. In one-shot mode the programmed count is the LAPIC initial-count register (and the
+ * 2^32-1 clamp of a 2^40 ns delta is visible there); in TSC-deadline mode the IA32_TSC_DEADLINE
+ * MSR. Runs with IRQs off so no expiry interferes; every timer is far in the future. */
+static uint64_t programmedNs(void) {
+    if (lapicTimerDeadlineMode()) {
+        uint64_t dl = archRdmsr(MSR_IA32_TSC_DEADLINE);
+        uint64_t now = archReadTscOrdered();
+        if (dl == 0) {
+            return 0;
+        }
+        return dl <= now ? 1 : (dl - now) * 1000000000ull / timeTscHz();
+    }
+    uint32_t init = lapicRead(LAPIC_REG_TIMER_INIT);
+    return (uint64_t)init * 1000000000ull / lapicTimerHz();
+}
+
+KTEST(time_timer_hw_tracks_root) {
+    static TimerObj ta, tb, tfar;
+    timerInit(&ta, armIrqTimerCb, NULL);
+    timerInit(&tb, armIrqTimerCb, NULL);
+    timerInit(&tfar, armIrqTimerCb, NULL);
+    uint64_t f = archIrqSave();
+    uint64_t now = timeMonotonicNs();
+    Status s1 = timerArm(&ta, now + 5000 * MS);
+    uint64_t pA = programmedNs();
+    Status s2 = timerArm(&tb, now + 2000 * MS); /* new earlier root */
+    uint64_t pB = programmedNs();
+    Status s3 = timerArm(&tb, now + 8000 * MS); /* the root moves behind ta */
+    uint64_t pB2 = programmedNs();
+    Status s4 = timerArm(&tb, now + 2000 * MS);
+    Status c1 = timerCancel(&tb); /* the root goes: back to ta */
+    uint64_t pA2 = programmedNs();
+    Status c2 = timerCancel(&ta); /* empty: stopped */
+    uint64_t pNone = programmedNs();
+    Status s5 = timerArm(&tfar, UINT64_MAX); /* clamped to 2^40 ns (and 2^32-1 counts) */
+    uint64_t pFar = programmedNs();
+    uint32_t farInit = lapicRead(LAPIC_REG_TIMER_INIT);
+    Status c3 = timerCancel(&tfar);
+    archIrqRestore(f);
+    klogWrite(KLOG_INFO, "time", "hw-tracks-root A=%lluus B=%lluus B2=%lluus A2=%lluus far=%llums",
+              (unsigned long long)(pA / 1000), (unsigned long long)(pB / 1000),
+              (unsigned long long)(pB2 / 1000), (unsigned long long)(pA2 / 1000),
+              (unsigned long long)(pFar / MS));
+    KTEST_ASSERT(s1 == STATUS_OK && s2 == STATUS_OK && s3 == STATUS_OK && s4 == STATUS_OK &&
+                 s5 == STATUS_OK);
+    KTEST_ASSERT(c1 == STATUS_OK && c2 == STATUS_OK && c3 == STATUS_OK);
+    /* generous windows: QEMU TCG time passes between the arm and the read */
+    KTEST_ASSERT(pA > 4500 * MS && pA <= 5001 * MS);
+    KTEST_ASSERT(pB > 1500 * MS && pB <= 2001 * MS);
+    KTEST_ASSERT(pB2 > 4500 * MS && pB2 <= 5001 * MS); /* ta is the root again */
+    KTEST_ASSERT(pA2 > 4500 * MS && pA2 <= 5001 * MS);
+    KTEST_ASSERT_EQ(pNone, 0);
+    if (lapicTimerDeadlineMode()) {
+        KTEST_ASSERT(pFar > (1ull << 40) - 1000 * MS && pFar <= (1ull << 40) + MS);
+    } else {
+        KTEST_ASSERT_EQ(farInit, 0xFFFFFFFFu);
+    }
+}
+
+/* archTimerSet() directly: 0 means "as soon as possible" (a count of 1, never 0, which would stop
+ * a one-shot timer), 1 ms is about lapicHz/1000 counts, and a 2^40 ns delta clamps to 2^32-1. */
+KTEST(time_lapic_oneshot_count_edges) {
+    if (lapicTimerDeadlineMode()) {
+        uint64_t f = archIrqSave();
+        uint64_t t0 = archReadTscOrdered();
+        archTimerSet(0);
+        uint64_t dl0 = archRdmsr(MSR_IA32_TSC_DEADLINE);
+        archTimerSet(1ull << 40);
+        uint64_t dlFar = archRdmsr(MSR_IA32_TSC_DEADLINE);
+        archTimerStop();
+        uint64_t dlStop = archRdmsr(MSR_IA32_TSC_DEADLINE);
+        timeReprogram();
+        archIrqRestore(f);
+        KTEST_ASSERT(dl0 > t0 || dl0 == 0); /* 0: it already fired and the MSR cleared */
+        KTEST_ASSERT(dlFar > t0);
+        KTEST_ASSERT_EQ(dlStop, 0);
+        return;
+    }
+    uint64_t hz = lapicTimerHz();
+    uint64_t f = archIrqSave();
+    archTimerSet(0);
+    uint32_t c0 = lapicRead(LAPIC_REG_TIMER_INIT);
+    archTimerSet(MS);
+    uint32_t c1ms = lapicRead(LAPIC_REG_TIMER_INIT);
+    archTimerSet(1ull << 40);
+    uint32_t cFar = lapicRead(LAPIC_REG_TIMER_INIT);
+    archTimerSet((0xFFFFFFFFull * 1000000000ull) / hz - 1000); /* just under the clamp */
+    uint32_t cEdge = lapicRead(LAPIC_REG_TIMER_INIT);
+    archTimerStop();
+    uint32_t cStop = lapicRead(LAPIC_REG_TIMER_INIT);
+    timeReprogram();
+    archIrqRestore(f);
+    KTEST_ASSERT_EQ(c0, 1);
+    uint64_t want = hz / 1000;
+    KTEST_ASSERT(c1ms >= want && c1ms <= want + 2);
+    KTEST_ASSERT_EQ(cFar, 0xFFFFFFFFu);
+    KTEST_ASSERT(cEdge < 0xFFFFFFFFu && cEdge > 0xFFFFFFFFu - hz / 1000);
+    KTEST_ASSERT_EQ(cStop, 0);
+}
