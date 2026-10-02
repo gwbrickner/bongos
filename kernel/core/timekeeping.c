@@ -133,9 +133,12 @@ Status timerArm(TimerObj *t, uint64_t deadlineNs) {
         timerHeapRemove(&bsp.heap, t);
         t->state = TIMER_IDLE;
     }
+    uint64_t oldDeadline = t->deadlineNs;
     t->deadlineNs = deadlineNs;
     Status st = timerHeapInsert(&bsp.heap, t);
-    if (st == STATUS_OK && (timerHeapPeek(&bsp.heap) != oldRoot || oldRoot == t)) {
+    if (st != STATUS_OK) {
+        t->deadlineNs = oldDeadline; /* the contract: a refused `t` is left unchanged */
+    } else if (timerHeapPeek(&bsp.heap) != oldRoot || oldRoot == t) {
         reprogram();
     }
     archIrqRestore(f);

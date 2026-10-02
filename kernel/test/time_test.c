@@ -442,6 +442,35 @@ KTEST(time_timer_far_deadlines) {
     KTEST_ASSERT(c1 == STATUS_OK && c2 == STATUS_OK && c3 == STATUS_OK);
 }
 
+/* A full queue leaves the refused timer exactly as it was (timekeeping.h: "`t` unchanged"). */
+KTEST(time_timer_full_leaves_timer_unchanged) {
+    static Fire f;
+    static TimerObj extra;
+    static TimerObj many[TIMER_HEAP_CAP];
+    timerInit(&extra, fireCb, &f);
+    uint64_t far = timeMonotonicNs() + 100000 * MS;
+    KTEST_ASSERT(timerArm(&extra, far + 123) == STATUS_OK);
+    KTEST_ASSERT(timerCancel(&extra) == STATUS_OK);
+    uint64_t before = extra.deadlineNs;
+    uint32_t armed = 0;
+    for (uint32_t i = 0; i < TIMER_HEAP_CAP; i++) {
+        timerInit(&many[i], fireCb, &f);
+        if (timerArm(&many[i], far + i) == STATUS_OK) {
+            armed++;
+        }
+    }
+    Status full = timerArm(&extra, far + 999);
+    uint64_t after = extra.deadlineNs;
+    uint8_t state = extra.state;
+    for (uint32_t i = 0; i < TIMER_HEAP_CAP; i++) {
+        (void)timerCancel(&many[i]);
+    }
+    KTEST_ASSERT_EQ(armed, TIMER_HEAP_CAP);
+    KTEST_ASSERT(full == STATUS_ERR_NO_MEMORY);
+    KTEST_ASSERT_EQ(after, before);
+    KTEST_ASSERT_EQ(state, TIMER_IDLE);
+}
+
 /* 256 timers due together run from one batch in arm order (the FIFO tie-break), each once. */
 typedef struct {
     volatile uint32_t count;
