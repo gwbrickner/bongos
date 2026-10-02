@@ -44,6 +44,8 @@ HOST_TEST_BIN := $(HOST_TEST_BUILD)/host-tests
 # only acpi.c (KVA reads, klog) is kernel-only, so it is not in this list.
 # kernel/arch/x86_64/irq-core.c: the interrupt code's pure core (vector bitmap, IOAPIC RTE encoding,
 # ISA IRQ -> GSI resolution, GSI lookup; M3.2, D-174); the hardware side is kernel-only.
+# kernel/core/time-core.c: the timekeeping core (scaling/calibration math, RTC decode, timer heap;
+# M3.3, D-176..D-180); the clock hardware and the IRQ glue are kernel-only.
 HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c tools/mkimage/biosboot.c \
                         boot/uefi/guids.c \
                         $(wildcard boot/common/*.c) $(CONSOLE_FONT_C) \
@@ -53,7 +55,7 @@ HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c tools/mkimage/
                         kernel/mm/slab-core.c kernel/mm/slab-debug.c boot/common/hw/loader-kaslr.c \
                         $(wildcard libs/crypto/*.c) kernel/core/random-core.c \
                         kernel/drivers/acpi/acpi-tables.c kernel/drivers/acpi/acpi-dump.c \
-                        kernel/arch/x86_64/irq-core.c \
+                        kernel/arch/x86_64/irq-core.c kernel/core/time-core.c \
                         $(filter-out tools/acpiextract/main.c,$(wildcard tools/acpiextract/*.c))
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/biosboot.h \
                         $(wildcard boot/uefi/include/efi/*.h) \
@@ -65,7 +67,7 @@ HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/
                         kernel/include/kmalloc.h kernel/mm/slab-internal.h \
                         $(wildcard libs/crypto/include/crypto/*.h) $(wildcard libs/crypto/test/*.h) \
                         kernel/include/random-core.h $(wildcard kernel/include/acpi*.h) \
-                        kernel/arch/x86_64/include/irq-core.h \
+                        kernel/arch/x86_64/include/irq-core.h kernel/include/time-core.h \
                         $(wildcard tools/acpiextract/*.h)
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
                             -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms \
