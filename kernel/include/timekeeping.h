@@ -23,8 +23,9 @@ void timeInit(void);
 /* Nanoseconds since timeInit() finished calibrating (0 before). Monotonic on one CPU; cross-CPU
  * offsets arrive with M3.5. No locks; IRQ-safe; never sleeps; about 20-30 cycles. */
 uint64_t timeMonotonicNs(void);
-/* Nanoseconds since 1970-01-01T00:00:00Z: the RTC at boot (assumed UTC, at most 1 s behind: there
- * is no seconds-edge sync) plus the monotonic time since. Meaningful only if timeWallValid(). */
+/* Nanoseconds since 1970-01-01T00:00:00Z: the RTC at boot (assumed UTC) plus 0.5 s plus the
+ * monotonic time since. There is no seconds-edge sync, so the error is about +-0.5 s (D-180).
+ * Meaningful only if timeWallValid(). No locks; IRQ-safe; never sleeps. */
 uint64_t timeWallNs(void);
 bool timeWallValid(void);
 /* The calibrated TSC frequency (0 before timeInit()). */
@@ -45,6 +46,9 @@ Status timerArm(TimerObj *t, uint64_t deadlineNs);
 /* STATUS_OK: `t` was armed (or popped but not started) and its callback will not run.
  * STATUS_ERR_NOT_FOUND: idle, or the callback has already started. STATUS_ERR_INVALID: NULL. */
 Status timerCancel(TimerObj *t);
+/* True iff `t` is queued (ARMED). False while idle, and also once the expiry pass has popped it
+ * (its callback may still be about to run: use timerCancel()'s result to know). A plain read, no
+ * IRQ-disable section; IRQ-safe; never sleeps. */
 bool timerIsArmed(const TimerObj *t);
 
 /* The timer interrupt handler (an IrqHandler): runs every expired timer, then reprograms the
