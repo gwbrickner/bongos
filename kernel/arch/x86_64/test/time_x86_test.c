@@ -236,16 +236,21 @@ KTEST(time_timer_arm_from_other_irq) {
  * 2^32-1 clamp of a 2^40 ns delta is visible there); in TSC-deadline mode the IA32_TSC_DEADLINE
  * MSR. Runs with IRQs off so no expiry interferes; every timer is far in the future. */
 static uint64_t programmedNs(void) {
+    uint64_t
+        mult; /* ticks -> ns; a plain ticks * 1e9 would overflow for 2^40 ns of a 4.5 GHz TSC */
     if (lapicTimerDeadlineMode()) {
         uint64_t dl = archRdmsr(MSR_IA32_TSC_DEADLINE);
         uint64_t now = archReadTscOrdered();
-        if (dl == 0) {
+        if (dl == 0 || timeMakeMult(timeTscHz(), 1000000000ull, &mult) != STATUS_OK) {
             return 0;
         }
-        return dl <= now ? 1 : (dl - now) * 1000000000ull / timeTscHz();
+        return dl <= now ? 1 : timeScale(dl - now, mult);
     }
     uint32_t init = lapicRead(LAPIC_REG_TIMER_INIT);
-    return (uint64_t)init * 1000000000ull / lapicTimerHz();
+    if (timeMakeMult(lapicTimerHz(), 1000000000ull, &mult) != STATUS_OK) {
+        return 0;
+    }
+    return timeScale(init, mult);
 }
 
 KTEST(time_timer_hw_tracks_root) {
