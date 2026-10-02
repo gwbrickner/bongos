@@ -3,7 +3,7 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-01 (M3.1 finished and awaiting owner merge; M3.2 is next)
+**Last updated:** 2026-10-02 (owner decisions D-171..D-176 recorded; M3.1 awaiting owner merge; M3.2 is next)
 
 ## Next step
 Start **M3.2 Interrupt controllers** (its Need, M3.1, is done), after the owner merges the M3.1 PR (`needs-owner`).
@@ -39,33 +39,17 @@ boot screens are in `docs/screenshots/`.
 _(none)_
 
 ## Questions for owner
-- **M3.1:** (1) Checksum strictness: reject a bad-checksum table (D-167, as designed) or warn and use it
-  like Linux? (2) OK to commit QEMU's table blobs (incl. its DSDT AML) under `tests/data/acpi/`? (3) OK to keep
-  `acpidump=1` in `tests/harness/ktest-boot.cfg` (30-60 KiB extra serial per matrix row)? (4) Reclaiming
-  ACPI_RECLAIM for good means Phase-2 AML serves `DataTableRegion`, and SSDTs it `Load`s/`LoadTable`s, from the
-  kernel copies (anything in ACPI_RECLAIM is gone); accepted?
-- `BootInfo.bootDiskGuid` and `bootPartGuid` (D-056) have no milestone that fills them yet,
-  so both stay zero. Suggestion: use the UEFI PartitionInfo protocol plus a BlockIo
-  GPT-header read (the BIOS loader already has a GPT reader, D-105), in M6.4 (which adds the
-  kernel's own GPT scanner, per D-056).
-- **M2.6:** accept 8 bits of KASLR entropy (512 MiB window, D-121)? Keep the canary on D-077's seed
-  fold, or move it to `randomGetBytes` later (the serial-printed slide leaks ~8 bits of that seed)?
-  Is falling back to an unslid boot on a relocation failure (D-120) acceptable, versus refusing?
-- **M2.6 slide in logs:** the kernel prints its KASLR slide (the `kaslr: virtBase=` line and every
-  backtrace header). Once a user-readable kernel log exists (logd/dmesg) that defeats KASLR against
-  local users, so that milestone must make the log privileged or redact the slide. Agree?
-- **M2.6 vector provenance (needs network):** `libs/crypto/test/crypto-vectors.h` could not be diffed
-  against the RFC text (rfc-editor.org was denied by the proxy). Every field was cross-checked against
-  independent transcriptions (Nettle, Mbed TLS, pyca, Linux testmgr, Crypto++, `a66c5b7`), but
-  someone with network access should still diff it against RFC 8439 2.3.2/2.4.2/A.1/A.2 and FIPS 180-4.
+_(none: all ten earlier questions were answered on 2026-10-02, see D-171..D-176.)_
 
 ## Waiting on owner (hardware checks and other owner-only steps)
 - **M3.1 hardware check** (optional; never blocks): boot the USB stick on the reference PC with `acpidump=1` in
   `boot.cfg`'s `cmdline`, check the `acpi:` lines (CPU list, MCFG base, no rejected tables), and ideally save the
   serial log for `tools/acpiextract`. Full steps are in `docs/logs/M3.1.md`, "Owner hardware check".
-- **Default the main session to Sonnet** (D-117). Adding `"model": "sonnet"` to
-  `.claude/settings.json` is an owner-only change, because the agent isn't allowed to change
-  its own settings. Until then, pick Sonnet when starting a session (`/model sonnet`).
+- **Allow two hosts in the environment's network policy** (D-176): `rfc-editor.org`, plus the NIST host serving
+  FIPS 180-4. Environment menu in the session's title bar, then Edit, then Network access. After that, ask a session
+  to diff `libs/crypto/test/crypto-vectors.h` against RFC 8439 2.3.2/2.4.2/A.1/A.2 and FIPS 180-4. Crypto stays
+  EXPERIMENTAL until then.
+- _(Declined, 2026-10-02: the `"model": "sonnet"` default in `.claude/settings.json`. Keep picking Sonnet with `/model sonnet`.)_
 - **Re-run the cloud environment's setup script** (Environment settings → re-run setup), so
   that fresh sessions get `libclang-rt-18-dev` and `gdb` from `tools/ci/install-deps.sh`.
   Until then, `make host-tests` needs `sudo apt-get install -y libclang-rt-18-dev` in each new
@@ -91,6 +75,9 @@ _(none)_
   been triaged yet.
 - M2.5 deferred some items on purpose (D-114), including a PM-side diagnostic IDT in stage2
   and dual teletype+serial logging before VBE is set up.
+- **Loud unslid fallback (D-173):** the loaders still fall back silently-ish when relocation fails. Needs a `BootInfo`
+  flag, a screen+serial warning, a kernel `klog` warning, and a forcing ktest. Boot-ABI change: `architect` first,
+  `needs-owner`. Not scheduled; pick it up with the next boot-handoff change or as its own small step.
 
 ## Parallel lanes (informational; the main line updates this when lanes merge)
 | Milestone | Branch | State |

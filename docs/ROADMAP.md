@@ -425,6 +425,8 @@ audio, and USB controllers for later milestones.
 2. GPT and MBR partition scanning. Partition devices are named `diskN`/`diskNpM`.
 3. A shared virtio-pci modern transport library, plus the virtio-blk module.
 4. **The write guard** (see the safety rule at the top of this file), with a ktest.
+   4a. Fill `BootInfo.bootDiskGuid` and `bootPartGuid` (D-175): UEFI from the PartitionInfo protocol plus a BlockIo
+   GPT-header read, BIOS from the loader's GPT reader (D-105). The guard keys on them, and a ktest covers the zero-GUID case.
 5. ktests: read and write a scratch virtio disk and verify checksums; writes to a non-boot disk without `diskwrite=` fail with `STATUS_ACCESS_DENIED`.
 
 **Done when:** the ktests pass.
@@ -532,9 +534,10 @@ list detected on your SSD (read-only; the write guard blocks writes).
 ### [ ] M8.1 svcd + logd + svc tool
 **Needs:** M7.7, M5.7
 1. `svcd` as PID 1: parses `/etc/svc/*.svc`, orders services by dependencies, gives each service its own Job, applies restart policies with backoff, and handles orderly shutdown (with the M3.7 power-button hook routed here).
-2. `logd`: the kernel log reader, a service log channel, `/var/log/*`, rotation, and `dmesg`.
+2. `logd`: the kernel log reader, a service log channel, `/var/log/*`, rotation, and `dmesg`. Reading the kernel log is
+   privileged, **and** the KASLR slide and kernel pointers are redacted from anything unprivileged readers see (D-174).
 3. `svc status|start|stop|restart|logs`.
-4. Tests: a service configured to crash gets restarted with backoff; dependency order is respected; the power button leads to a clean shutdown sequence in the log.
+4. Tests: a service configured to crash gets restarted with backoff; dependency order is respected; the power button leads to a clean shutdown sequence in the log; an unprivileged `dmesg` is refused, and a redaction test shows no kernel address or slide in any unprivileged-visible log line.
 
 **Done when:** the tests pass.
 
@@ -600,7 +603,8 @@ list detected on your SSD (read-only; the write guard blocks writes).
 
 ### [ ] M9.1 Full AML interpreter `[parallel-ok for the host part]`
 **Needs:** M3.7
-1. The complete ACPI 6.x AML opcode set, namespace, methods, operation regions (SystemMemory, SystemIO, PCI_Config), Mutex/Event, Notify, `_OSI` (answers as recent Windows), `_STA`/`_INI`, `_PRT`, and GPEs.
+1. The complete ACPI 6.x AML opcode set, namespace, methods, operation regions (SystemMemory, SystemIO, PCI_Config), Mutex/Event, Notify, `_OSI` (answers as recent Windows), `_STA`/`_INI`, `_PRT`, and GPEs. `DataTableRegion`, and any SSDT it `Load`s or `LoadTable`s, are served from the kernel's table
+   copies, because ACPI_RECLAIM is freed after `acpiInit` (D-168, D-171).
 2. A host-side test harness that loads the stored table sets and evaluates `_PRT`, `_S5_`, and `_STA` for every device.
 3. The kernel uses `_PRT` for INTx routing.
 4. Owner step: boot a Linux live USB on the PC, run `sudo acpidump > b650.dat`, and commit it to `tests/data/acpi/b650/` (the milestone's instructions explain how).
@@ -1068,6 +1072,14 @@ modified image and confirm it's refused.
 3. Tests: an encrypted install boots with the right passphrase and is refused with the wrong one; the raw disk shows no plaintext markers.
 
 **Done when:** the tests pass.
+
+### [ ] M18.3 KASLR hardening `needs-owner`
+**Needs:** M2.6, M18.1
+1. Widen the slide entropy beyond D-121's 8 bits (a larger kernel window and/or finer-grained placement). This is a paging-layout and loader change, so consult `architect` and update ARCHITECTURE §6.1.
+2. Move the stack canary seed from D-077's `BootInfo.randomSeed` fold to `randomGetBytes` (per-thread canaries if Phase 4 has landed by then), so the printed slide no longer leaks seed bits (D-172).
+3. Tests: the entropy estimate over many boots matches the new window, and no canary is derived from a value the logs print.
+
+**Done when:** the tests pass under both firmwares, and `kaslr=off` still gives the fixed base.
 
 ---
 
