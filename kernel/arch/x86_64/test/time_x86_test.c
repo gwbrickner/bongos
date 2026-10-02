@@ -147,7 +147,11 @@ KTEST(time_wall_matches_rtc) {
     uint64_t wallNs = timeWallNs();
     uint64_t wallSec = wallNs / 1000000000ull;
     uint64_t diff = wallSec > epoch ? wallSec - epoch : epoch - wallSec;
-    KTEST_ASSERT(diff <= 2); /* boot-time RTC read lags by up to 1 s (no seconds-edge sync) */
+    /* timeWallNs() is the boot RTC reading + 0.5 s + elapsed, i.e. the true RTC time plus an error
+     * in (-0.5, +0.5] s (D-180; the RTC read's own duration adds at most ~0.1 s), so its whole
+     * second is within 1 of the RTC's. A bound of 2 let a wall clock 3 s off pass whenever the boot
+     * read fell in the second half of an RTC second (sweep M3.3 round 2). */
+    KTEST_ASSERT(diff <= 1);
     KTEST_ASSERT(epoch >= 1704067200ull && epoch < 4102444800ull); /* 2024 .. 2100 */
     /* Roadmap clause 3: tests/harness/run-qemu.sh timestamps this line against the host's clock
      * (D-181) and mk/test.mk requires the two to agree within 2 s. */
