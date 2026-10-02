@@ -148,11 +148,18 @@ TIME_LOG_REGEX_FILE := tests/harness/time-log-regexes.txt
 # M3.4 (D-183..D-188): the spinlock/preempt ktests run in both profiles; the lock validator exists
 # (and so do its ktests) only in debug builds.
 LOCK_REQUIRED_KTESTS := spin_trylock_semantics spin_irqsave_restores_if preempt_count_balance \
-                        spin_unlock_unlocked_caught
+                        spin_unlock_unlocked_caught spin_ticket_wraparound \
+                        spin_unlock_irqrestore_unlocked_caught spin_assert_held \
+                        preempt_in_atomic_irqs_off
 LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_unsafe_in_irq_reported \
                            lockdep_irq_safe_then_irqs_on_reported lockdep_class_recursion_reported \
                            lockdep_trylock_records_no_edge lockdep_out_of_order_release \
-                           lockdep_sees_kernel_locks
+                           lockdep_sees_kernel_locks lockdep_not_held_reported \
+                           lockdep_irqs_enabled_while_held_reported \
+                           lockdep_transitive_inversion_reported lockdep_irq_segment_records_no_edge \
+                           lockdep_trylock_same_class_allowed \
+                           lockdep_trylock_irqs_on_then_irq_reported lockdep_repeat_order_adds_nothing \
+                           lockdep_spininit_stack_locks lockdep_kernel_lock_order
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \

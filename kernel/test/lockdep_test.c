@@ -189,4 +189,175 @@ KTEST(lockdep_sees_kernel_locks) {
     KTEST_ASSERT(lockdepDependsOn("lt-outer", "klog"));
 }
 
+/* ---- bug-sweeper (M3.4 finish): adversarial validator tests. Each uses its own locks. ---- */
+
+static Spinlock nhLock = SPINLOCK_INIT("lt-not-held");
+
+/* Releasing a lock the validator never saw taken (raw-locked behind its back) is NOT_HELD. */
+KTEST(lockdep_not_held_reported) {
+    uint32_t depth = lockdepHeldDepth();
+    uint32_t base = preemptCount();
+    preemptDisable(); /* the spinUnlock below lowers it */
+    rawSpinLock(&nhLock.raw);
+    lockdepExpectBegin(LOCKDEP_REPORT_NOT_HELD);
+    spinUnlock(&nhLock);
+    uint32_t reports = lockdepExpectEnd();
+    KTEST_ASSERT_EQ(reports, 1);
+    KTEST_ASSERT(!spinIsLocked(&nhLock));
+    KTEST_ASSERT_EQ(lockdepHeldDepth(), depth);
+    KTEST_ASSERT_EQ(preemptCount(), base);
+}
+
+static Spinlock ieLock = SPINLOCK_INIT("lt-irqs-enabled-while-held");
+
+/* A lock used in a handler, taken irqsave, then IRQs enabled while it is still held: reported at
+ * release (the third IRQ-usage direction). */
+KTEST(lockdep_irqs_enabled_while_held_reported) {
+    bool ran = runIrqCallback(&ieLock);
+    KTEST_ASSERT(ran);
+    uint64_t f = spinLockIrqSave(&ieLock);
+    archEnableInterrupts(); /* the bug under test; the timer callback is not armed */
+    lockdepExpectBegin(LOCKDEP_REPORT_IRQ_INCONSISTENT);
+    spinUnlock(&ieLock);
+    uint32_t reports = lockdepExpectEnd();
+    archIrqRestore(f);
+    KTEST_ASSERT_EQ(reports, 1);
+}
+
+static Spinlock trA = SPINLOCK_INIT("lt-tr-a");
+static Spinlock trB = SPINLOCK_INIT("lt-tr-b");
+static Spinlock trC = SPINLOCK_INIT("lt-tr-c");
+
+static __attribute__((noinline)) void lockdepTestTakePair(Spinlock *outer, Spinlock *inner) {
+    uint64_t fo = spinLockIrqSave(outer);
+    uint64_t fi = spinLockIrqSave(inner);
+    spinUnlockIrqRestore(inner, fi);
+    spinUnlockIrqRestore(outer, fo);
+}
+
+/* A->B and B->C recorded separately; C then A closes a cycle through B. */
+KTEST(lockdep_transitive_inversion_reported) {
+    lockdepTestTakePair(&trA, &trB);
+    lockdepTestTakePair(&trB, &trC);
+    bool ac = lockdepDependsOn("lt-tr-a", "lt-tr-c");
+    lockdepExpectBegin(LOCKDEP_REPORT_INVERSION);
+    lockdepTestTakePair(&trC, &trA);
+    uint32_t reports = lockdepExpectEnd();
+    KTEST_ASSERT(ac);
+    KTEST_ASSERT_EQ(reports, 1);
+    KTEST_ASSERT(!lockdepDependsOn("lt-tr-c", "lt-tr-a"));
+}
+
+static Spinlock segOuter = SPINLOCK_INIT("lt-seg-outer");
+static Spinlock segIrq = SPINLOCK_INIT("lt-seg-irq");
+
+/* A handler's lock is not ordered after a lock the interrupted code holds: no edge, and the
+ * reverse order in process context is then not an inversion. */
+KTEST(lockdep_irq_segment_records_no_edge) {
+    spinLock(&segOuter); /* IF=1: an IRQ-unsafe lock, held while the timer fires */
+    uint32_t depthHeld = lockdepHeldDepth();
+    bool ran = runIrqCallback(&segIrq);
+    uint32_t depthAfterIrq = lockdepHeldDepth();
+    spinUnlock(&segOuter);
+    bool falseEdge = lockdepDependsOn("lt-seg-outer", "lt-seg-irq");
+    /* Reverse order in process context (irqsave, as segIrq is IRQ-safe): must not report. */
+    uint64_t f = spinLockIrqSave(&segIrq);
+    uint64_t g = spinLockIrqSave(&segOuter);
+    spinUnlockIrqRestore(&segOuter, g);
+    spinUnlockIrqRestore(&segIrq, f);
+    KTEST_ASSERT(ran);
+    KTEST_ASSERT_EQ(depthAfterIrq, depthHeld);
+    KTEST_ASSERT(!falseEdge);
+    KTEST_ASSERT(lockdepDependsOn("lt-seg-irq", "lt-seg-outer"));
+}
+
+static Spinlock tcSite[2];
+
+/* A trylock of a second lock of a held class is allowed (a recursion report would panic). */
+KTEST(lockdep_trylock_same_class_allowed) {
+    for (int i = 0; i < 2; i++) {
+        spinInit(&tcSite[i], "lt-trylock-same-class");
+    }
+    uint64_t f = spinLockIrqSave(&tcSite[0]);
+    bool got = spinTryLock(&tcSite[1]);
+    uint32_t depth = lockdepHeldDepth();
+    if (got) {
+        spinUnlock(&tcSite[1]);
+    }
+    spinUnlockIrqRestore(&tcSite[0], f);
+    KTEST_ASSERT(got);
+    KTEST_ASSERT(depth >= 2);
+}
+
+static Spinlock tiLock = SPINLOCK_INIT("lt-trylock-irqs-on");
+
+/* A trylock with IRQs on also marks the class IRQ-unsafe: later use in a handler is reported. */
+KTEST(lockdep_trylock_irqs_on_then_irq_reported) {
+    bool got = spinTryLock(&tiLock); /* IF=1 */
+    if (got) {
+        spinUnlock(&tiLock);
+    }
+    KTEST_ASSERT(got);
+    lockdepExpectBegin(LOCKDEP_REPORT_IRQ_INCONSISTENT);
+    bool ran = runIrqCallback(&tiLock);
+    uint32_t reports = lockdepExpectEnd();
+    KTEST_ASSERT(ran);
+    KTEST_ASSERT_EQ(reports, 1);
+}
+
+static Spinlock rpA = SPINLOCK_INIT("lt-repeat-a");
+static Spinlock rpB = SPINLOCK_INIT("lt-repeat-b");
+
+/* Repeating a known order adds no edge and no class. */
+KTEST(lockdep_repeat_order_adds_nothing) {
+    lockdepTestTakePair(&rpA, &rpB);
+    LockdepStats s1;
+    lockdepGetStats(&s1);
+    for (int i = 0; i < 100; i++) {
+        lockdepTestTakePair(&rpA, &rpB);
+    }
+    LockdepStats s2;
+    lockdepGetStats(&s2);
+    KTEST_ASSERT(s1.enabled && s2.enabled);
+    KTEST_ASSERT_EQ(s2.edges, s1.edges);
+    KTEST_ASSERT_EQ(s2.classes, s1.classes);
+}
+
+/* A spinInit() lock on the stack is valid (a runtime class); two different init sites are two
+ * classes, so nesting them is not recursion. */
+KTEST(lockdep_spininit_stack_locks) {
+    Spinlock a, b;
+    spinInit(&a, "lt-stack-a");
+    spinInit(&b, "lt-stack-b");
+    uint64_t fa = spinLockIrqSave(&a);
+    uint64_t fb = spinLockIrqSave(&b);
+    spinUnlockIrqRestore(&b, fb);
+    spinUnlockIrqRestore(&a, fa);
+    KTEST_ASSERT(lockdepClassRegistered("lt-stack-a"));
+    KTEST_ASSERT(lockdepDependsOn("lt-stack-a", "lt-stack-b"));
+}
+
+/* ARCHITECTURE 7.6's documented kernel lock order holds in the recorded graph after real use:
+ * vmm -> pmm, slab -> pmm, never the reverse, and klog (a leaf) precedes nothing. */
+KTEST(lockdep_kernel_lock_order) {
+    /* Exercise vmm -> pmm (a KVA map may allocate a table page) and slab growth -> pmm. */
+    void *v = vmalloc(3 * 4096, 0);
+    KTEST_ASSERT(v != NULL);
+    vfree(v);
+    void *objs[64];
+    for (int i = 0; i < 64; i++) {
+        objs[i] = kmalloc(2048, 0);
+    }
+    for (int i = 0; i < 64; i++) {
+        kfree(objs[i]);
+    }
+    static const char *const names[] = {"pmm", "vmm", "slab", "vmalloc", "random"};
+    for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        KTEST_ASSERT(!lockdepDependsOn("klog", names[i]));
+    }
+    KTEST_ASSERT(!lockdepDependsOn("pmm", "vmm"));
+    KTEST_ASSERT(!lockdepDependsOn("pmm", "slab"));
+    KTEST_ASSERT(!lockdepDependsOn("pmm", "random"));
+}
+
 #endif /* KERNEL_DEBUG */

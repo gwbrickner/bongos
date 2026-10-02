@@ -110,3 +110,83 @@ KTEST(spin_unlock_unlocked_caught) {
     }
     KTEST_ASSERT(ok);
 }
+
+/* bug-sweeper (M3.4 finish): ticket counters across the 2^32 wrap. Both profiles. */
+KTEST(spin_ticket_wraparound) {
+    static Spinlock lock = SPINLOCK_INIT("spin-test-wrap");
+    uint32_t base = preemptCount();
+    lock.raw.next = 0xFFFFFFFFu;
+    lock.raw.owner = 0xFFFFFFFFu;
+    bool freeAtMax = !spinIsLocked(&lock);
+    spinLock(&lock);
+    uint32_t nextAfterLock = lock.raw.next;
+    bool lockedAcrossWrap = spinIsLocked(&lock);
+    bool tryWhileHeld = spinTryLock(&lock);
+    spinUnlock(&lock);
+    uint32_t ownerAfterUnlock = lock.raw.owner;
+    bool freeAfterWrap = !spinIsLocked(&lock);
+    /* Second round from 0xFFFFFFFF via trylock. */
+    lock.raw.next = 0xFFFFFFFFu;
+    lock.raw.owner = 0xFFFFFFFFu;
+    bool tryAtMax = spinTryLock(&lock);
+    if (tryAtMax) {
+        spinUnlock(&lock);
+    }
+    KTEST_ASSERT(freeAtMax);
+    KTEST_ASSERT_EQ(nextAfterLock, 0);
+    KTEST_ASSERT(lockedAcrossWrap);
+    KTEST_ASSERT(!tryWhileHeld);
+    KTEST_ASSERT_EQ(ownerAfterUnlock, 0);
+    KTEST_ASSERT(freeAfterWrap);
+    KTEST_ASSERT(tryAtMax);
+    KTEST_ASSERT(!spinIsLocked(&lock));
+    KTEST_ASSERT_EQ(preemptCount(), base);
+}
+
+static Spinlock freeIrqLock = SPINLOCK_INIT("spin-test-unlock-unlocked-irq");
+
+static void unlockUnlockedIrqTrigger(void *arg) {
+    (void)arg;
+    uint64_t flags = archIrqSave();
+    spinUnlockIrqRestore(&freeIrqLock, flags);
+}
+
+/* The irqrestore form has the same always-on check, and the trap catch restores IF. */
+KTEST(spin_unlock_irqrestore_unlocked_caught) {
+    uint32_t base = preemptCount();
+    TrapCatchInfo info;
+    bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, unlockUnlockedIrqTrigger, NULL, &info);
+    KTEST_ASSERT(caught);
+    KTEST_ASSERT(archInterruptsEnabled());
+    KTEST_ASSERT(!spinIsLocked(&freeIrqLock));
+    KTEST_ASSERT_EQ(preemptCount(), base);
+}
+
+static Spinlock assertLock = SPINLOCK_INIT("spin-test-assert-held");
+
+static void assertHeldTrigger(void *arg) {
+    (void)arg;
+    spinAssertHeld(&assertLock);
+}
+
+/* spinAssertHeld: silent when held, a caught kernel bug when not. */
+KTEST(spin_assert_held) {
+    uint64_t f = spinLockIrqSave(&assertLock);
+    spinAssertHeld(&assertLock); /* must not trip */
+    spinUnlockIrqRestore(&assertLock, f);
+    TrapCatchInfo info;
+    bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, assertHeldTrigger, NULL, &info);
+    KTEST_ASSERT(caught);
+}
+
+/* preemptInAtomic also covers IF=0 with a zero count. */
+KTEST(preempt_in_atomic_irqs_off) {
+    if (preemptCount() != 0) {
+        return;
+    }
+    uint64_t f = archIrqSave();
+    bool atomicIrqsOff = preemptInAtomic();
+    archIrqRestore(f);
+    KTEST_ASSERT(atomicIrqsOff);
+    KTEST_ASSERT(!preemptInAtomic());
+}
