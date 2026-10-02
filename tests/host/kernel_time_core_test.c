@@ -268,3 +268,78 @@ TEST(timeRtcDecodeCenturyRules) {
     ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_OK);
     ASSERT_EQ(e, 951782400u + (13 * 3600 + 45 * 60 + 59));
 }
+
+/* --- bug-sweeper (M3.3 finish) --------------------------------------------------------------- */
+
+/* timeScale(x, timeMakeMult(from, to)) against the exact floor(x * to / from) over random rates
+ * (1 Hz .. 2^40 Hz both ways; the documented refusals checked too) and values: the floored
+ * multiplier may lose at most x / 2^32 + 1. */
+TEST(timeMakeMultScaleMatchesExactRatio) {
+    for (int i = 0; i < 200000; i++) {
+        uint64_t from = (rnd() >> (24 + rnd() % 40)) + 1;
+        uint64_t to = (rnd() >> (24 + rnd() % 40)) + 1;
+        uint64_t mult;
+        Status st = timeMakeMult(from, to, &mult);
+        if (to / from >= ((uint64_t)1 << 32) || to % from >= ((uint64_t)1 << 32)) {
+            ASSERT_EQ(st, STATUS_ERR_INVALID); /* the documented limits */
+            continue;
+        }
+        ASSERT_EQ(st, STATUS_OK);
+        uint64_t x = rnd() >> (rnd() % 64);
+        unsigned __int128 exact = (unsigned __int128)x * to / from;
+        if (exact > UINT64_MAX) {
+            continue; /* the result does not fit; timeScale truncates by contract */
+        }
+        uint64_t got = timeScale(x, mult);
+        ASSERT_TRUE(got <= (uint64_t)exact);
+        ASSERT_TRUE((uint64_t)exact - got <= (x >> 32) + 1);
+    }
+}
+
+TEST(timeCalcHzOverflowEdge) {
+    uint64_t hz = 0;
+    /* (2^32 + 1) * (2^32 - 1) = 2^64 - 1 exactly: representable */
+    ASSERT_EQ(timeCalcHz(4294967297ull, 1, 4294967295ull, &hz), STATUS_OK);
+    ASSERT_EQ(hz, UINT64_MAX);
+    hz = 5;
+    ASSERT_EQ(timeCalcHz(4294967297ull, 1, 4294967296ull, &hz), STATUS_ERR_INVALID);
+    ASSERT_EQ(hz, 5u); /* untouched on error */
+}
+
+/* Every hour of the day through the 12-hour encodings (BCD and binary) decodes to itself. */
+TEST(timeRtcDecode12hEveryHourBothEncodings) {
+    for (uint32_t h = 0; h < 24; h++) {
+        uint32_t h12 = h % 12 == 0 ? 12 : h % 12;
+        uint8_t pm = h >= 12 ? 0x80 : 0;
+        uint64_t e;
+        TimeCivil c;
+        TimeRtcRaw r = bcdRaw();
+        r.regB = 0x00;
+        r.hour = (uint8_t)(pm | ((h12 / 10) << 4) | (h12 % 10));
+        ASSERT_EQ(timeRtcDecode(&r, &e, &c), STATUS_OK);
+        ASSERT_EQ(c.hour, h);
+        ASSERT_EQ(e, timeCivilToEpoch(2026, 10, 2, h, 45, 59));
+        TimeRtcRaw b = {.sec = 59,
+                        .min = 45,
+                        .hour = (uint8_t)(pm | h12),
+                        .day = 2,
+                        .mon = 10,
+                        .year = 26,
+                        .century = 20,
+                        .regB = 0x04,
+                        .hasCentury = true};
+        ASSERT_EQ(timeRtcDecode(&b, &e, &c), STATUS_OK);
+        ASSERT_EQ(c.hour, h);
+    }
+    TimeRtcRaw r = bcdRaw();
+    uint64_t e = 7;
+    r.regB = 0x00;
+    r.hour = 0x80; /* "PM 0" */
+    ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_ERR_INVALID);
+    r.hour = 0x80 | 0x13;
+    ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_ERR_INVALID);
+    r.regB = 0x02; /* 24h: bit 7 is not a PM flag, so 0x92 is a bad BCD hour */
+    r.hour = 0x92;
+    ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_ERR_INVALID);
+    ASSERT_EQ(e, 7u);
+}

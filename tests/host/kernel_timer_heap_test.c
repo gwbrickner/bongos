@@ -125,3 +125,36 @@ TEST(timerHeapRandomOpsMatchReference) {
         ASSERT_TRUE(timerHeapCheck(&h));
     }
 }
+
+/* --- bug-sweeper (M3.3 finish) --------------------------------------------------------------- */
+
+/* A full heap of equal deadlines (UINT64_MAX, the far-future extreme) pops in arm order, and
+ * removing every other one from the middle keeps the rest in arm order. */
+TEST(timerHeapFullOfEqualDeadlinesKeepsArmOrder) {
+    TimerHeap h;
+    timerHeapInit(&h);
+    resetPool();
+    for (uint32_t i = 0; i < TIMER_HEAP_CAP; i++) {
+        pool[i].deadlineNs = UINT64_MAX;
+        ASSERT_EQ(timerHeapInsert(&h, &pool[i]), STATUS_OK);
+    }
+    for (uint32_t i = 1; i < TIMER_HEAP_CAP; i += 2) {
+        timerHeapRemove(&h, &pool[i]);
+        pool[i].state = TIMER_IDLE;
+        ASSERT_TRUE(timerHeapCheck(&h));
+    }
+    for (uint32_t i = 0; i < TIMER_HEAP_CAP; i += 2) {
+        TimerObj *t = timerHeapPop(&h);
+        ASSERT_TRUE(t == &pool[i]);
+        t->state = TIMER_IDLE;
+    }
+    ASSERT_TRUE(timerHeapPop(&h) == NULL);
+    ASSERT_TRUE(timerHeapPeek(&h) == NULL);
+    /* re-armed timers continue the arm order (seq never restarts) */
+    pool[3].deadlineNs = 10;
+    pool[2].deadlineNs = 10;
+    ASSERT_EQ(timerHeapInsert(&h, &pool[3]), STATUS_OK);
+    ASSERT_EQ(timerHeapInsert(&h, &pool[2]), STATUS_OK);
+    ASSERT_TRUE(timerHeapPop(&h) == &pool[3]);
+    ASSERT_TRUE(timerHeapPop(&h) == &pool[2]);
+}

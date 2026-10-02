@@ -137,7 +137,12 @@ TIME_REQUIRED_KTESTS := time_monotonic_1m_reads time_oneshot_100ms time_wall_mat
                         time_timer_periodic_from_callback time_timer_past_deadline_fires \
                         time_timer_order time_timer_misuse time_tsc_invariance_matches_cpuid \
                         time_tsc_matches_pmtimer time_hpet_calibration_agrees \
-                        time_lapic_timer_mode_matches_cpuid
+                        time_lapic_timer_mode_matches_cpuid \
+                        time_timer_batch_sibling_rearm_cancel time_timer_past_rearm_once_per_irq \
+                        time_timer_far_deadlines time_timer_full_leaves_timer_unchanged \
+                        time_timer_full_queue_one_batch time_timer_callback_cancels_self \
+                        time_timer_init_misuse_panics time_timer_arm_from_other_irq \
+                        time_timer_hw_tracks_root time_lapic_oneshot_count_edges
 TIME_LOG_REGEX_FILE := tests/harness/time-log-regexes.txt
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
