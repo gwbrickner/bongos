@@ -234,14 +234,16 @@ TEST(timeRtcDecodeRejectsGarbage) {
     r.min = 0x60;
     ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_ERR_INVALID);
     r = bcdRaw();
-    r.century = 0x1A; /* bad century nibble: ignored, the year is 20yy (D-180), not INVALID */
-    ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_OK);
-    ASSERT_EQ(e, timeCivilToEpoch(2026, 10, 2, 13, 45, 59));
-    e = 12345; /* the check below: a failing decode must leave it alone */
-    r = bcdRaw();
     r.regB = 0x06; /* binary: 0x59 = 89 s */
     ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_ERR_INVALID);
-    ASSERT_EQ(e, 12345u); /* never written on failure */
+    ASSERT_EQ(e, 12345u); /* never written on failure, whichever check rejected it */
+    /* A bad century nibble is ignored (the year is 20yy, D-180), not INVALID. A separate output
+     * variable keeps `e` above as the untouched-on-failure witness for every case before it. */
+    uint64_t okEpoch = 0;
+    r = bcdRaw();
+    r.century = 0x1A;
+    ASSERT_EQ(timeRtcDecode(&r, &okEpoch, NULL), STATUS_OK);
+    ASSERT_EQ(okEpoch, timeCivilToEpoch(2026, 10, 2, 13, 45, 59));
 }
 
 TEST(timeRtcDecodeCenturyRules) {

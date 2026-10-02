@@ -7,6 +7,9 @@
 
 #include <stdint.h>
 
+/* The interrupt vector of the clock-event timer (ARCHITECTURE §7.2), owned by timekeeping. */
+#define ARCH_TIMER_VECTOR 0xFEu
+
 /* Applies the TSC policy (D-178), finds the calibration reference (D-177) and measures the TSC
  * frequency, logging each step; `*tscHz` receives it. Panics if the TSC is not invariant on bare
  * metal, or if neither the ACPI PM timer nor an HPET is usable. Boot-time, BSP, once; needs

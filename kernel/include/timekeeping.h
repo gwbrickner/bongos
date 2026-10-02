@@ -17,7 +17,9 @@
 
 /* Calibrates the clocks, brings up the LAPIC timer and reads the RTC (logging each, tag "time").
  * Boot-time, BSP, once (a second call panics); IF is already 1 (D-173), after irqInit() and
- * acpiInit(). Panics if the TSC cannot be calibrated or the timer does not count. */
+ * acpiInit(). Panics if the TSC is not invariant on bare metal, no calibration reference (ACPI PM
+ * timer or HPET) works, the TSC cannot be calibrated or the LAPIC timer does not count. timerArm()
+ * is refused (STATUS_ERR_INVALID) until this returns. */
 void timeInit(void);
 
 /* Nanoseconds since timeInit() finished calibrating (0 before). Monotonic on one CPU; cross-CPU
@@ -28,16 +30,19 @@ uint64_t timeMonotonicNs(void);
  * Meaningful only if timeWallValid(). No locks; IRQ-safe; never sleeps. */
 uint64_t timeWallNs(void);
 bool timeWallValid(void);
-/* The calibrated TSC frequency (0 before timeInit()). */
+/* The calibrated TSC frequency (0 before timeInit()). timeWallValid()/timeTscHz(): no locks;
+ * IRQ-safe; never sleep. */
 uint64_t timeTscHz(void);
 
 /* Timer objects live in caller storage and must outlive their arming (a stack object is fine only
  * if cancelled before the frame returns). The callback runs in IRQ context on the arming CPU with
  * IF=0 and irqDepth()==1, after the kernel has popped the timer: no allocation, no sleeping, no
- * klog needed, no ktest assertions (the irq.h handler rules). It may call timerArm()/timerCancel()
- * on any timer, itself included. */
+ * ktest assertions (the irq.h handler rules); klogWrite() is IRQ-safe but keep handlers short.
+ * It may call timerArm()/timerCancel() on any timer, itself included. */
 /* `fn` must not be NULL (panicBug). `t` must be fresh or idle: calling this on a timer that is
- * still armed leaves a dangling queue entry and corrupts the queue (timerCancel() it first). */
+ * still armed leaves a dangling queue entry and corrupts the queue (timerCancel() it first). On a
+ * timer popped for dispatch but not yet run it is safe, and the callback never runs (as with
+ * timerCancel()); timerIsArmed() is false for such a timer. */
 void timerInit(TimerObj *t, TimerFn fn, void *ctx);
 
 /* Arms `t` to fire at the absolute timeMonotonicNs() value `deadlineNs`, re-arming it if it is

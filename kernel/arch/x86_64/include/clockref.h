@@ -12,9 +12,10 @@
 typedef struct {
     const char *name; /* "pmtimer" or "hpet" */
     uint64_t hz;
-    uint32_t
-        mask; /* 0xFFFFFF (24-bit PM timer) or 0xFFFFFFFF; the HPET is read 32 bits at a time */
-    bool io;  /* port I/O (`port`) vs MMIO (`mmio`) */
+    /* 0xFFFFFF (24-bit PM timer) or 0xFFFFFFFF; the HPET is read 32 bits at a time */
+    uint32_t mask;
+    /* port I/O (`port`) vs MMIO (`mmio`) */
+    bool io;
     uint16_t port;
     volatile uint32_t *mmio;
 } ClockRef;

@@ -17,7 +17,8 @@ typedef struct {
 } TimerCpu;
 
 static TimerCpu bsp;
-static bool inited;
+static bool inited;      /* the clock works (set before the LAPIC timer is calibrated) */
+static bool timersReady; /* the LAPIC timer is calibrated and programmed: timerArm() may be used */
 static uint64_t tscHzValue;
 static uint64_t tscBase;
 static uint64_t tscToNs; /* TSC ticks -> ns, 32.32 fixed point */
@@ -80,6 +81,7 @@ void timeInit(void) {
     inited = true;
 
     archTimerInit(hz);
+    timersReady = true;
 
     TimeRtcRaw raw;
     archRtcRead(&raw);
@@ -118,13 +120,14 @@ void timerInit(TimerObj *t, TimerFn fn, void *ctx) {
     t->seq = 0;
     t->fn = fn;
     t->ctx = ctx;
-    t->batchNext = NULL;
+    /* batchNext is deliberately left alone: the expiry pass owns it while `t` is EXPIRED, and a
+     * callback re-initialising a not-yet-run sibling must not cut the rest of the batch off. */
     t->heapIndex = 0;
     t->state = TIMER_IDLE;
 }
 
 Status timerArm(TimerObj *t, uint64_t deadlineNs) {
-    if (t == NULL || t->fn == NULL || !inited) {
+    if (t == NULL || t->fn == NULL || !timersReady) {
         return STATUS_ERR_INVALID;
     }
     uint64_t f = archIrqSave();

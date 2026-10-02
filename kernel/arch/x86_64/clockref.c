@@ -83,6 +83,9 @@ bool clockRefPm(ClockRef *out) {
                 klogWrite(KLOG_WARN, "time", "pmtimer unusable: the counter does not advance");
                 ok = false;
             }
+            if (!ok && !r.io && r.mmio != NULL) {
+                vmmUnmapMmio(r.mmio, 4); /* don't keep a mapping of a clock we will not use */
+            }
             if (ok) {
                 if (r.io) {
                     klogWrite(KLOG_INFO, "time", "pmtimer io=0x%x %u-bit", (unsigned)r.port,
@@ -130,6 +133,7 @@ bool clockRefHpet(ClockRef *out) {
                 if ((gcap & 0xFFu) == 0 || period == 0 || period > 0x05F5E100u) {
                     klogWrite(KLOG_WARN, "time", "hpet unusable: GCAP=0x%x period=%ufs",
                               (unsigned)gcap, (unsigned)period);
+                    vmmUnmapMmio(va, HPET_REGS_SIZE);
                 } else {
                     /* No comparator may interrupt (Tn_INT_ENB_CNF = bit 2), ENABLE the counter,
                      * and leave LEG_RT clear so the PIT keeps ISA IRQ 0 (M3.2's PIT ktest). */
@@ -145,6 +149,7 @@ bool clockRefHpet(ClockRef *out) {
                                   .mmio = (volatile uint32_t *)(base + HPET_COUNTER_LO)};
                     if (!refAdvances(&r)) {
                         klogWrite(KLOG_WARN, "time", "hpet unusable: the counter does not advance");
+                        vmmUnmapMmio(va, HPET_REGS_SIZE);
                     } else {
                         klogWrite(KLOG_INFO, "time",
                                   "hpet base=0x%016llx period=%ufs freq=%lluHz timers=%u "

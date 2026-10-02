@@ -253,6 +253,7 @@ rm -f "$LOG" "$WALLFILE"
     done
 ) &
 wallwatcher=$!
+trap 'kill "$wallwatcher" 2>/dev/null' EXIT
 # QEMU's RTC counts whole seconds from the moment QEMU starts, so it lags the host's clock by the
 # fraction of the host second QEMU was launched in (0..1 s: measured +0.43 s on average). Launch just
 # after a host second boundary so that artifact is about zero and the check measures the kernel (D-181).
@@ -262,6 +263,7 @@ timeout --foreground "$TIMEOUT" "${BASE[@]}" -rtc base=utc,clock=host -display n
 code=$?
 kill "$wallwatcher" 2>/dev/null
 wait "$wallwatcher" 2>/dev/null
+trap - EXIT
 
 fails=$(grep -c '^KTEST FAIL' "$LOG" 2>/dev/null || true)
 case $code in

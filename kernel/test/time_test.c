@@ -13,6 +13,7 @@
 #include "timekeeping.h"
 
 #include <arch/cpu.h>
+#include <arch/timer.h>
 #include <arch/trap.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -312,7 +313,7 @@ static volatile uint64_t batchVecCountD;
 static void batchCbA(TimerObj *t, void *ctx) {
     (void)t;
     BatchA *a = (BatchA *)ctx;
-    a->batchVecCount = irqVectorCount(0xFE);
+    a->batchVecCount = irqVectorCount(ARCH_TIMER_VECTOR);
     a->bDeadline = timeMonotonicNs() + 20 * MS;
     a->armB = (int32_t)timerArm(a->b, a->bDeadline);
     a->cancelC = (int32_t)timerCancel(a->c);
@@ -320,7 +321,7 @@ static void batchCbA(TimerObj *t, void *ctx) {
 }
 
 static void batchCbD(TimerObj *t, void *ctx) {
-    batchVecCountD = irqVectorCount(0xFE);
+    batchVecCountD = irqVectorCount(ARCH_TIMER_VECTOR);
     fireCb(t, ctx);
 }
 
@@ -366,7 +367,8 @@ KTEST(time_timer_batch_sibling_rearm_cancel) {
 }
 
 /* A callback that re-arms itself in the past runs once per interrupt, never in a loop inside one
- * handler (D-176): every run sees a larger 0xFE interrupt count than the run before it. */
+ * handler (D-176): every run sees a larger ARCH_TIMER_VECTOR interrupt count than the run before
+ * it. */
 typedef struct {
     volatile uint32_t count;
     volatile uint32_t sameIrq;
@@ -376,7 +378,7 @@ typedef struct {
 
 static void pastLoopCb(TimerObj *t, void *ctx) {
     PastLoop *p = (PastLoop *)ctx;
-    uint64_t v = irqVectorCount(0xFE);
+    uint64_t v = irqVectorCount(ARCH_TIMER_VECTOR);
     if (p->count != 0 && v <= p->lastVec) {
         p->sameIrq++;
     }
@@ -488,9 +490,9 @@ static void burstCb(TimerObj *t, void *ctx) {
         burst.outOfOrder++;
     }
     if (burst.count == 0) {
-        burst.firstVec = irqVectorCount(0xFE);
+        burst.firstVec = irqVectorCount(ARCH_TIMER_VECTOR);
     }
-    burst.lastVec = irqVectorCount(0xFE);
+    burst.lastVec = irqVectorCount(ARCH_TIMER_VECTOR);
     burst.count++;
 }
 
@@ -573,4 +575,49 @@ KTEST(time_timer_init_misuse_panics) {
     KTEST_ASSERT_EQ(info.kind, TRAP_CATCH_KERNEL_BUG);
     KTEST_ASSERT(archTrapCatch(TRAP_CATCH_KERNEL_BUG, timerInitNullFn, &t, &info));
     KTEST_ASSERT_EQ(info.kind, TRAP_CATCH_KERNEL_BUG);
+}
+
+typedef struct {
+    TimerObj *victim;
+    Fire *victimFire;
+    volatile uint32_t count;
+} Reinit;
+
+static void reinitCb(TimerObj *t, void *ctx) {
+    (void)t;
+    Reinit *r = (Reinit *)ctx;
+    r->count++;
+    timerInit(r->victim, fireCb, r->victimFire); /* a popped, not-yet-run sibling in this batch */
+}
+
+/* Reviewer finding (M3.3): timerInit() on an EXPIRED sibling used to clear its batch link and cut
+ * the rest of the batch off, so the timer behind it never ran. */
+KTEST(time_timer_batch_reinit_sibling) {
+    static Reinit r;
+    static Fire fB, fC;
+    static TimerObj a, b, c;
+    r.count = 0;
+    fB.count = 0;
+    fC.count = 0;
+    r.victim = &b;
+    r.victimFire = &fB;
+    timerInit(&a, reinitCb, &r);
+    timerInit(&b, fireCb, &fB);
+    timerInit(&c, fireCb, &fC);
+    uint64_t when = timeMonotonicNs() + 10 * MS; /* one deadline: one batch, in arm order */
+    Status sa = timerArm(&a, when);
+    Status sb = timerArm(&b, when);
+    Status sc = timerArm(&c, when);
+    bool done = waitCount(&fC.count, 1, 500 * MS);
+    spinNs(20 * MS);
+    uint32_t bCount = fB.count;
+    bool cArmedOrExpired = timerIsArmed(&c);
+    (void)timerCancel(&a);
+    (void)timerCancel(&b);
+    (void)timerCancel(&c);
+    KTEST_ASSERT(sa == STATUS_OK && sb == STATUS_OK && sc == STATUS_OK);
+    KTEST_ASSERT(done); /* C ran: the batch was not cut off at B */
+    KTEST_ASSERT_EQ(r.count, 1);
+    KTEST_ASSERT_EQ(bCount, 0); /* B was re-initialised before it ran: its callback never does */
+    KTEST_ASSERT(!cArmedOrExpired);
 }

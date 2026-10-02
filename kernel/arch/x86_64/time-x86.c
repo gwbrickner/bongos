@@ -15,6 +15,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+_Static_assert(LAPIC_TIMER_VECTOR == ARCH_TIMER_VECTOR, "timer vector");
+
 #define LAPIC_DIVIDE_BY_16 0x3u
 #define LAPIC_CAL_WINDOWS  3
 #define LAPIC_CAL_DIV      50 /* 20 ms of TSC per window */
@@ -162,7 +164,9 @@ void archTimerInit(uint64_t tscHz) {
     }
     deadlineMode = tscDeadlineSupported;
     timerReady = true;
+    uint64_t f = archIrqSave(); /* lapicTimerCpuSetup() wants IF=0; timeInit() runs with IF=1 */
     lapicTimerCpuSetup();
+    archIrqRestore(f);
     klogWrite(KLOG_INFO, "time", "lapic timer mode=%s freq=%lluHz divide=16 vector=0xfe",
               deadlineMode ? "tsc-deadline" : "oneshot", (unsigned long long)lapicHz);
 }

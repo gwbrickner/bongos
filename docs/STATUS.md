@@ -6,9 +6,10 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-02 (M3.2 merged; M3.3 started)
 
 ## Next step
-**M3.3 Timekeeping is code-complete and green** (`make format-check`, `host-tests`, `test`, `test-full` all pass) on branch
-`m3-3-timekeeping` (log: `docs/logs/M3.3.md`). Remaining: the finish protocol: one `bug-sweeper` finish pass against
-`origin/main` (fix everything, re-run until `SWEEP: PASS`), `reviewer`, screenshots, paperwork, PR (`needs-owner: yes`).
+**M3.3 Timekeeping is code-complete, swept twice (`SWEEP: PASS`) and reviewed (`VERDICT: PASS`)** on branch `m3-3-timekeeping`
+(log: `docs/logs/M3.3.md`). Remaining: re-run the full tests and a step-mode `bug-sweeper` on the reviewer-follow-up changes
+(everything after 65c13e3), then screenshots (`make screenshot SHOT=docs/screenshots/M3.3.png`, plus `FW=bios`), paperwork,
+and the PR (`needs-owner: yes`).
 
 ## Current milestone
 M3.3 Timekeeping (finishing).
