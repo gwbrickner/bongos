@@ -216,13 +216,13 @@ QEMU-verified only.
 
 **Done when:** the ktests pass under both firmwares.
 
-### [ ] M3.3 Timekeeping `needs-owner`
+### [x] M3.3 Timekeeping `needs-owner`
 **Needs:** M3.2
 1. ACPI PM timer driver, plus an optional HPET driver.
 2. TSC: invariance check and calibration against the PM timer, with the frequency logged.
 3. LAPIC timer calibration; one-shot mode, or TSC-deadline mode when CPUID says it's supported.
 4. A per-CPU timer min-heap, `timeMonotonicNs`, and the CMOS RTC for `timeWallNs`.
-5. ktests: `timeMonotonicNs` is monotonic across 1M reads; a 100 ms one-shot timer fires within ±5 ms (QEMU); the wall clock is within 2 s of the host's time (harness passes the host time on the cmdline).
+5. ktests: `timeMonotonicNs` is monotonic across 1M reads; a 100 ms one-shot timer fires within ±5 ms (QEMU); the wall clock is within 2 s of the host's time (the harness stamps the host's clock onto the kernel's `wall-check` serial line, D-181).
 
 **Done when:** the ktests pass.
 **Owner hardware check:** boot on the PC and report the logged TSC frequency (expect about

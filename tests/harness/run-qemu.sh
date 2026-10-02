@@ -237,9 +237,33 @@ if [ "${#EXPECT_PATTERNS[@]}" -gt 0 ]; then
     esac
 fi
 
+# D-181 (M3.3): the kernel's `time: wall-check epoch=<guest unix time>` line is stamped here with the
+# host's clock the moment it appears on serial, and mk/test.mk requires the two within 2 s. QEMU's RTC
+# follows the host's UTC clock (`-rtc base=utc,clock=host` is its default; spelled out for the record).
+# The log and any old stamp are removed first, so a previous run's line can never match.
+WALLFILE="build/logs/$NAME.walltime"
+rm -f "$LOG" "$WALLFILE"
+(
+    while :; do
+        if l=$(tr -d '\r' 2>/dev/null < "$LOG" | grep -m1 -E '^\[info\] time: wall-check epoch=[0-9]+\.[0-9]{9}$'); then
+            printf '%s %s\n' "$(date +%s.%N)" "$l" > "$WALLFILE"
+            break
+        fi
+        sleep 0.05
+    done
+) &
+wallwatcher=$!
+trap 'kill "$wallwatcher" 2>/dev/null' EXIT
+# QEMU's RTC counts whole seconds from the moment QEMU starts, so it lags the host's clock by the
+# fraction of the host second QEMU was launched in (0..1 s: measured +0.43 s on average). Launch just
+# after a host second boundary so that artifact is about zero and the check measures the kernel (D-181).
+sleep "$(awk -v n="$(date +%N)" 'BEGIN { printf "%.3f", (1000000000 - n) / 1000000000 + 0.005 }')"
 # shellcheck disable=SC2086
-timeout --foreground "$TIMEOUT" "${BASE[@]}" -display none -serial "file:$LOG" $EXTRA < /dev/null
+timeout --foreground "$TIMEOUT" "${BASE[@]}" -rtc base=utc,clock=host -display none -serial "file:$LOG" $EXTRA < /dev/null
 code=$?
+kill "$wallwatcher" 2>/dev/null
+wait "$wallwatcher" 2>/dev/null
+trap - EXIT
 
 fails=$(grep -c '^KTEST FAIL' "$LOG" 2>/dev/null || true)
 case $code in

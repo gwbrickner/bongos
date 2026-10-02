@@ -126,6 +126,25 @@ IRQ_REQUIRED_KTESTS := vmm_map_uc vmm_mmio_edges vmm_mmio_unmap_misuse paging_mm
                        irq_route_misuse irq_isa_route_all_match_madt \
                        irq_trap_catch_refused_in_handler trap_catch_restores_if \
                        irq_lapic_reinit_neutralizes_leftovers
+# M3.3 (timekeeping): the ktests its Done-when clause rests on (monotonic across 1M reads, the 100 ms
+# one-shot timer, the wall clock against the RTC), the queue/clock/policy ktests, the calibration and
+# RTC log lines every row must show, a negative check (a clean QEMU boot prints no `time:` warning or error;
+# the "TSC is not invariant" note under a hypervisor is info-level, D-178) and the wall clock against the host
+# (D-181): tests/harness/run-qemu.sh stamps the host's clock onto the kernel's `time: wall-check`
+# line (build/logs/<row>.walltime) and the two must agree within 2 s.
+TIME_REQUIRED_KTESTS := time_monotonic_1m_reads time_oneshot_100ms time_wall_matches_rtc \
+                        time_timer_fires_once time_timer_cancel time_timer_rearm \
+                        time_timer_periodic_from_callback time_timer_past_deadline_fires \
+                        time_timer_order time_timer_misuse time_tsc_invariance_matches_cpuid \
+                        time_tsc_matches_pmtimer time_hpet_calibration_agrees \
+                        time_lapic_timer_mode_matches_cpuid \
+                        time_timer_batch_sibling_rearm_cancel time_timer_batch_reinit_sibling \
+                        time_timer_past_rearm_once_per_irq \
+                        time_timer_far_deadlines time_timer_full_leaves_timer_unchanged \
+                        time_timer_full_queue_one_batch time_timer_callback_cancels_self \
+                        time_timer_init_misuse_panics time_timer_arm_from_other_irq \
+                        time_timer_hw_tracks_root time_lapic_oneshot_count_edges
+TIME_LOG_REGEX_FILE := tests/harness/time-log-regexes.txt
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \
@@ -219,6 +238,34 @@ _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	    if [ "$$nunh" != 1 ] || [ "$$nunhExpected" != 1 ]; then \
 	        echo "make test: $$log has $$nunh irq/lapic/ioapic warnings or errors ($$nunhExpected of them 'unhandled vector'); exactly one, the expected 'unhandled vector', is allowed"; \
 	        status=1; \
+	    fi; \
+	    for t in $(TIME_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M3.3 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
+	    while read -r re; do \
+	        case "$$re" in ''|\#*) continue ;; esac; \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE "^\[info\] time: $$re"; then \
+	            echo "make test: $$log has no 'time: $$re' line (ROADMAP M3.3 items 1-4)"; \
+	            status=1; \
+	        fi; \
+	    done < $(TIME_LOG_REGEX_FILE); \
+	    ntw=$$(tr -d '\r' < "$$log" 2>/dev/null | grep -cE '^\[(warn|error)\] time: '); \
+	    if [ "$$ntw" != 0 ]; then \
+	        echo "make test: $$log has $$ntw 'time:' warnings or errors; a clean QEMU boot has none"; \
+	        status=1; \
+	    fi; \
+	    wt="build/logs/$$name.walltime"; \
+	    if [ ! -s "$$wt" ]; then \
+	        echo "make test: $$wt is missing: run-qemu.sh saw no 'time: wall-check' line, so the wall clock was never compared with the host (ROADMAP M3.3 item 5)"; \
+	        status=1; \
+	    else \
+	        if ! awk '{ split($$NF, a, "="); d = $$1 - a[2]; if (d < 0) d = -d; printf "make test: %s: wall clock vs host: %.3f s\n", FILENAME, d; exit !(d <= 2.0) }' "$$wt"; then \
+	            echo "make test: $$wt: the guest wall clock differs from the host's by more than 2 s (ROADMAP M3.3 item 5)"; \
+	            status=1; \
+	        fi; \
 	    fi; \
 	    for t in $(ACPI_REQUIRED_KTESTS); do \
 	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \

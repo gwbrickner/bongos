@@ -1,0 +1,8 @@
+# ERE patterns (one per line) that every ktest boot's serial log must match as `^\[info\] time: <pattern>`
+# (mk/test.mk _check-ktest-pass, M3.3 items 1-4, D-176..D-180). Blank lines and `#` lines are ignored.
+tsc [0-9]+ Hz \(calibrated against (pmtimer|hpet), median of 3 windows, spread [0-9]+ ppm\)$
+tsc invariant=(yes|no) hypervisor=(yes|no) tsc-deadline=(yes|no) arat=(yes|no)$
+pmtimer (io|mmio)=0x[0-9a-f]+ (24|32)-bit$
+hpet base=0x[0-9a-f]{16} period=[0-9]+fs freq=[0-9]+Hz timers=[0-9]+ counter=(32|64)-bit$
+lapic timer mode=(tsc-deadline|oneshot) freq=[0-9]+Hz divide=16 vector=0xfe$
+rtc [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z (bcd|binary) (24h|12h) century=(0x[0-9a-f]{2}|none) epoch=[0-9]+$

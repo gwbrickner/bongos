@@ -10,6 +10,7 @@
 
 #include "acpi.h"
 #include "irq.h"
+#include "timekeeping.h"
 #include "ktest.h"
 
 #include <arch/cpu.h>
@@ -231,14 +232,18 @@ static void fixedHandler(uint32_t vector, void *ctx) {
 
 KTEST(irq_fixed_vectors_dispatch) {
     static Fixed s;
-    static const uint32_t fixed[] = {0xF0, 0xF1, 0xF2, 0xF3, 0xFE};
+    /* 0xFE belongs to the LAPIC timer since M3.3 (D-179): timekeeping registers it at boot, so a
+     * second registration is refused and the test only dispatches it. */
+    static const uint32_t fixed[] = {0xF0, 0xF1, 0xF2, 0xF3};
     s.count = 0;
-    for (uint32_t i = 0; i < 5; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
         KTEST_ASSERT(irqRegister(fixed[i], fixedHandler, &s) == STATUS_OK);
         KTEST_ASSERT(irqRegister(fixed[i], fixedHandler, &s) == STATUS_ERR_INVALID);
         KTEST_ASSERT(irqFreeVector(fixed[i]) == STATUS_ERR_INVALID); /* never allocated */
     }
+    KTEST_ASSERT(irqRegister(0xFE, fixedHandler, &s) == STATUS_ERR_INVALID); /* the timer's */
     uint64_t c0 = irqVectorCount(0xF0);
+    uint64_t cTimer = irqVectorCount(0xFE);
     __asm__ volatile("int $0xF0");
     KTEST_ASSERT_EQ(s.lastVector, 0xF0);
     __asm__ volatile("int $0xF1");
@@ -247,18 +252,18 @@ KTEST(irq_fixed_vectors_dispatch) {
     KTEST_ASSERT_EQ(s.lastVector, 0xF2);
     __asm__ volatile("int $0xF3");
     KTEST_ASSERT_EQ(s.lastVector, 0xF3);
-    __asm__ volatile("int $0xFE");
-    KTEST_ASSERT_EQ(s.lastVector, 0xFE);
-    KTEST_ASSERT_EQ(s.count, 5);
+    __asm__ volatile("int $0xFE"); /* runs the timer handler (nothing due), then the EOI */
+    KTEST_ASSERT(irqVectorCount(0xFE) >= cTimer + 1);
+    KTEST_ASSERT_EQ(s.count, 4);
     KTEST_ASSERT_EQ(irqVectorCount(0xF0), c0 + 1);
 
     /* A real LAPIC delivery of a fixed vector is EOI'd like any other. */
     lapicSendSelfIpi(0xF1);
-    KTEST_ASSERT(waitFor(&s.count, 6));
+    KTEST_ASSERT(waitFor(&s.count, 5));
     KTEST_ASSERT_EQ(s.lastVector, 0xF1);
     KTEST_ASSERT(lapicIsrEmpty());
 
-    for (uint32_t i = 0; i < 5; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
         KTEST_ASSERT(irqUnregister(fixed[i]) == STATUS_OK);
         KTEST_ASSERT(irqUnregister(fixed[i]) == STATUS_ERR_INVALID);
     }
@@ -503,8 +508,6 @@ KTEST(trap_catch_restores_if) {
 
 /* --- lapicInit() neutralizes what firmware leaves behind (D-172) ------------------------------ */
 
-#define LAPIC_REG_TIMER_CUR 0x390u
-
 /* lapicInit() is written to run once per CPU (M3.5), so running it again on the BSP is in contract.
  * QEMU's reset state and both firmwares already leave every LVT masked and TPR at 0, so the boot
  * state alone cannot show that lapicInit() masks or clears anything: dirty each register first,
@@ -545,6 +548,10 @@ KTEST(irq_lapic_reinit_neutralizes_leftovers) {
     uint32_t perf = maxLvt >= 4 ? lapicRead(LAPIC_REG_PERF) : LAPIC_LVT_MASKED;
     uint32_t therm = maxLvt >= 5 ? lapicRead(LAPIC_REG_THERM) : LAPIC_LVT_MASKED;
     uint32_t tpr = lapicRead(LAPIC_REG_TPR);
+    /* lapicInit() masked the timer for good measure; timekeeping owns it (M3.3): put its mode
+     * back and re-arm for the earliest queued timer, as an AP's bring-up will (M3.5). */
+    lapicTimerCpuSetup();
+    timeReprogram();
     archIrqRestore(f);
 
     KTEST_ASSERT(dirtyCur != 0); /* the dirtying worked: the timer was really counting */

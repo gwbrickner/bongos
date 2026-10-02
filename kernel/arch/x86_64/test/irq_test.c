@@ -104,7 +104,10 @@ KTEST(irq_lapic_state) {
      * LAPIC_SVR_VALUE: comparing against the constant lapic.c writes would pass whatever it says.
      */
     KTEST_ASSERT_EQ(lapicRead(LAPIC_REG_SVR), 0x1FFu);
-    KTEST_ASSERT((lapicRead(LAPIC_REG_TIMER) & LAPIC_LVT_MASKED) != 0);
+    /* M3.3 (D-179): the timer LVT is no longer masked at boot; timekeeping owns vector 0xFE. */
+    uint32_t timerLvt = lapicRead(LAPIC_REG_TIMER);
+    KTEST_ASSERT_EQ(timerLvt & 0xFFu, LAPIC_TIMER_VECTOR);
+    KTEST_ASSERT((timerLvt & LAPIC_LVT_MASKED) == 0);
     KTEST_ASSERT((lapicRead(LAPIC_REG_ERROR) & LAPIC_LVT_MASKED) != 0);
     KTEST_ASSERT_EQ(lapicRead(LAPIC_REG_TPR), 0);
     KTEST_ASSERT(isrAllClear());
