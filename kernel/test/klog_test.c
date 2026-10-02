@@ -35,17 +35,31 @@ KTEST(klog_format) {
     KTEST_ASSERT(cmdlineStrEq(buf, ""));
 }
 
+typedef struct {
+    uint32_t heldBefore, heldAfter, preemptInside;
+} KlogSectionProbe;
+
 static void klogBreakpointInSection(void *arg) {
-    (void)arg;
-    __asm__ volatile("int3"); /* #BP logs through klogWrite() and resumes */
+    KlogSectionProbe *p = arg;
+    p->heldBefore = cpuSync()->klogHeld;
+    p->preemptInside = preemptCount(); /* klogLock is really held: preemption is off */
+    __asm__ volatile("int3");          /* #BP logs through klogWrite() and resumes */
+    p->heldAfter = cpuSync()->klogHeld;
 }
 
 /* M3.4 sweep S4 #2: an exception that logs and resumes while this CPU is inside klog's sink section
  * must not spin on klog's own lock (it hung with interrupts off before the per-CPU re-entry check).
+ * The section must really hold klogLock, and the nested write must leave it marked open; closing
+ * the section clears the mark, so later output takes the lock again.
  */
 KTEST(klog_exception_in_section_does_not_hang) {
     uint32_t base = preemptCount();
-    klogTestRunInSection(klogBreakpointInSection, NULL);
+    KlogSectionProbe p = {0};
+    klogTestRunInSection(klogBreakpointInSection, &p);
     KTEST_ASSERT_EQ(preemptCount(), base);
+    KTEST_ASSERT_EQ(p.heldBefore, 1);
+    KTEST_ASSERT_EQ(p.heldAfter, 1);
+    KTEST_ASSERT_EQ(p.preemptInside, base + 1);
+    KTEST_ASSERT_EQ(cpuSync()->klogHeld, 0);
     klogWrite(KLOG_INFO, "klog-test", "section released after a nested exception");
 }

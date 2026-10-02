@@ -160,7 +160,8 @@ LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_unsafe_in_irq_
                            lockdep_trylock_same_class_allowed \
                            lockdep_trylock_irqs_on_then_irq_reported lockdep_repeat_order_adds_nothing \
                            lockdep_spininit_stack_locks lockdep_kernel_lock_order \
-                           lockdep_expected_report_records_no_edge
+                           lockdep_expected_report_records_no_edge \
+                           lockdep_disabled_release_drops_held_entry
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \

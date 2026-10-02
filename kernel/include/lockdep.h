@@ -27,7 +27,8 @@ typedef struct LockdepMap {
 
 /* Called by spinlock.c before the lock is spun on (a self-deadlock is reported instead of hanging)
  * and after it is raw-released. `ip` is the caller's return address. IRQ-safe, never sleeps, takes
- * no Spinlock; a no-op once a panic is in progress or after the validator disabled itself. A real
+ * no Spinlock; a no-op once a panic is in progress, and after the validator disabled itself (except
+ * that a release still drops the lock from this CPU's held stack, see lockdepHeldDepth()). A real
  * finding prints a report and panics (never returns) unless a ktest armed lockdepExpectBegin() for
  * that kind. */
 void lockdepAcquire(LockdepMap *m, bool trylock, uint64_t ip);
@@ -52,6 +53,14 @@ uint32_t lockdepHeldDepth(void);
 void lockdepExpectBegin(LockdepVerdict kind);
 uint32_t lockdepExpectEnd(void);
 bool lockdepExpectArmed(void);
+
+/* ktest only (D-189): turn the validator off exactly as a full table does, and back on, so a test
+ * can check what code does while it is off. Every lock taken between Off and On must also be
+ * released there (it is not on the held stack, so releasing it after On would be NOT_HELD). Off
+ * panics unless a ktest is running, no handler is running and the validator is on; On panics unless
+ * Off turned it off (a real full table stays off). */
+void lockdepTestOff(void);
+void lockdepTestOn(void);
 
 /* ktest queries (by class name, first match). */
 bool lockdepClassRegistered(const char *name);

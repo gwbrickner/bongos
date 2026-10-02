@@ -397,4 +397,29 @@ KTEST(lockdep_expected_report_records_no_edge) {
     KTEST_ASSERT(!lockdepDependsOn("lt-ne-p", "lt-ne-q"));
 }
 
+static Spinlock offA = SPINLOCK_INIT("lt-off-a");
+static Spinlock offB = SPINLOCK_INIT("lt-off-b");
+
+/* M3.4 sweep 2: once the validator is off (a full table), a lock taken while it was still on must
+ * leave the held stack at its release; it stayed there, so irqDispatch's D-187 check panicked
+ * ("returned holding a spinlock") after a table filled inside a handler. spinAssertHeld() must
+ * fall back to the raw lock state while the held stacks are not maintained. */
+KTEST(lockdep_disabled_release_drops_held_entry) {
+    uint32_t base = lockdepHeldDepth();
+    spinLock(&offA);
+    uint32_t held = lockdepHeldDepth();
+    lockdepTestOff();
+    spinUnlock(&offA); /* taken while on, released while off */
+    uint32_t afterRelease = lockdepHeldDepth();
+    spinLock(&offB); /* not tracked while off */
+    uint32_t whileOff = lockdepHeldDepth();
+    spinAssertHeld(&offB);
+    spinUnlock(&offB);
+    lockdepTestOn();
+    KTEST_ASSERT_EQ(held, base + 1);
+    KTEST_ASSERT_EQ(afterRelease, base);
+    KTEST_ASSERT_EQ(whileOff, base);
+    KTEST_ASSERT_EQ(lockdepHeldDepth(), base);
+}
+
 #endif /* KERNEL_DEBUG */

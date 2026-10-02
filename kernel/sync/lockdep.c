@@ -227,13 +227,22 @@ void lockdepAcquire(LockdepMap *m, bool trylock, uint64_t ip) {
 
 void lockdepRelease(LockdepMap *m, uint64_t ip) {
     (void)ip;
-    if (ATOMIC_LOAD(&lockdepOff, MEM_RELAXED) || panicInProgress()) {
+    if (panicInProgress()) {
         return;
     }
     bool irqsOn = archInterruptsEnabled(); /* still inside the caller's irqsave section if any */
     uint64_t flags = archIrqSave();
     CpuSync *s = cpuSync();
     if (s->lockdepRecursion != 0) {
+        archIrqRestore(flags);
+        return;
+    }
+    if (ATOMIC_LOAD(&lockdepOff, MEM_RELAXED)) {
+        /* Disabled (a table filled): no checks any more, but a lock taken while the validator was
+         * still on is on this CPU's held stack; drop it, or the D-187 balance checks (irqDispatch,
+         * archTrapCatch, the ktest runner) would see it held forever. Only this CPU's stack changes
+         * (IRQs off): irqsOn = false and no capture, so the graph is not touched. */
+        lockdepCoreCommitRelease(&graph, &s->held, m, false, NULL);
         archIrqRestore(flags);
         return;
     }
@@ -297,6 +306,24 @@ uint32_t lockdepExpectEnd(void) {
 
 bool lockdepExpectArmed(void) {
     return expect.armed;
+}
+
+static bool testOff;
+
+void lockdepTestOff(void) {
+    if (!ktestIsActive() || irqDepth() != 0 || testOff || ATOMIC_LOAD(&lockdepOff, MEM_RELAXED)) {
+        panic("lockdepTestOff: not in a ktest, in a handler, or the validator is already off");
+    }
+    testOff = true;
+    ATOMIC_STORE(&lockdepOff, true, MEM_RELAXED);
+}
+
+void lockdepTestOn(void) {
+    if (!ktestIsActive() || irqDepth() != 0 || !testOff) {
+        panic("lockdepTestOn: not in a ktest, in a handler, or not turned off by lockdepTestOff");
+    }
+    testOff = false;
+    ATOMIC_STORE(&lockdepOff, false, MEM_RELAXED);
 }
 
 static bool nameEq(const char *a, const char *b) {
