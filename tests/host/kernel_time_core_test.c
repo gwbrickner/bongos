@@ -345,3 +345,40 @@ TEST(timeRtcDecode12hEveryHourBothEncodings) {
     ASSERT_EQ(timeRtcDecode(&r, &e, NULL), STATUS_ERR_INVALID);
     ASSERT_EQ(e, 7u);
 }
+
+/* --- bug-sweeper (M3.3 finish, round 2) ------------------------------------------------------ */
+
+/* Every century byte, BCD and binary (D-180): a byte that decodes to 19..29 sets the century, and
+ * anything else (a bad BCD nibble included) is ignored, so the year is 20yy and the decode still
+ * succeeds. yy = 75 keeps 1975 valid. The junk bytes this catches are the ones whose unchecked
+ * nibble arithmetic lands inside 19..29 (0x1A -> 20 hides it; 0x1F -> 25 and 0x1C -> 22 do not). */
+TEST(timeRtcDecodeEveryCenturyByte) {
+    for (uint32_t v = 0; v < 256; v++) {
+        for (int binary = 0; binary < 2; binary++) {
+            TimeRtcRaw r = bcdRaw();
+            r.year = 0x75;
+            if (binary) {
+                r = (TimeRtcRaw){.sec = 59,
+                                 .min = 45,
+                                 .hour = 13,
+                                 .day = 2,
+                                 .mon = 10,
+                                 .year = 75,
+                                 .regB = 0x06,
+                                 .hasCentury = true};
+            }
+            r.century = (uint8_t)v;
+            bool valid = binary || ((v & 0x0F) <= 9 && (v >> 4) <= 9);
+            uint32_t dec = binary ? v : (v >> 4) * 10 + (v & 0x0F);
+            uint32_t want = (valid && dec >= 19 && dec <= 29) ? dec * 100 + 75 : 2075;
+            uint64_t e = 0;
+            TimeCivil c = {0};
+            ASSERT_EQ(timeRtcDecode(&r, &e, &c), STATUS_OK);
+            ASSERT_EQ(c.year, want);
+            ASSERT_EQ(e, timeCivilToEpoch(want, 10, 2, 13, 45, 59));
+            r.hasCentury = false; /* no register: the byte is never looked at */
+            ASSERT_EQ(timeRtcDecode(&r, &e, &c), STATUS_OK);
+            ASSERT_EQ(c.year, 2075u);
+        }
+    }
+}
