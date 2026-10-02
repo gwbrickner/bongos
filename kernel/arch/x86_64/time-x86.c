@@ -63,7 +63,9 @@ void archClockInit(uint64_t *tscHz) {
         if (!hypervisor) {
             panic("time: invariant TSC required (CPUID.80000007H:EDX[8]=0)");
         }
-        klogWrite(KLOG_WARN, "time",
+        /* Expected under QEMU (its -cpu max never reports it), so not a warning: the log stays free
+         * of warn/error lines on a clean boot, which mk/test.mk checks. */
+        klogWrite(KLOG_INFO, "time",
                   "TSC is not invariant (CPUID.80000007H:EDX[8]=0); hypervisor, continuing");
     }
 

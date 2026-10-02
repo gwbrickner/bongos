@@ -237,9 +237,27 @@ if [ "${#EXPECT_PATTERNS[@]}" -gt 0 ]; then
     esac
 fi
 
+# D-181 (M3.3): the kernel's `time: wall-check epoch=<guest unix time>` line is stamped here with the
+# host's clock the moment it appears on serial, and mk/test.mk requires the two within 2 s. QEMU's RTC
+# follows the host's UTC clock (`-rtc base=utc,clock=host` is its default; spelled out for the record).
+# The log and any old stamp are removed first, so a previous run's line can never match.
+WALLFILE="build/logs/$NAME.walltime"
+rm -f "$LOG" "$WALLFILE"
+(
+    while :; do
+        if l=$(tr -d '\r' 2>/dev/null < "$LOG" | grep -m1 -E '^\[info\] time: wall-check epoch=[0-9]+\.[0-9]{9}$'); then
+            printf '%s %s\n' "$(date +%s.%N)" "$l" > "$WALLFILE"
+            break
+        fi
+        sleep 0.05
+    done
+) &
+wallwatcher=$!
 # shellcheck disable=SC2086
-timeout --foreground "$TIMEOUT" "${BASE[@]}" -display none -serial "file:$LOG" $EXTRA < /dev/null
+timeout --foreground "$TIMEOUT" "${BASE[@]}" -rtc base=utc,clock=host -display none -serial "file:$LOG" $EXTRA < /dev/null
 code=$?
+kill "$wallwatcher" 2>/dev/null
+wait "$wallwatcher" 2>/dev/null
 
 fails=$(grep -c '^KTEST FAIL' "$LOG" 2>/dev/null || true)
 case $code in

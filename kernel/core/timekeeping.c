@@ -87,7 +87,9 @@ void timeInit(void) {
     TimeCivil c;
     uint64_t monoAtRtc = timeMonotonicNs();
     if (timeRtcDecode(&raw, &epoch, &c) == STATUS_OK) {
-        wallBaseNs = epoch * 1000000000ull - monoAtRtc;
+        /* The RTC counts whole seconds and we read it at a random point inside one: +0.5 s centres
+         * the error on zero (about +-0.5 s) instead of always lagging by up to 1 s (D-180). */
+        wallBaseNs = epoch * 1000000000ull + 500000000ull - monoAtRtc;
         wallOk = true;
         if (raw.hasCentury) {
             klogWrite(KLOG_INFO, "time",

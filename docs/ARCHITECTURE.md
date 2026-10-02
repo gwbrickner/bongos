@@ -754,15 +754,22 @@ handler. `kernelMain` enables interrupts right after `irqInit()`.
 **IPIs:** reschedule, TLB shootdown, call-function (with completion), and stop.
 
 ### 7.5 Time
-- **Clocksource: the TSC.** It must be invariant on real hardware. It's calibrated at boot
-  against the **ACPI PM timer** (from the FADT). The HPET is optional and never required,
-  since some AM5 boards disable it. Cross-CPU TSC sync is checked, and per-CPU offsets are
-  used if needed.
-- **Clock events:** the LAPIC timer in one-shot mode, or TSC-deadline mode when CPUID
-  advertises it. Calibrated against the TSC.
-- **Timers:** a high-resolution timer queue per CPU (a min-heap). Tickless idle comes later.
-- **Wall clock:** read from the CMOS RTC at boot (UTC). Later corrected by SNTP in `netd`.
-- **APIs:** `timeMonotonicNs()`, `timeWallNs()`, and timer objects.
+- **Clocksource: the TSC** (`lfence; rdtsc`, scaled by a 32.32 multiplier, D-176/D-178). It must be
+  invariant on bare metal (under a hypervisor it is only noted in the log). It's calibrated at boot against the
+  **ACPI PM timer** (from the FADT): three 50 ms windows, median, one repeat if the spread exceeds
+  1000 ppm (D-177). The HPET is optional and never required, since some AM5 boards disable it; it
+  is the calibration fallback when the PM timer is missing, and with neither the boot panics. Cross-CPU
+  TSC sync is checked, and per-CPU offsets are used if needed (M3.5).
+- **Clock events:** the LAPIC timer on vector 0xFE in one-shot mode (divide 16), or TSC-deadline mode
+  when CPUID advertises it (D-179). Calibrated against the TSC.
+- **Timers:** a high-resolution timer queue per CPU (a fixed 256-entry min-heap ordered by deadline
+  then arm order, intrusive `TimerObj`s, callbacks in IRQ context, D-176). Tickless idle comes later.
+- **Wall clock:** read from the CMOS RTC at boot (UTC, D-180; accurate to about +-0.5 s). Later corrected by
+  SNTP in `netd`.
+- **APIs (`kernel/include/timekeeping.h`):** `timeMonotonicNs()`, `timeWallNs()`, and timer objects
+  (`timerInit`/`timerArm`/`timerCancel`).
+- **Tests:** the wall clock is checked against the host by the harness, not the cmdline (D-181), and
+  the 100 ms one-shot test is measured against the PM timer (D-182).
 
 ### 7.6 Locking and preemption
 - **Primitives:**
