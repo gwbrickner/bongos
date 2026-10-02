@@ -26,7 +26,8 @@ typedef uint32_t VmmFlags;
 #define VMM_EXEC        (1u << 1) /* rejected with STATUS_ERR_UNSUPPORTED in M2.3 (D-088) */
 #define VMM_CACHE_WB    (0u << 2)
 #define VMM_CACHE_WC    (1u << 2)
-#define VMM_CACHE_MASK  (1u << 2)
+#define VMM_CACHE_UC    (2u << 2) /* PCD|PWT = PAT index 3 = UC (D-087, D-171): MMIO only */
+#define VMM_CACHE_MASK  (3u << 2) /* the value 3 << 2 is not a cache type: INVALID */
 #define VMM_FLAGS_VALID (VMM_WRITE | VMM_EXEC | VMM_CACHE_MASK)
 
 /* Builds the kernel's own page tables over `map[0..mapCount)` (the kernel's snapshot of the
@@ -43,7 +44,7 @@ void vmmInit(const BootInfo *bi, const BootMemRegion *map, uint32_t mapCount);
 bool vmmKernelTablesActive(void);
 
 /* Maps `[va, va+size)` (4 KiB-aligned, non-empty, entirely inside [VM_KVA_BASE, VM_KVA_END)) to
- * `[pa, pa+size)` with `flags` (VMM_WRITE/VMM_CACHE_WB|WC; VMM_EXEC returns
+ * `[pa, pa+size)` with `flags` (VMM_WRITE/VMM_CACHE_WB|WC|UC; VMM_EXEC returns
  * STATUS_ERR_UNSUPPORTED -- the module loader gets its own executable-range API later). Every leaf
  * is global, 4 KiB, and a fresh 0->1 transition: returns STATUS_ERR_INVALID if any page in the
  * range is already mapped, out of the KVA region, misaligned, past this CPU's MAXPHYADDR (or
@@ -53,7 +54,7 @@ bool vmmKernelTablesActive(void);
  * 3A §11.12.4: mapping one physical page with two memory types is unsupported). Returns
  * STATUS_ERR_NO_MEMORY if a table page can't be allocated, after rolling back any leaves this call
  * already wrote. Locks: vmmLock
- * (IRQ-disable only, D-088 -- mirrors the pmm's D-081 lock, same single-CPU/IF=0 justification).
+ * (IRQ-disable only, D-088 -- mirrors the pmm's D-081 lock, same single-CPU justification, D-173).
  * Lock order: vmmLock -> pmmLock. IRQ-safe: yes. May sleep: no. Panics if called before vmmInit().
  */
 Status vmmMapKernel(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags);
@@ -65,6 +66,25 @@ Status vmmMapKernel(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags);
  * safe point to reclaim one without a shootdown, which arrives with SMP, M3.4/M3.5). Locks:
  * vmmLock. IRQ-safe: yes. May sleep: no. */
 Status vmmUnmapKernel(uint64_t va, uint64_t size);
+
+/* Maps `[pa, pa+size)` (any alignment; rounded out to whole pages) into fresh KVA as RW, UC, NX,
+ * global (D-171) -- the way every MMIO region (LAPIC, IOAPIC, HPET, PCI BARs) is mapped. `*outVa`
+ * receives the mapped base plus `pa & 0xFFF`, so it addresses `pa` itself. Returns
+ * STATUS_ERR_INVALID for size 0, an overflow, a range past this CPU's MAXPHYADDR, or any page
+ * whose HHDM alias is present (RAM or the framebuffer: UC may never alias a page that is mapped
+ * with another cache type); STATUS_ERR_NO_MEMORY if no KVA range or table page is available (the
+ * KVA range is released again on failure). Locks: vmmLock (in callees). IRQ-safe: yes, but not
+ * from IRQ context (handlers do not map, rule R3 of D-173). May sleep: no. Panics before
+ * vmmInit(). */
+Status vmmMapMmio(uint64_t pa, uint64_t size, volatile void **outVa);
+
+/* Undoes vmmMapMmio(): `va` is the pointer it returned and `size` the size it was given. Unmaps
+ * the pages and frees the KVA range. Misuse (a pointer or size that vmmMapMmio did not hand out:
+ * an interior pointer, a size covering more or fewer pages, a non-UC KVA mapping, a double unmap)
+ * is a kernel bug and panics via panicBug() before anything is unmapped; a size that rounds out to
+ * the same pages is indistinguishable and accepted. Locks: vmmLock (in callees). IRQ-safe: yes.
+ * May sleep: no. */
+void vmmUnmapMmio(volatile void *va, uint64_t size);
 
 /* Looks up the current 4 KiB-leaf mapping at `va` (must itself be 4 KiB-aligned). On success,
  * `*outPa` and `*outFlags` describe the leaf and this returns STATUS_OK; returns

@@ -4,6 +4,7 @@
 #include "branding.h"
 #include "format.h"
 
+#include <arch/cpu.h>
 #include <stdarg.h>
 #include <stddef.h>
 
@@ -71,14 +72,19 @@ void klogWrite(KlogLevel level, const char *tag, const char *fmt, ...) {
     char line[320];
     int written =
         ksnprintf(line, sizeof(line), "[%s] %s: %s\n", klogLevelName(level), tag, message);
+    /* D-173: the sinks (UART, fbcon cursor/scroll state) are not reentrant, and an IRQ handler may
+     * log, so the whole output section runs with IRQs off. */
+    uint64_t irqFlags = archIrqSave();
     serialWriteString(line);
     if (fbconActive()) {
         fbconSetColor(klogLevelColor(level), 0);
         fbconWrite(line, klogWrittenLen(written, sizeof(line)));
     }
+    archIrqRestore(irqFlags);
 }
 
 void klogRaw(const char *s) {
+    uint64_t irqFlags = archIrqSave(); /* D-173: see klogWrite() */
     serialWriteString(s);
     if (fbconActive()) {
         size_t n = 0;
@@ -88,4 +94,5 @@ void klogRaw(const char *s) {
         fbconSetColor(7, 0);
         fbconWrite(s, n);
     }
+    archIrqRestore(irqFlags);
 }

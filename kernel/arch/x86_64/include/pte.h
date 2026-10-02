@@ -9,7 +9,7 @@
 #define X86_PTE_W         (1ULL << 1)
 #define X86_PTE_US        (1ULL << 2)
 #define X86_PTE_PWT       (1ULL << 3) /* PAT index bit 0 (D-087: WB=0, WC=1 at index 0/1) */
-#define X86_PTE_PCD       (1ULL << 4) /* PAT index bit 1 -- unused (no UC mapping exists yet) */
+#define X86_PTE_PCD       (1ULL << 4) /* PAT index bit 1 (D-171: PWT|PCD = index 3 = UC) */
 #define X86_PTE_PS        (1ULL << 7)
 #define X86_PTE_G         (1ULL << 8)
 #define X86_PTE_NX        (1ULL << 63)

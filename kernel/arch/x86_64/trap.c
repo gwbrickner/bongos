@@ -2,8 +2,9 @@
  * handler (ARCHITECTURE §7.2, D-074). Every unhandled vector panics in M2.1 except #BP (a trap,
  * not a fault -- the saved RIP already points past the `int3` byte, so resuming is a plain
  * `iretq` with the frame unchanged, never an RIP adjustment). NMI/#DF/#MC always panic: no
- * legitimate source exists yet, and CR4.MCE isn't set until M3.6. IF stays 0 for all of M2.1 (no
- * IRQ source is wired up before M3.2), so nothing here needs to be reentrant. */
+ * legitimate source exists yet, and CR4.MCE isn't set until M3.6. Vectors >= 32 go to irqDispatch()
+ * (irq.c, D-173) before any of the logic below. Exception handlers run with IF=0 (interrupt gates)
+ * and interrupts are only enabled after irqInit(), so nothing here is reentrant against an IRQ. */
 #include "include/trap-impl.h"
 
 #include "include/cpu-impl.h"
@@ -18,7 +19,9 @@
 #include "panic.h"
 #include "sections.h"
 
+#include <arch/cpu.h>
 #include <arch/trap.h>
+#include <irq.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -167,8 +170,14 @@ bool archTrapCatch(uint64_t mask, void (*fn)(void *), void *arg, TrapCatchInfo *
 
     trapCatch.mask = mask;
     trapCatch.armed = true;
+    bool ifBefore = archInterruptsEnabled();
     uint32_t caught = archTrapCatchCall(&trapCatch.ctx, fn, arg);
     trapCatch.armed = false; /* one-shot; also covers the "returned without faulting" case */
+    if (caught != 0 && ifBefore) {
+        /* The resume is a longjmp: it may have left an archIrqSave() section of `fn` (or the
+         * fault's own IF=0) without the matching restore, so put IF back as it was (D-173). */
+        archEnableInterrupts();
+    }
     if (caught != 0 && out != NULL) {
         *out = trapCatch.info;
     }
@@ -181,7 +190,8 @@ bool archTrapCatch(uint64_t mask, void (*fn)(void *), void *arg, TrapCatchInfo *
  * report() with the guard still clear, so it's excluded from instrumentation entirely rather than
  * relying on never having UB in the first place. */
 __attribute__((no_sanitize("undefined"))) bool archTrapCatchSoftware(uint64_t kind, uint64_t pc) {
-    if (!trapCatch.armed || (trapCatch.mask & kind) == 0) {
+    /* Never from inside an interrupt handler: the longjmp would skip the EOI (D-173). */
+    if (!trapCatch.armed || (trapCatch.mask & kind) == 0 || irqDepth() != 0) {
         return false;
     }
     trapCatch.armed = false;
@@ -285,6 +295,12 @@ static bool archTrapCatchTryResume(TrapFrame *f, uint64_t cr2) {
     if (!trapCatch.armed || (f->cs & 3) != 0 || f->vector >= 32) {
         return false;
     }
+    if (irqDepth() != 0) {
+        /* A fault inside an interrupt handler sits on the same boot stack and would pass the rsp
+         * check below, but resuming would longjmp out of the handler with no EOI, leaving its ISR
+         * bit set and blocking that priority class forever (D-173). */
+        return false;
+    }
     uint64_t bit = TRAP_CATCH_VEC((uint32_t)f->vector);
     if ((trapCatch.mask & bit) == 0) {
         return false;
@@ -319,6 +335,11 @@ void trapDispatch(TrapFrame *f) {
     /* First statement, before anything else that could itself fault (SDM Vol 3A §4.7: CR2 holds
      * the faulting address only until the *next* page fault). */
     uint64_t cr2 = archReadCr2();
+
+    if (f->vector >= 32) {
+        irqDispatch(f); /* D-173: handler, then EOI; never a fault, so no catch/panic handling */
+        return;
+    }
 
     if (f->vector == 3) {
         breakpointHits++;

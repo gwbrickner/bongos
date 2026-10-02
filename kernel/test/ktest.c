@@ -5,6 +5,7 @@
 #include "format.h"
 #include "klog.h"
 
+#include <arch/cpu.h>
 #include <arch/qemu.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -139,10 +140,17 @@ void ktestRunFromCmdline(const char *cmdline) {
         ksnprintf(startLine, sizeof(startLine), "KTEST START %s\n", tc->name);
         klogRaw(startLine);
 
+        bool ifBefore = archInterruptsEnabled();
         ktestRunning = tc;
         KtestCtx ctx = {tc, false};
         tc->fn(&ctx);
         ktestRunning = NULL;
+        /* D-173: a test that returns with IF=0 leaked an IRQ-disable (a lock, an unbalanced
+         * archIrqSave). Report it and re-enable, so one leak does not hang every later test. */
+        if (ifBefore && !archInterruptsEnabled()) {
+            ktestFail(&ctx, __FILE__, __LINE__, "left interrupts disabled");
+            archEnableInterrupts();
+        }
 
         if (ctx.failed) {
             realFailed++;

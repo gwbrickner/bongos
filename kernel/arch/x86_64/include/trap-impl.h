@@ -15,10 +15,18 @@ void trapIdtInit(void);
 
 /* trap-entry.asm's trapCommon calls this once it has built a TrapFrame on the stack. Never called
  * from anywhere else, so no header outside this arch-internal one declares it. No locks; called
- * with IF=0 (no IRQ source is wired up before M3.2, so this never runs reentrantly); may not
+ * with IF=0 (interrupt gates clear IF, and a fault inside an IRQ handler is fatal, so this never
+ * runs reentrantly against another trap except the IRQ it interrupted); may not
  * sleep. `f` points into the interrupted context's own stack (or an IST stack for #DF/NMI/#MC) --
  * never touched after this returns or redirects it, since trapCommon's `iretq` reads it exactly
  * once more on the way out. */
 void trapDispatch(TrapFrame *f);
+
+/* trapDispatch() hands every vector >= 32 to this (kernel/arch/x86_64/irq.c, D-173): the 8259
+ * spurious checks, the registered handler (or log-and-count if there is none), then the LAPIC EOI;
+ * 0xFF is counted and returns without an EOI. Called with IF=0 on the interrupted stack. Panics on
+ * a nested interrupt, an 8259 vector that is not a spurious IRQ7/15, or any vector before
+ * irqInit(). May not sleep. */
+void irqDispatch(TrapFrame *f);
 
 #endif

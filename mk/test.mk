@@ -112,6 +112,20 @@ ACPI_REQUIRED_KTESTS := acpi_reclaimed pmm_reclaim_keeps_low_memory acpi_tables_
                         acpi_read_phys_matches_copies acpi_read_phys_releases_kva \
                         acpi_read_phys_refuses_bad_ranges acpi_alloc_free_boundary \
                         acpi_reload_matches_and_frees acpi_read_phys_offsets_exact
+# M3.2 (interrupt controllers): the ktests its Done-when clause rests on, the controller init log lines
+# every row must show, and a negative check: the only irq/lapic/ioapic warning or error a clean boot
+# may print is the single, expected "unhandled vector" line from irq_unhandled_vector_eoi (a second
+# one would mean a stray or stale interrupt reached the kernel).
+IRQ_REQUIRED_KTESTS := vmm_map_uc vmm_mmio_edges vmm_mmio_unmap_misuse paging_mmio_uc_pat irq_pic_masked irq_legacy_spurious_counted irq_lapic_state \
+                       irq_vector_alloc_exhaust irq_register_rules irq_self_ipi_delivered \
+                       irq_self_ipi_pending_while_if0 irq_spurious_vector_no_eoi \
+                       irq_unhandled_vector_eoi irq_ioapic_masked_at_init \
+                       irq_isa_route_matches_madt irq_ioapic_pit_routed \
+                       irq_api_refused_in_handler irq_self_ipi_from_handler_redelivered \
+                       irq_two_pending_vectors_priority_order irq_fixed_vectors_dispatch \
+                       irq_route_misuse irq_isa_route_all_match_madt \
+                       irq_trap_catch_refused_in_handler trap_catch_restores_if \
+                       irq_lapic_reinit_neutralizes_leftovers
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \
@@ -176,6 +190,34 @@ _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	    fi; \
 	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^  kaslr slide 0x[0-9a-f]{16} \(link address = address - slide\)$$'; then \
 	        echo "make test: $$log does not contain backtracePrint's 'kaslr slide 0x...' header (ROADMAP M2.6 Done-when guarantee not met)"; \
+	        status=1; \
+	    fi; \
+	    for t in $(IRQ_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M3.2 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^\[info\] irq: 8259 remapped to 0x20/0x28 and masked \(pcat=[01]\)$$'; then \
+	        echo "make test: $$log does not contain the '8259 remapped ... and masked' line (ROADMAP M3.2 item 1)"; \
+	        status=1; \
+	    fi; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^\[info\] lapic: mode=(x2apic|xapic) id=[0-9]+ version=0x[0-9a-f]{2} maxlvt=[0-9]+ base=0x[0-9a-f]+$$'; then \
+	        echo "make test: $$log does not contain the 'lapic: mode=...' line (ROADMAP M3.2 item 2)"; \
+	        status=1; \
+	    fi; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE '^\[info\] ioapic: id=[0-9]+ addr=0x[0-9a-f]{8} version=0x[0-9a-f]{2} pins=[0-9]+ gsi=[0-9]+-[0-9]+$$'; then \
+	        echo "make test: $$log does not contain an 'ioapic: id=...' line (ROADMAP M3.2 item 3)"; \
+	        status=1; \
+	    fi; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF '[info] irq: interrupts enabled'; then \
+	        echo "make test: $$log does not contain 'irq: interrupts enabled'"; \
+	        status=1; \
+	    fi; \
+	    nunh=$$(tr -d '\r' < "$$log" 2>/dev/null | grep -cE '^\[(warn|error)\] (irq|lapic|ioapic): '); \
+	    nunhExpected=$$(tr -d '\r' < "$$log" 2>/dev/null | grep -cE '^\[warn\] irq: unhandled vector [0-9]+ '); \
+	    if [ "$$nunh" != 1 ] || [ "$$nunhExpected" != 1 ]; then \
+	        echo "make test: $$log has $$nunh irq/lapic/ioapic warnings or errors ($$nunhExpected of them 'unhandled vector'); exactly one, the expected 'unhandled vector', is allowed"; \
 	        status=1; \
 	    fi; \
 	    for t in $(ACPI_REQUIRED_KTESTS); do \

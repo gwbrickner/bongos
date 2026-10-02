@@ -9,12 +9,13 @@
 
 #include <arch/cpu.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 static KvaState kvaState;
 static bool vmmActive = false;
 
-/* --- lock: IRQ-disable only, same D-081/D-088 single-CPU/IF=0 justification as the pmm's lock
+/* --- lock: IRQ-disable only, same D-081/D-088 single-CPU justification (D-173) as the pmm's lock
  * (kernel/mm/pmm.c) -- a real spinlock arrives with SMP (M3.4/M3.5). Lock order: vmmLock ->
  * pmmLock (archMapPages/archUnmapPages call into the pmm for table-page allocation while vmmLock
  * is held; nothing here is ever called with pmmLock already held). */
@@ -118,4 +119,65 @@ void vmmKvaFree(uint64_t va, uint64_t size) {
         panicBug("vmm: kvaFree: invalid range va=0x%llx size=0x%llx", (unsigned long long)va,
                  (unsigned long long)size);
     }
+}
+
+Status vmmMapMmio(uint64_t pa, uint64_t size, volatile void **outVa) {
+    if (!vmmActive) {
+        panic("vmmMapMmio: called before vmmInit()");
+    }
+    uint64_t end = pa + size;
+    if (size == 0 || end < pa || end > UINT64_MAX - (KVA_PAGE_SIZE - 1)) {
+        return STATUS_ERR_INVALID;
+    }
+    uint64_t base = pa & ~(uint64_t)(KVA_PAGE_SIZE - 1);
+    uint64_t len = ((end + KVA_PAGE_SIZE - 1) & ~(uint64_t)(KVA_PAGE_SIZE - 1)) - base;
+    uint64_t va;
+    Status st = vmmKvaAlloc(len, &va);
+    if (st != STATUS_OK) {
+        return st;
+    }
+    st = vmmMapKernel(va, base, len, VMM_WRITE | VMM_CACHE_UC);
+    if (st != STATUS_OK) {
+        vmmKvaFree(va, len);
+        return st;
+    }
+    *outVa = (volatile void *)(uintptr_t)(va + (pa - base));
+    return STATUS_OK;
+}
+
+void vmmUnmapMmio(volatile void *va, uint64_t size) {
+    uint64_t a = (uint64_t)(uintptr_t)va;
+    uint64_t base = a & ~(uint64_t)(KVA_PAGE_SIZE - 1);
+    uint64_t end = a + size;
+    if (size == 0 || end < a || end > UINT64_MAX - (KVA_PAGE_SIZE - 1)) {
+        panicBug("vmm: vmmUnmapMmio: bad range va=0x%llx size=0x%llx", (unsigned long long)a,
+                 (unsigned long long)size);
+    }
+    uint64_t len = ((end + KVA_PAGE_SIZE - 1) & ~(uint64_t)(KVA_PAGE_SIZE - 1)) - base;
+    /* vmmUnmapKernel()/vmmKvaFree() alone cannot tell a too-small size or an interior pointer from
+     * the real thing: every page is mapped and kvaFree() records no allocation sizes (D-088), so
+     * both would "succeed", leaving pages mapped inside KVA the allocator now believes is free.
+     * A genuine vmmMapMmio() range is exactly one KVA reservation, bracketed by kvaAlloc()'s
+     * unmapped guard pages, with every page RW|UC -- check all of that before changing anything.
+     * The UC check is also what rejects a vmalloc()/ACPI (WB) mapping of the right shape. */
+    if (!vmmRangeInKva(base, len) || base - KVA_GUARD_SIZE < VM_KVA_BASE ||
+        base + len + KVA_GUARD_SIZE > VM_KVA_END ||
+        vmmLookupKernel(base - KVA_GUARD_SIZE, NULL, NULL) != STATUS_ERR_NOT_FOUND ||
+        vmmLookupKernel(base + len, NULL, NULL) != STATUS_ERR_NOT_FOUND) {
+        panicBug("vmm: vmmUnmapMmio: not a vmmMapMmio range va=0x%llx size=0x%llx",
+                 (unsigned long long)a, (unsigned long long)size);
+    }
+    for (uint64_t off = 0; off < len; off += KVA_PAGE_SIZE) {
+        VmmFlags f;
+        if (vmmLookupKernel(base + off, NULL, &f) != STATUS_OK || f != (VMM_WRITE | VMM_CACHE_UC)) {
+            panicBug("vmm: vmmUnmapMmio: page 0x%llx is not a mapped UC MMIO page",
+                     (unsigned long long)(base + off));
+        }
+    }
+    Status st = vmmUnmapKernel(base, len);
+    if (st != STATUS_OK) {
+        panicBug("vmm: vmmUnmapMmio: not a vmmMapMmio mapping va=0x%llx size=0x%llx",
+                 (unsigned long long)a, (unsigned long long)size);
+    }
+    vmmKvaFree(base, len);
 }

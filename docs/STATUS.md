@@ -3,16 +3,15 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-01 (M3.1 finished and awaiting owner merge; M3.2 is next)
+**Last updated:** 2026-10-01 (M3.2 finished, awaiting owner merge; M3.3 is next)
 
 ## Next step
-Start **M3.2 Interrupt controllers** (its Need, M3.1, is done), after the owner merges the M3.1 PR (`needs-owner`).
-1. `git fetch origin main && git switch -c m3-2-interrupt-controllers origin/main`
-2. Copy `docs/logs/TEMPLATE.md` to `docs/logs/M3.2.md` and write its Plan from ROADMAP.md. Use `acpiGetInfo()->madt`
-   (CPUs, I/O APICs, interrupt source overrides, LAPIC address) from M3.1; consult `architect` first (interrupts).
+**M3.2 is finished and PR [#20](https://github.com/gwbrickner/bongos/pull/20) is open** (`needs-owner`), waiting on the
+owner's merge and answers to the M3.2 questions below. After it merges, start **M3.3 Timekeeping** (Needs M3.2)
+from an up-to-date `origin/main` (M3.4 Locking also needs only M3.2).
 
 ## Current milestone
-None in progress (M3.1 is awaiting owner merge).
+None in progress (M3.2 is awaiting owner merge).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -31,6 +30,7 @@ None in progress (M3.1 is awaiting owner merge).
 | M2.5 | [#11](https://github.com/gwbrickner/bongos/pull/11) | BIOS loader: stage1 MBR, stage2 with a real-mode thunk, E820/VBE, a GPT+FAT32 reader, the shared menu and handoff. One image boots both ways |
 | M2.6 | [#16](https://github.com/gwbrickner/bongos/pull/16) | KASLR in both loaders (2 MiB slide, `--emit-relocs` relocation, `kaslr=off`), slide-aware symbolizer, `libs/crypto` (SHA-256, ChaCha20), kernel RNG (`randomGetBytes`) |
 | M3.1 | [#19](https://github.com/gwbrickner/bongos/pull/19) | ACPI tables: RSDP/XSDT/RSDT loader, FADT/MADT/MCFG/HPET/IVRS parsers, tables copied through temporary KVA windows (works on BIOS and UEFI), ACPI_RECLAIM freed after the copy, `acpidump=1` + `tools/acpiextract`, stored QEMU q35 tables, D-166..D-170 |
+| M3.2 | [#20](https://github.com/gwbrickner/bongos/pull/20) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
 
 The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB and 4-CPU rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
@@ -39,6 +39,11 @@ boot screens are in `docs/screenshots/`.
 _(none)_
 
 ## Questions for owner
+- **M3.2:** (1) LINT1 is programmed NMI/unmasked per the MADT (an NMI still panics, D-074): OK, or keep it masked
+  until a watchdog milestone? (2) LVT Error stays masked (no handler): OK? (3) An unregistered vector is logged once,
+  counted and EOI'd in every build, never a panic: OK? (4) `irqUnrouteGsi` of a level pin stalls (sweep lead S4):
+  fix at the first level-pin user? (5) CI may run KVM, so the x2APIC path may run there first: check its log for
+  `lapic: mode=x2apic`.
 - **M3.1:** (1) Checksum strictness: reject a bad-checksum table (D-167, as designed) or warn and use it
   like Linux? (2) OK to commit QEMU's table blobs (incl. its DSDT AML) under `tests/data/acpi/`? (3) OK to keep
   `acpidump=1` in `tests/harness/ktest-boot.cfg` (30-60 KiB extra serial per matrix row)? (4) Reclaiming
@@ -56,33 +61,21 @@ _(none)_
   local users, so that milestone must make the log privileged or redact the slide. Agree?
 - **M2.6 vector provenance (needs network):** `libs/crypto/test/crypto-vectors.h` could not be diffed
   against the RFC text (rfc-editor.org was denied by the proxy). Every field was cross-checked against
-  independent transcriptions (Nettle, Mbed TLS, pyca, Linux testmgr, Crypto++, `a66c5b7`), but
-  someone with network access should still diff it against RFC 8439 2.3.2/2.4.2/A.1/A.2 and FIPS 180-4.
+  independent transcriptions, but someone with network access should still diff it against RFC 8439
+  2.3.2/2.4.2/A.1/A.2 and FIPS 180-4.
 
 ## Waiting on owner (hardware checks and other owner-only steps)
-- **M3.1 hardware check** (optional; never blocks): boot the USB stick on the reference PC with `acpidump=1` in
-  `boot.cfg`'s `cmdline`, check the `acpi:` lines (CPU list, MCFG base, no rejected tables), and ideally save the
-  serial log for `tools/acpiextract`. Full steps are in `docs/logs/M3.1.md`, "Owner hardware check".
-- **Default the main session to Sonnet** (D-117). Adding `"model": "sonnet"` to
-  `.claude/settings.json` is an owner-only change, because the agent isn't allowed to change
-  its own settings. Until then, pick Sonnet when starting a session (`/model sonnet`).
-- **Re-run the cloud environment's setup script** (Environment settings → re-run setup), so
-  that fresh sessions get `libclang-rt-18-dev` and `gdb` from `tools/ci/install-deps.sh`.
-  Until then, `make host-tests` needs `sudo apt-get install -y libclang-rt-18-dev` in each new
-  container. If apt fails on the image's third-party PPAs (ondrej/php, deadsnakes; both 403),
-  move those files out of `/etc/apt/sources.list.d/` first.
-- **M1.4 hardware check:** `dd` the image to a USB stick and boot it. Confirm the boot menu
-  appears and that the arrow keys and Enter work. Report the resolution it logs and whether
-  scrolling is smooth. Full steps are in `docs/logs/M1.4.md`, "Owner hardware check".
-- **M2.5 hardware check** (optional; never blocks): enable CSM, boot the same USB stick in
-  legacy/BIOS mode, and report whether the menu and kernel screen appear, and at what
-  resolution. If it doesn't boot, report the last thing visible. Full steps are in
-  `docs/logs/M2.5.md`, "Owner hardware check".
-
-- **M2.6 hardware check** (optional; never blocks): boot the USB stick twice (UEFI, and BIOS with CSM)
-  and confirm the menu and kernel screen appear both times; with a serial cable, compare the
-  `kaslr: virtBase=` line across the two boots and check `random: seeded (hw words n/8 ...)`. Full steps
-  are in `docs/logs/M2.6.md`, "Owner hardware check".
+Optional hardware checks never block a merge; the full steps are in each milestone log ("Owner hardware check").
+- **M3.2:** boot the USB stick on the reference PC; expect `lapic: mode=x2apic`, `ioapic:` line(s), `irq: interrupts enabled`,
+  `kernel: init done`, and no irq/lapic/ioapic warnings.
+- **M3.1:** boot with `acpidump=1` in `boot.cfg`'s `cmdline`; check the `acpi:` lines; ideally save the serial log.
+- **M2.6:** boot UEFI and BIOS (CSM); compare the `kaslr: virtBase=` line; check `random: seeded (hw words n/8 ...)`.
+- **M2.5:** enable CSM, boot the same stick in BIOS mode; report whether the menu and kernel screen appear.
+- **M1.4:** `dd` the image to a USB stick and boot it; check the menu, arrow keys and Enter, and the logged resolution.
+- **Default the main session to Sonnet** (D-117): add `"model": "sonnet"` to `.claude/settings.json` (owner-only change).
+- **Re-run the cloud environment's setup script**, so fresh sessions get `libclang-rt-18-dev` and `gdb`. Until then run
+  `sudo apt-get install -y libclang-rt-18-dev` in each new container (move the 403 PPAs out of
+  `/etc/apt/sources.list.d/` if apt fails).
 
 ## Open leads (for the next `bug-sweeper` or `/milestone-sweep` to triage)
 - `make analyze` on main reports 5 warnings: `kernel/include/list.h:50` (a possible NULL

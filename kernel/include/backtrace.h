@@ -19,7 +19,7 @@
  * IST-vectored fault's chain can legitimately cross from an IST stack into the boot stack, since
  * RBP isn't switched by the IST mechanism, only RSP is), stops the walk rather than risk reading
  * unmapped or unrelated memory. No locks; safe to call from any trap context (single-threaded,
- * IF=0 throughout M2.1). */
+ * exception handlers run with IF=0). */
 void backtracePrint(uint64_t pc, uint64_t fp);
 
 /* Same walk as backtracePrint(), but writes each frame's return address into `out` (up to `max`

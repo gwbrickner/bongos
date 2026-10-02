@@ -5,6 +5,7 @@
 #ifndef KERNEL_ARCH_X86_64_CPU_IMPL_H
 #define KERNEL_ARCH_X86_64_CPU_IMPL_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* No locks, boot-time/IRQ-safe (a single instruction, no shared state): safe from any context.
@@ -17,12 +18,25 @@ static inline void archDisableInterrupts(void) {
     __asm__ volatile("cli" ::: "memory");
 }
 
+/* `sti`: enables maskable interrupts (kernelMain does this once, right after irqInit(), D-173).
+ * Takes effect after the next instruction (the STI shadow). No locks; the "memory" clobber keeps
+ * the compiler from moving loads/stores across it. */
+static inline void archEnableInterrupts(void) {
+    __asm__ volatile("sti" ::: "memory");
+}
+
+/* True iff RFLAGS.IF is set. No locks, IRQ-safe. */
+static inline bool archInterruptsEnabled(void) {
+    uint64_t flags;
+    __asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) : : "memory");
+    return (flags & (1ULL << 9)) != 0;
+}
+
 /* Saves RFLAGS and disables interrupts, returning the saved flags for archIrqRestore() -- the
  * building block for IRQ-safe critical sections (D-081: the pmm's lock is IRQ-disable-only until
- * a real spinlock exists, M3.4). IF stays 0 until M3.2 wires up the first IRQ source, so this is a
- * no-op in practice today, but every pmm entry point is written against the contract now so
- * turning IF on later needs no rewrite. No locks; safe from any context; "memory" clobber for the
- * same reordering reason as archDisableInterrupts(). */
+ * a real spinlock exists, M3.4). Since M3.2 (D-173) IF is 1 after irqInit(), so this is a real
+ * mutual exclusion against interrupt handlers on this CPU. No locks; safe from any context;
+ * "memory" clobber for the same reordering reason as archDisableInterrupts(). */
 static inline uint64_t archIrqSave(void) {
     uint64_t flags;
     __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(flags) : : "memory");

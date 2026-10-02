@@ -220,13 +220,13 @@ void archPatInit(void) {
 
     /* SDM Vol 3A §11.11.8/§11.12.4's MP-safe MSR-write procedure: disable/flush caching around the
      * WRMSR so no stale line survives under the old PAT interpretation. Both preconditions this
-     * relies on are asserted, not just assumed: IF must already be 0 (no IRQ source exists before
-     * M3.2, so a set IF here would mean that contract broke silently -- panic rather than mask it
-     * by disabling interrupts anyway) and this is the BSP alone (SMP is M3.5, so there's no other
-     * CPU to race). CR4.PGE toggling below is what performs the required TLB flush around the
-     * WRMSR (SDM step 5) -- that only works if PGE was actually 1 to begin with, which
-     * ARCHITECTURE §5.4 guarantees the loader always leaves set; asserted rather than trusted
-     * silently, the same way. */
+     * relies on are asserted, not just assumed: IF must already be 0 (archPatInit runs before
+     * irqInit() enables interrupts, so a set IF here would mean that contract broke silently --
+     * panic rather than mask it by disabling interrupts anyway) and this is the BSP alone (SMP is
+     * M3.5, so there's no other CPU to race). CR4.PGE toggling below is what performs the required
+     * TLB flush around the WRMSR (SDM step 5) -- that only works if PGE was actually 1 to begin
+     * with, which ARCHITECTURE §5.4 guarantees the loader always leaves set; asserted rather than
+     * trusted silently, the same way. */
     uint64_t rflags = archIrqSave(); /* restored below -- this is an assertion, not a lock */
     if (rflags & (1ULL << 9)) {
         panic("archPatInit: interrupts are enabled (IF=1), violating the boot-time contract");
@@ -501,7 +501,7 @@ static uint64_t *findLeafPte(uint64_t va) {
  * leaf entry via `*outEntry`, or false if `va` isn't mapped at all. Unlike findLeafPte() (4-KiB-
  * leaf-only, correct for the KVA region and the framebuffer's always-4K leaf), this understands
  * the HHDM's large leaves too -- needed by both the W^X verifier's alias-writability check
- * (checkLeaf(), below) and archMapPages' anti-aliasing check (hhdmAliasIsWc()), which target
+ * (checkLeaf(), below) and archMapPages' anti-aliasing check (hhdmAliasCache()), which target
  * arbitrary HHDM addresses that may well be covered by a 2 MiB/1 GiB leaf. */
 static bool findAnyLeafEntry(uint64_t va, uint64_t *outEntry) {
     uint64_t *pml4 = tableAt(kernelPml4Phys);
@@ -676,15 +676,22 @@ static void clearLeaf(uint64_t va) {
 }
 
 /* Looks up `pa`'s current HHDM alias (via hhdmLeafEntry(), any leaf size, bounded to the HHDM
- * window) and reports whether it's WC. `*outPresent` is false if `pa` is past the window or the
- * HHDM rebuild simply never mapped it (a RESERVED/BAD range, D-086). Used by archMapPages' anti-
- * aliasing check (SDM Vol 3A §11.12.4): checking `pmmPhysToPage() != NULL` alone is wrong in both
- * directions (ACPI_NVS is HHDM-WB but not pmm-managed; FRAMEBUFFER is HHDM-WC and pmm-unmanaged),
- * where this walks the real mapping instead of a proxy for it. */
-static bool hhdmAliasIsWc(uint64_t pa, bool *outPresent) {
+ * window) and reports its cache type (VMM_CACHE_WB/WC/UC, decoded from PWT/PCD). `*outPresent` is
+ * false if `pa` is past the window or the HHDM rebuild simply never mapped it (a RESERVED/BAD
+ * range, D-086). Used by archMapPages' anti-aliasing check (SDM Vol 3A §11.12.4): checking
+ * `pmmPhysToPage() != NULL` alone is wrong in both directions (ACPI_NVS is HHDM-WB but not
+ * pmm-managed; FRAMEBUFFER is HHDM-WC and pmm-unmanaged), where this walks the real mapping instead
+ * of a proxy for it. */
+static VmmFlags hhdmAliasCache(uint64_t pa, bool *outPresent) {
     uint64_t entry;
     *outPresent = hhdmLeafEntry(pa, &entry);
-    return *outPresent && (entry & X86_PTE_PWT) != 0;
+    if (!*outPresent) {
+        return VMM_CACHE_WB;
+    }
+    if (entry & X86_PTE_PCD) {
+        return VMM_CACHE_UC;
+    }
+    return (entry & X86_PTE_PWT) != 0 ? VMM_CACHE_WC : VMM_CACHE_WB;
 }
 
 /* CPUID.80000008H:EAX[7:0] (SDM Vol 2): the physical address width this CPU actually implements.
@@ -728,7 +735,7 @@ Status archMapPages(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags) {
     if (flags & VMM_EXEC) {
         return STATUS_ERR_UNSUPPORTED;
     }
-    if ((flags & ~(VmmFlags)VMM_FLAGS_VALID) != 0) {
+    if ((flags & ~(VmmFlags)VMM_FLAGS_VALID) != 0 || (flags & VMM_CACHE_MASK) == VMM_CACHE_MASK) {
         return STATUS_ERR_INVALID;
     }
     /* D-090 point (g) covers the HHDM alias; without this, a caller could still get a *second*,
@@ -738,13 +745,14 @@ Status archMapPages(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags) {
         return STATUS_ERR_INVALID;
     }
 
-    bool wc = (flags & VMM_CACHE_MASK) == VMM_CACHE_WC;
-    /* Anti-aliasing (SDM Vol 3A §11.12.4, D-088): any physical page whose HHDM alias is currently
-     * present must be requested with that exact same cache type, in either direction. */
+    VmmFlags cache = flags & VMM_CACHE_MASK;
+    /* Anti-aliasing (SDM Vol 3A §11.12.4, D-088/D-171): any physical page whose HHDM alias is
+     * currently present must be requested with that exact same cache type, in either direction.
+     * Since RAM is always HHDM-WB, this is also what keeps UC from ever mapping RAM. */
     for (uint64_t off = 0; off < size; off += X86_PTE_SIZE_4K) {
         bool present;
-        bool aliasIsWc = hhdmAliasIsWc(pa + off, &present);
-        if (present && aliasIsWc != wc) {
+        VmmFlags aliasCache = hhdmAliasCache(pa + off, &present);
+        if (present && aliasCache != cache) {
             return STATUS_ERR_INVALID;
         }
     }
@@ -753,8 +761,10 @@ Status archMapPages(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags) {
     if (flags & VMM_WRITE) {
         leafFlags |= X86_PTE_W;
     }
-    if (wc) {
+    if (cache == VMM_CACHE_WC) {
         leafFlags |= X86_PTE_PWT;
+    } else if (cache == VMM_CACHE_UC) {
+        leafFlags |= X86_PTE_PWT | X86_PTE_PCD; /* PAT index 3 = UC (D-087); never the PAT bit */
     }
 
     uint64_t *pml4 = tableAt(kernelPml4Phys);
@@ -836,7 +846,9 @@ Status archLookupKernel(uint64_t va, uint64_t *outPa, VmmFlags *outFlags) {
         if (!(e & X86_PTE_NX)) {
             f |= VMM_EXEC;
         }
-        if (e & X86_PTE_PWT) {
+        if (e & X86_PTE_PCD) {
+            f |= VMM_CACHE_UC;
+        } else if (e & X86_PTE_PWT) {
             f |= VMM_CACHE_WC;
         }
         *outFlags = f;

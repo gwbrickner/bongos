@@ -11,15 +11,16 @@ typedef enum { KLOG_ERROR, KLOG_WARN, KLOG_INFO, KLOG_DEBUG, KLOG_TRACE } KlogLe
  * locks, boot-time only; not reentrant. */
 void klogInit(void);
 
-/* Formats and writes one log line: "[<level>] <tag>: <message>\r\n". No locks; safe from any
- * context this early (single core, no concurrency yet) -- a later milestone adds a spinlock and a
- * ring-buffer sink here. May not sleep. Truncates silently if the formatted line exceeds the
- * internal line buffer (256 bytes). */
+/* Formats and writes one log line: "[<level>] <tag>: <message>\r\n". The output section runs with
+ * IRQs disabled (D-173), so it is safe from an interrupt handler and lines never interleave on one
+ * CPU; M3.4 adds a real lock for SMP, and a ring-buffer sink. May not sleep. Truncates silently if
+ * the formatted line exceeds the internal line buffer (256 bytes). */
 void klogWrite(KlogLevel level, const char *tag, const char *fmt, ...);
 
 /* Writes `s` straight to serial with no level prefix and no added newline handling beyond
  * serialWriteString's own '\n' -> "\r\n" translation: used for lines that must not carry the klog
- * prefix, such as the KTEST wire protocol and the panic banner. No locks, boot-time only. */
+ * prefix, such as the KTEST wire protocol and the panic banner. IRQs are disabled for the write,
+ * like klogWrite(). */
 void klogRaw(const char *s);
 
 #endif
