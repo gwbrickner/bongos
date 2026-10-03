@@ -6,7 +6,7 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-02 (M3.3 merged; M3.4 finished, no PR yet)
 
 ## Next step
-**M3.4 Locking + lock validator is finished** (log `docs/logs/M3.4.md`; two finish sweeps `SWEEP: PASS` (a third confirmation round is being re-run), reviewer
+**M3.4 Locking + lock validator is finished** (log `docs/logs/M3.4.md`; three finish sweeps `SWEEP: PASS`, reviewer
 `VERDICT: PASS`) on the session branch `claude/resume-bongos-dev-prrfwz`; **no PR has been opened** (the session was
 told not to), `needs-owner`. Next: owner opens/merges the PR and answers the M3.4 questions below, then start **M3.5 SMP
 bring-up** (Needs M3.3 and M3.4 are done).
