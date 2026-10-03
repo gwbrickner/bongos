@@ -327,6 +327,15 @@ void lockdepTestOn(void) {
     ATOMIC_STORE(&lockdepOff, false, MEM_RELAXED);
 }
 
+bool lockdepTestOffReset(void) {
+    if (!testOff) {
+        return false;
+    }
+    testOff = false;
+    ATOMIC_STORE(&lockdepOff, false, MEM_RELAXED);
+    return true;
+}
+
 static bool nameEq(const char *a, const char *b) {
     while (*a != '\0' && *a == *b) {
         a++;

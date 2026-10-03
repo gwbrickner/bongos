@@ -59,9 +59,15 @@ bool lockdepExpectArmed(void);
  * can check what code does while it is off. Every lock taken between Off and On must also be
  * released there (it is not on the held stack, so releasing it after On would be NOT_HELD). Off
  * panics unless a ktest is running, no handler is running and the validator is on; On panics unless
- * Off turned it off (a real full table stays off). */
+ * Off turned it off (a real full table stays off). A test that returns with it still off fails
+ * (the runner turns it back on, lockdepTestOffReset()). */
 void lockdepTestOff(void);
 void lockdepTestOn(void);
+
+/* ktest runner only, between tests: if the test that just ran left the validator off with
+ * lockdepTestOff(), turns it back on and returns true (the runner fails that test); else false.
+ * No locks; process context. */
+bool lockdepTestOffReset(void);
 
 /* ktest queries (by class name, first match). Both take the validator's raw graph lock with IRQs
  * off for the duration, so they are IRQ-safe and never sleep, but must not be called from inside
@@ -85,6 +91,9 @@ static inline uint32_t lockdepHeldDepth(void) {
     return 0;
 }
 static inline bool lockdepExpectArmed(void) {
+    return false;
+}
+static inline bool lockdepTestOffReset(void) {
     return false;
 }
 

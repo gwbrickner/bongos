@@ -160,6 +160,10 @@ void ktestRunFromCmdline(const char *cmdline) {
             (void)lockdepExpectEnd();
 #endif
         }
+        /* D-189: the switch-off is per test; turn the validator back on before reporting. */
+        if (lockdepTestOffReset()) {
+            ktestFail(&ctx, __FILE__, __LINE__, "left the lock validator off (lockdepTestOff)");
+        }
         /* D-173: a test that returns with IF=0 leaked an IRQ-disable (a lock, an unbalanced
          * archIrqSave). Report it and re-enable, so one leak does not hang every later test. */
         if (ifBefore && !archInterruptsEnabled()) {
