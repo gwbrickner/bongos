@@ -467,8 +467,10 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
     uint64_t cr4Now = archReadCr4();
     archWriteCr4(cr4Now & ~CR4_PGE);
     archWriteCr4(cr4Now);
-    klogWrite(KLOG_INFO, "smp", "cpu %u apic-id=%u online", cl->cpuId, cl->apicId);
+    /* Nothing that can block (the klog lock) between the online mask and ONLINE: the BSP waits for
+     * a published AP however long it takes (smpApVerdict), so that stretch must stay this short. */
     ATOMIC_STORE(&cl->bootStage, SMP_STAGE_ONLINE, MEM_RELEASE);
+    klogWrite(KLOG_INFO, "smp", "cpu %u apic-id=%u online", cl->cpuId, cl->apicId);
 
     smpIdleLoop();
 }
@@ -663,8 +665,14 @@ static bool bootAp(CpuLocal *cl) {
 
     bool tscDone = false;
     uint64_t deadline = timeMonotonicNs() + AP_ONLINE_TIMEOUT_NS;
-    while (ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE) != SMP_STAGE_ONLINE) {
-        if (!tscDone && ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE) == SMP_STAGE_TSC) {
+    for (;;) {
+        uint32_t stage = ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE);
+        bool published = (smpOnlineMask() & ((uint64_t)1 << cl->cpuId)) != 0;
+        SmpApVerdict v = smpApVerdict(stage, published, timeMonotonicNs() >= deadline);
+        if (v == SMP_AP_ONLINE) {
+            return true;
+        }
+        if (!tscDone && stage == SMP_STAGE_TSC) {
             tscDone = true;
             TscSyncResult tr;
             uint64_t f = archIrqSave();
@@ -672,8 +680,7 @@ static bool bootAp(CpuLocal *cl) {
             archIrqRestore(f);
             reportTscSync(cl, &tr);
         }
-        if (ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE) == SMP_STAGE_FAILED ||
-            timeMonotonicNs() >= deadline) {
+        if (v == SMP_AP_GIVE_UP) {
             klogWrite(KLOG_WARN, "smp",
                       "cpu apic-id=%u did not come online (trampoline stage %u, boot stage %u)",
                       cl->apicId, (unsigned)trampWord(offsetof(ApTrampData, stage)),
@@ -684,7 +691,6 @@ static bool bootAp(CpuLocal *cl) {
         }
         archPause();
     }
-    return true;
 }
 
 void smpInit(void) {

@@ -84,3 +84,16 @@ bool smpPickTrampolinePage(const BootMemRegion *map, uint32_t count, uint64_t *o
     }
     return found;
 }
+
+SmpApVerdict smpApVerdict(uint32_t bootStage, bool published, bool expired) {
+    if (bootStage == SMP_STAGE_ONLINE) {
+        return SMP_AP_ONLINE;
+    }
+    if (published) {
+        return SMP_AP_WAIT;
+    }
+    if (bootStage == SMP_STAGE_FAILED || expired) {
+        return SMP_AP_GIVE_UP;
+    }
+    return SMP_AP_WAIT;
+}

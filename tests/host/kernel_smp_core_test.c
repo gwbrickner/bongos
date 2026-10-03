@@ -171,3 +171,17 @@ TEST(timeTscPingpongBestPicksTheSmallestRoundTrip) {
     ASSERT_EQ(timeTscPingpongBest(bad0, u1, bad2, 1, &off, &rtt), STATUS_ERR_INVALID);
     ASSERT_EQ(timeTscPingpongBest(t0, t1, t2, 0, &off, &rtt), STATUS_ERR_INVALID);
 }
+
+/* BUG-M3.5-5: an AP that has published itself in the online mask is waited for, however late; it
+ * must never be given up on (INIT-parked), which would leave a dead CPU in the mask. */
+TEST(smpApVerdictNeverGivesUpOnAPublishedAp) {
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_ONLINE, true, false), (int)SMP_AP_ONLINE);
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_ONLINE, true, true), (int)SMP_AP_ONLINE);
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_TSC, true, true), (int)SMP_AP_WAIT);
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_TSC, true, false), (int)SMP_AP_WAIT);
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_TSC, false, true), (int)SMP_AP_GIVE_UP);
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_TSC, false, false), (int)SMP_AP_WAIT);
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_NONE, false, true), (int)SMP_AP_GIVE_UP);
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_ENTERED, false, false), (int)SMP_AP_WAIT);
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_FAILED, false, false), (int)SMP_AP_GIVE_UP);
+}

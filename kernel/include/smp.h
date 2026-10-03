@@ -42,6 +42,15 @@ uint32_t smpSelectAps(const AcpiCpu *cpus, uint32_t cpuCount, uint32_t bspApicId
  * 0 nor in the VGA hole 0xA0-0xBF). false if there is none. */
 bool smpPickTrampolinePage(const BootMemRegion *map, uint32_t count, uint64_t *outPhys);
 
+/* What the BSP does with an AP it is waiting for (D-193): ONLINE once its boot stage says so; WAIT
+ * while it has neither failed nor run past the deadline, and also, however late, once it has
+ * published itself in the online mask (`published`): from then on other CPUs may send it IPIs and
+ * only a local TLB flush separates it from ONLINE, so giving up on it (the INIT included) would
+ * leave a dead CPU in the mask; GIVE_UP otherwise (a failed or late AP that is not yet visible).
+ * Pure. */
+typedef enum { SMP_AP_WAIT, SMP_AP_ONLINE, SMP_AP_GIVE_UP } SmpApVerdict;
+SmpApVerdict smpApVerdict(uint32_t bootStage, bool published, bool expired);
+
 /* --- smp.c / arch ---------------------------------------------------------------------------- */
 
 /* The IPI vectors (ARCHITECTURE §7.2). */

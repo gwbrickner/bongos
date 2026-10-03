@@ -773,7 +773,9 @@ map/unmap calls (they can wait for a TLB shootdown, D-196). The IPI vectors are 
    itself (`cpuTable`, the online mask, a full local TLB flush) and enters the idle loop (no
    scheduler yet: `sti; hlt`, running work posted by `smpWorkPost`, D-202).
 5. The BSP waits for each AP with a timeout. An AP that fails is logged (`[warn] smp:`), sent an
-   INIT to park it, and boot continues without it. `smp: N cpus online` is always logged.
+   INIT to park it, and boot continues without it. An AP that has already put itself in the online
+   mask is never given up on (`smpApVerdict`): only a local TLB flush separates it from `ONLINE`,
+   and parking it would leave a dead CPU that IPIs wait on. `smp: N cpus online` is always logged.
 
 **IPIs (D-195, D-196, D-197):** vector 0xF0 TLB shootdown, 0xF1 kick (wakes an idle CPU), 0xF2
 call-function and 0xF3 stop. `smpCallFunction()` posts an on-stack request in the target's mailbox
