@@ -451,3 +451,92 @@ KTEST(smp_work_post_misuse_caught) {
     smpWorkWait(&first);
     smpWorkWait(&pending);
 }
+
+/* --- the caches really are per CPU (ROADMAP M3.5 item 5, D-199) ----------------------------------
+ */
+
+static Page *perCpuPage;
+static void *perCpuObj;
+static SlabCache *perCpuCache;
+
+static void apPageRoundTripFn(void *arg) {
+    (void)arg;
+    if (pmmAllocPages(0, 0, &perCpuPage) == STATUS_OK) {
+        pmmFreePages(perCpuPage, 0); /* now the head of cpu 1's own cache */
+    } else {
+        perCpuPage = NULL;
+    }
+}
+
+/* A page freed on cpu 1 stays in cpu 1's cache: allocations on cpu 0 (whose cache starts empty, so
+ * it refills from the buddy allocator) never get it, while a shared cache would hand it straight
+ * back (LIFO). */
+KTEST(smp_pmm_cache_is_per_cpu) {
+    if (smpOnlineCount() < 2) {
+        return;
+    }
+    pmmDrainAllCaches();
+    perCpuPage = NULL;
+    SmpWork w = {.fn = apPageRoundTripFn, .arg = NULL, .remaining = 1};
+    smpWorkPost(1, &w);
+    smpWorkWait(&w);
+    KTEST_ASSERT(perCpuPage != NULL);
+    PmmStats st;
+    pmmGetStats(&st);
+    KTEST_ASSERT(st.cachedPages > 0); /* cpu 1's cache, counted from cpu 0 */
+    Page *got[64];
+    uint32_t n = 0;
+    bool sawIt = false;
+    for (; n < 64; n++) {
+        if (pmmAllocPages(0, 0, &got[n]) != STATUS_OK) {
+            break;
+        }
+        sawIt = sawIt || got[n] == perCpuPage;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        pmmFreePages(got[i], 0);
+    }
+    pmmDrainAllCaches();
+    pmmGetStats(&st);
+    KTEST_ASSERT_EQ(n, 64);
+    KTEST_ASSERT(!sawIt);
+    KTEST_ASSERT_EQ(st.cachedPages, 0); /* pmmDrainAllCaches() reached cpu 1's cache too */
+}
+
+static void apObjRoundTripFn(void *arg) {
+    (void)arg;
+    perCpuObj = slabAlloc(perCpuCache, 0);
+    if (perCpuObj != NULL) {
+        slabFree(perCpuCache, perCpuObj); /* now on top of cpu 1's magazine */
+    }
+}
+
+/* The same for the slab magazines: an object freed on cpu 1 is never handed out on cpu 0. */
+KTEST(smp_slab_magazine_is_per_cpu) {
+    if (smpOnlineCount() < 2) {
+        return;
+    }
+    KTEST_ASSERT(slabCacheCreate("sweep-percpu", 128, 0, NULL, NULL, &perCpuCache) == STATUS_OK);
+    perCpuObj = NULL;
+    SmpWork w = {.fn = apObjRoundTripFn, .arg = NULL, .remaining = 1};
+    smpWorkPost(1, &w);
+    smpWorkWait(&w);
+    KTEST_ASSERT(perCpuObj != NULL);
+    void *got[64];
+    uint32_t n = 0;
+    bool sawIt = false;
+    for (; n < 64; n++) {
+        got[n] = slabAlloc(perCpuCache, 0);
+        if (got[n] == NULL) {
+            break;
+        }
+        sawIt = sawIt || got[n] == perCpuObj;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        slabFree(perCpuCache, got[i]);
+    }
+    slabCacheDestroy(perCpuCache);
+    perCpuCache = NULL;
+    KTEST_ASSERT_EQ(n, 64);
+    KTEST_ASSERT(!sawIt);
+}
