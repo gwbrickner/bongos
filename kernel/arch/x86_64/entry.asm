@@ -14,6 +14,7 @@ section .text.entry progbits alloc exec nowrite align=16
 global kernelEntry
 extern kernelMain
 extern kernelBootStackTop
+extern cpuLocalBsp
 
 kernelEntry:
     cli
@@ -31,8 +32,23 @@ kernelEntry:
     mov  es, ax
     mov  ss, ax
     xor  eax, eax
-    mov  fs, ax                        ; bases are set later via MSR (M2.1/M3); don't rely on them
+    mov  fs, ax
     mov  gs, ax
+
+    ; IA32_GS_BASE = &cpuLocalBsp, and its `self` pointer (CpuLocal offset 0) = itself (D-190).
+    ; RIP-relative, so the slid address is what lands in the MSR. Nothing may reload GS after
+    ; this point (an Intel CPU zeroes the base on a null-selector load), and nothing may run C
+    ; before it: cpuLocal() reads %gs:0.
+    lea  rax, [rel cpuLocalBsp]
+    mov  [rax], rax
+    mov  ecx, 0xC0000101               ; IA32_GS_BASE
+    mov  rdx, rax
+    shr  rdx, 32
+    wrmsr                              ; edx:eax = base (eax already holds the low half)
+    xor  eax, eax
+    mov  ecx, 0xC0000102               ; IA32_KERNEL_GS_BASE = 0 (no swapgs until M5)
+    xor  edx, edx
+    wrmsr
 
     lidt [rel nullIdtr]                ; limit 0: any exception now triple-faults (no IDT yet)
 

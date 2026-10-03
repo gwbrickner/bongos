@@ -4,28 +4,15 @@
 #define KERNEL_PREEMPT_H
 
 #include "atomic.h"
-#include "lockdep.h"
+#include "cpu-local.h"
+#include "cpu-sync.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 
-/* The synchronization state of one CPU. Interim (D-184): there is no CpuLocal until M3.5, so this
- * is a BSP static behind cpuSync(); M3.5 points the accessor at the per-CPU area and nothing else
- * changes. */
-typedef struct CpuSync {
-    uint32_t preemptCount;
-    uint32_t klogHeld; /* klog's sink section is open on this CPU (klog.c: lets an exception that
-                          logs and resumes re-enter) */
-#ifdef KERNEL_DEBUG
-    uint32_t lockdepRecursion; /* validator re-entry guard; IRQs are off while it is nonzero */
-    LockdepHeldStack held;     /* this CPU's held locks, for the validator */
-#endif
-} CpuSync;
-
-extern CpuSync cpuSyncBsp; /* kernel/sync/preempt.c */
-
+/* cpuSync() is this CPU's CpuSync inside its CpuLocal (D-184, D-190). */
 static inline CpuSync *cpuSync(void) {
-    return &cpuSyncBsp;
+    return &cpuLocal()->sync;
 }
 
 /* Panics (panicBug) on a preemptEnable() with a zero count. No locks. */

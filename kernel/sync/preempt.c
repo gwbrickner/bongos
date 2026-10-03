@@ -6,8 +6,6 @@
 
 #include <arch/cpu.h>
 
-CpuSync cpuSyncBsp;
-
 _Noreturn void preemptUnderflow(void) {
     panicBug("preemptEnable: preemptCount underflow");
 }

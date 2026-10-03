@@ -25,7 +25,6 @@ archLoadGdt:
     mov  ds, ax
     mov  es, ax
     mov  ss, ax
-    xor  eax, eax                      ; fs/gs bases are set later via MSR (M2.1 doesn't need them yet)
-    mov  fs, ax
-    mov  gs, ax
+    ; FS/GS are deliberately NOT reloaded: IA32_GS_BASE holds this CPU's CpuLocal (D-190) and
+    ; loading a null selector would zero it on Intel.
     ret

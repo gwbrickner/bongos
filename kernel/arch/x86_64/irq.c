@@ -34,7 +34,6 @@ static bool vectorUnmasked[IRQ_VECTOR_COUNT]; /* the routed pin is currently unm
 static uint64_t warnedUnhandled[IRQ_VECTOR_COUNT / 64];
 static IrqVectorMap vectorMap;
 static IrqStats stats;
-static volatile uint32_t depth = 0;
 static bool inited = false;
 static const AcpiMadtInfo *madtInfo = NULL;
 
@@ -45,7 +44,7 @@ static bool vectorIsFixed(uint32_t v) {
 }
 
 uint32_t irqDepth(void) {
-    return depth;
+    return cpuLocal()->irqDepth;
 }
 
 void irqInit(void) {
@@ -91,7 +90,7 @@ void irqInit(void) {
 /* --- vector ownership and handlers --------------------------------------------------------- */
 
 static bool callable(void) {
-    return inited && depth == 0;
+    return inited && cpuLocal()->irqDepth == 0;
 }
 
 Status irqAllocVector(uint32_t *outVector) {
@@ -321,10 +320,10 @@ void irqDispatch(TrapFrame *f) {
         panic("irq: 8259 vector %u delivered while fully masked", v);
     }
 
-    if (depth != 0) {
+    if (cpuLocal()->irqDepth != 0) {
         panic("irq: nested interrupt (vector %u inside a handler)", v);
     }
-    depth = 1;
+    cpuLocal()->irqDepth = 1;
     vectorCounts[v]++;
     IrqHandler h = __atomic_load_n(&slots[v].handler, __ATOMIC_ACQUIRE);
     if (h != NULL) {
@@ -347,7 +346,7 @@ void irqDispatch(TrapFrame *f) {
                       "unhandled vector %u (EOI sent; further occurrences counted silently)", v);
         }
     }
-    depth = 0;
+    cpuLocal()->irqDepth = 0;
     if (v >= 48 && v <= 254) {
         lapicEoi();
     }

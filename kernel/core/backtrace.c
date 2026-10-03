@@ -1,5 +1,6 @@
 /* See backtrace.h. */
 #include "backtrace.h"
+#include "cpu-local.h"
 
 #include "format.h"
 #include "klog.h"
@@ -17,16 +18,16 @@ typedef struct {
     uint64_t bottom, top;
 } StackRange;
 
-/* Boundaries of every stack a frame pointer can legitimately point into (ARCHITECTURE §7.1). */
+/* Boundaries of every stack of *this CPU* a frame pointer can legitimately point into
+ * (ARCHITECTURE §7.1, D-190). */
 static void knownStacks(StackRange out[BACKTRACE_STACK_COUNT]) {
-    out[0].bottom = (uint64_t)(uintptr_t)kernelBootStackBottom;
-    out[0].top = (uint64_t)(uintptr_t)kernelBootStackTop;
-    out[1].bottom = (uint64_t)(uintptr_t)kernelIst1Bottom;
-    out[1].top = (uint64_t)(uintptr_t)kernelIst1Top;
-    out[2].bottom = (uint64_t)(uintptr_t)kernelIst2Bottom;
-    out[2].top = (uint64_t)(uintptr_t)kernelIst2Top;
-    out[3].bottom = (uint64_t)(uintptr_t)kernelIst3Bottom;
-    out[3].top = (uint64_t)(uintptr_t)kernelIst3Top;
+    const ArchCpuLocal *a = &cpuLocal()->arch;
+    out[0].bottom = a->stackBottom;
+    out[0].top = a->stackTop;
+    for (int i = 0; i < 3; i++) {
+        out[1 + i].bottom = a->istBottom[i];
+        out[1 + i].top = a->istTop[i];
+    }
 }
 
 /* -1 if `fp` isn't inside any known stack with room for both the saved-fp and return-address

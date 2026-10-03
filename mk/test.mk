@@ -151,6 +151,8 @@ LOCK_REQUIRED_KTESTS := spin_trylock_semantics spin_irqsave_restores_if preempt_
                         spin_unlock_unlocked_caught spin_ticket_wraparound \
                         spin_unlock_irqrestore_unlocked_caught spin_assert_held \
                         preempt_in_atomic_irqs_off klog_exception_in_section_does_not_hang
+# M3.5 (SMP bring-up): grows as the sub-steps land.
+SMP_REQUIRED_KTESTS := smp_cpulocal_bsp
 LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_unsafe_in_irq_reported \
                            lockdep_irq_safe_then_irqs_on_reported lockdep_class_recursion_reported \
                            lockdep_trylock_records_no_edge lockdep_out_of_order_release \
@@ -284,6 +286,12 @@ _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	            status=1; \
 	        fi; \
 	    fi; \
+	    for t in $(SMP_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M3.5 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
 	    for t in $(LOCK_REQUIRED_KTESTS); do \
 	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
 	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M3.4 Done-when guarantee not met)"; \

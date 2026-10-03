@@ -7,7 +7,7 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 
 ## Next step
 **M3.5 SMP bring-up is in progress** (log `docs/logs/M3.5.md`) on the session branch `claude/optimistic-hawking-qw4tzr`.
-M3.4 merged (PR #22). Architect design is in the M3.5 log (plan of record). Next: implement sub-step 1 (`CpuLocal` on the BSP through GS base, `entry.asm`).
+M3.4 merged (PR #22). Architect design is in the M3.5 log (plan of record). Sub-step 1 (CpuLocal on the BSP) is done. Next: sub-step 2 (per-CPU pmm/slab/timer blobs, D-085(1), slab bufctl states), see the log's Next step.
 
 ## Current milestone
 M3.5 SMP bring-up (`needs-owner`).

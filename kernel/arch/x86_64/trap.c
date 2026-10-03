@@ -317,7 +317,7 @@ static bool archTrapCatchTryResume(TrapFrame *f, uint64_t cr2) {
     if ((trapCatch.mask & bit) == 0) {
         return false;
     }
-    if (f->rsp < (uint64_t)(uintptr_t)kernelBootStackBottom || f->rsp > trapCatch.ctx.rsp) {
+    if (f->rsp < cpuLocal()->arch.stackBottom || f->rsp > trapCatch.ctx.rsp) {
         return false;
     }
 
