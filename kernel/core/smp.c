@@ -199,3 +199,71 @@ void smpIpiHandler(uint32_t vector, void *ctx) {
             break;
     }
 }
+
+/* --- work for idle APs (D-202) ------------------------------------------------------------------
+ */
+
+void smpWorkPost(uint32_t cpuId, SmpWork *w) {
+    CpuLocal *tcl = cpuLocalOf(cpuId);
+    if (tcl == NULL || cpuId == smpThisCpu()) {
+        panicBug("smpWorkPost: cpu %u is offline or the caller", cpuId);
+    }
+    SmpWork *expected = NULL;
+    if (!ATOMIC_CMPXCHG(&tcl->work, &expected, w, MEM_RELEASE, MEM_RELAXED)) {
+        panicBug("smpWorkPost: cpu %u still has earlier work pending", cpuId);
+    }
+    smpKick(cpuId);
+}
+
+void smpWorkWait(SmpWork *w) {
+    if (!archInterruptsEnabled() || irqDepth() != 0) {
+        panicBug("smpWorkWait: needs IF=1 and no handler running");
+    }
+    uint64_t deadline = timeMonotonicNs() + 30000000000ull;
+    while (ATOMIC_LOAD(&w->remaining, MEM_ACQUIRE) != 0) {
+        if (timeMonotonicNs() >= deadline) {
+            panic("smp: posted work did not finish in 30 s (%u cpus pending)",
+                  (unsigned)ATOMIC_LOAD(&w->remaining, MEM_RELAXED));
+        }
+        archPause();
+    }
+}
+
+void smpWorkRun(uint64_t cpuMask, SmpFn fn, void *arg) {
+    uint32_t me = smpThisCpu();
+    uint64_t mask = cpuMask & smpOnlineMask();
+    uint64_t others = mask & ~((uint64_t)1 << me);
+    SmpWork w = {.fn = fn, .arg = arg, .remaining = (uint32_t)__builtin_popcountll(others)};
+    for (uint64_t m = others; m != 0; m &= m - 1) {
+        smpWorkPost((uint32_t)__builtin_ctzll(m), &w);
+    }
+    if (mask & ((uint64_t)1 << me)) {
+        fn(arg);
+    }
+    if (others != 0) {
+        smpWorkWait(&w);
+    }
+}
+
+bool smpWorkRunPending(void) {
+    CpuLocal *cl = cpuLocal();
+    SmpWork *w = ATOMIC_XCHG(&cl->work, NULL, MEM_ACQUIRE);
+    if (w == NULL) {
+        return false;
+    }
+    archEnableInterrupts();
+    SmpFn fn = w->fn;
+    void *arg = w->arg;
+    fn(arg);
+    archDisableInterrupts();
+    ATOMIC_FETCH_SUB(&w->remaining, 1, MEM_RELEASE); /* `w` may vanish the moment this lands */
+    return true;
+}
+
+bool smpStopNmiHook(void) {
+    if (!ATOMIC_LOAD(&stopTestMode, MEM_ACQUIRE)) {
+        return false;
+    }
+    ATOMIC_STORE(&cpuLocal()->stopped, 1, MEM_RELEASE);
+    return true;
+}

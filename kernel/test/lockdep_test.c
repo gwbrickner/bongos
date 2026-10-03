@@ -7,6 +7,7 @@
 #include "ktest.h"
 #include "lockdep.h"
 #include "preempt.h"
+#include "smp.h"
 #include "spinlock.h"
 #include "timekeeping.h"
 
@@ -129,6 +130,43 @@ KTEST(lockdep_irq_safe_unsafe_reported) {
     spinUnlockIrqRestore(&suSafe, f);
     KTEST_ASSERT_EQ(reports, 1);
     KTEST_ASSERT(!lockdepDependsOn("lt-su-safe", "lt-su-unsafe")); /* no edge recorded */
+}
+
+static Spinlock cpuInvA = SPINLOCK_INIT("lt-cpu-inv-a");
+static Spinlock cpuInvB = SPINLOCK_INIT("lt-cpu-inv-b");
+static volatile uint32_t cpuInvReports, cpuInvRan;
+
+static void lockdepTestCpuBody(void *arg) {
+    (void)arg;
+    uint64_t fa = spinLockIrqSave(&cpuInvA);
+    uint64_t fb = spinLockIrqSave(&cpuInvB);
+    spinUnlockIrqRestore(&cpuInvB, fb);
+    spinUnlockIrqRestore(&cpuInvA, fa);
+    lockdepExpectBegin(LOCKDEP_REPORT_INVERSION);
+    fb = spinLockIrqSave(&cpuInvB);
+    fa = spinLockIrqSave(&cpuInvA);
+    spinUnlockIrqRestore(&cpuInvA, fa);
+    spinUnlockIrqRestore(&cpuInvB, fb);
+    cpuInvReports = lockdepExpectEnd();
+    cpuInvRan = 1;
+}
+
+/* Expect mode is per CPU (D-201): a CPU other than the BSP can arm it and swallow its own report
+ * (a report raised on a CPU that did not arm it still panics; that half cannot be asserted from a
+ * test that must survive). */
+KTEST(lockdep_expect_per_cpu) {
+    cpuInvReports = 0;
+    cpuInvRan = 0;
+    if (smpOnlineCount() < 2) {
+        lockdepTestCpuBody(NULL);
+    } else {
+        SmpWork w = {.fn = lockdepTestCpuBody, .arg = NULL, .remaining = 1};
+        smpWorkPost(1, &w);
+        smpWorkWait(&w);
+    }
+    KTEST_ASSERT(cpuInvRan);
+    KTEST_ASSERT_EQ(cpuInvReports, 1);
+    KTEST_ASSERT(!lockdepExpectArmed());
 }
 
 static Spinlock sameSite[2];

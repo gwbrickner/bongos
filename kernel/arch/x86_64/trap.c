@@ -19,6 +19,7 @@
 #include "ktest.h"
 #include "panic.h"
 #include "preempt.h"
+#include "smp.h"
 #include "sections.h"
 
 #include <arch/cpu.h>
@@ -356,8 +357,12 @@ void trapDispatch(TrapFrame *f) {
         return;
     }
 
+    if (f->vector == 2 && smpStopNmiHook()) {
+        return; /* the stop IPI's NMI fallback under the ktest-only test mode (D-197) */
+    }
+
     if (f->vector == 3) {
-        breakpointHits++;
+        __atomic_fetch_add(&breakpointHits, 1, __ATOMIC_RELAXED);
         klogWrite(KLOG_DEBUG, "trap", "int3 at 0x%016llx", (unsigned long long)f->rip);
         return; /* trapCommon's iretq resumes with the frame unchanged -- RIP already advanced */
     }

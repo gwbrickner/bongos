@@ -155,8 +155,12 @@ LOCK_REQUIRED_KTESTS := spin_trylock_semantics spin_irqsave_restores_if preempt_
 SMP_REQUIRED_KTESTS := smp_cpulocal_bsp smp_online_matches_madt smp_call_function_all_cpus \
                        irq_handler_may_allocate \
                        smp_call_function_refused_with_irqs_off smp_tlb_shootdown_batched \
-                       smp_stop_parks_cpus
-LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_safe_unsafe_reported lockdep_irq_unsafe_in_irq_reported \
+                       smp_stop_parks_cpus smp_gs_tables_per_cpu smp_cpu_state_matches_bsp \
+                       smp_call_function_storm smp_tlb_shootdown_stress smp_pmm_concurrent_stress \
+                       smp_cross_cpu_double_free_caught smp_ap_timer_fires_locally \
+                       smp_tsc_monotonic smp_tsc_estimator_recovers_skew smp_stop_nmi_fallback
+LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_safe_unsafe_reported \
+                           lockdep_expect_per_cpu lockdep_irq_unsafe_in_irq_reported \
                            lockdep_irq_safe_then_irqs_on_reported lockdep_class_recursion_reported \
                            lockdep_trylock_records_no_edge lockdep_out_of_order_release \
                            lockdep_sees_kernel_locks lockdep_not_held_reported \
@@ -303,6 +307,15 @@ _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	    if [ "$$nap" != "$$((cpus - 1))" ]; then \
 	        echo "make test: $$log has $$nap 'smp: cpu N apic-id=A online' lines, expected $$((cpus - 1)) (ROADMAP M3.5)"; \
 	        status=1; \
+	    fi; \
+	    if [ "$$cpus" -gt 1 ]; then \
+	        for re in '^\[info\] smp: tlb-stress readers='"$$((cpus - 1))"' flips=[0-9]+ reads=[0-9]+ bad=0$$' \
+	                  '^\[info\] smp: pmm-stress cpus='"$$cpus"' ops=[0-9]+ bad=0$$'; do \
+	            if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE "$$re"; then \
+	                echo "make test: $$log has no line matching '$$re' (ROADMAP M3.5 item 7: the stress ktests must have run on every CPU)"; \
+	                status=1; \
+	            fi; \
+	        done; \
 	    fi; \
 	    nsw=$$(tr -d '\r' < "$$log" 2>/dev/null | grep -cE '^\[(warn|error)\] smp:'); \
 	    if [ "$$nsw" != 0 ]; then \

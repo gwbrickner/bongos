@@ -343,6 +343,36 @@ static void tscSyncAp(TscSync *s, const CpuLocal *cl, TscSyncResult *out) {
     out->ok = true;
 }
 
+typedef struct {
+    TscSyncResult res;
+} TscTestCtx;
+
+static void tscTestApFn(void *arg) {
+    TscTestCtx *c = arg;
+    uint64_t f = archIrqSave();
+    tscSyncAp(&tscSync, cpuLocal(), &c->res);
+    archIrqRestore(f);
+}
+
+bool archTscSyncTest(uint32_t cpu, int64_t skew, uint32_t *warpsBefore, uint32_t *warpsAfter,
+                     int64_t *estimate) {
+    memset(&tscSync, 0, sizeof(tscSync));
+    tscSync.fakeSkew = skew;
+    TscTestCtx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    SmpWork w = {.fn = tscTestApFn, .arg = &ctx, .remaining = 1};
+    smpWorkPost(cpu, &w);
+    TscSyncResult bsp;
+    uint64_t f = archIrqSave();
+    tscSyncBsp(&tscSync, &bsp);
+    archIrqRestore(f);
+    smpWorkWait(&w);
+    *warpsBefore = bsp.warpsBefore;
+    *warpsAfter = bsp.warpsAfter;
+    *estimate = bsp.offset;
+    return bsp.ok && ctx.res.ok;
+}
+
 /* --- the AP side -------------------------------------------------------------------------------
  */
 
@@ -356,8 +386,11 @@ static _Noreturn void apFail(CpuLocal *cl) {
  * an interrupt that arrives between the two cannot be lost (the STI shadow covers the hlt). */
 static _Noreturn void smpIdleLoop(void) {
     for (;;) {
-        __asm__ volatile("sti\n\thlt" ::: "memory");
         archDisableInterrupts();
+        if (smpWorkRunPending()) {
+            continue;
+        }
+        __asm__ volatile("sti\n\thlt" ::: "memory");
     }
 }
 
@@ -583,7 +616,8 @@ static void reportTscSync(const CpuLocal *cl, const TscSyncResult *tr) {
     } else if (tr->warpsBefore != 0) {
         /* Under a hypervisor a skew is the host's doing; on bare metal it is worth a warning. */
         bool bare = !archCpuIsHypervisor();
-        klogWrite(bare && tr->warpsAfter != 0 ? KLOG_WARN : KLOG_INFO, "smp",
+        bool unfixed = tr->warpsAfter * 4 > tr->warpsBefore; /* the estimate did not remove most */
+        klogWrite(bare && unfixed ? KLOG_WARN : KLOG_INFO, "smp",
                   "cpu %u: TSC ran %lld ticks ahead of the boot CPU's; offset applied (%u warps "
                   "before, %u after)",
                   cl->cpuId, (long long)tr->offset, (unsigned)tr->warpsBefore,

@@ -3,6 +3,7 @@
 #ifndef KERNEL_ARCH_X86_64_SMP_IMPL_H
 #define KERNEL_ARCH_X86_64_SMP_IMPL_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -65,5 +66,12 @@ extern const uint8_t apTrampolineBlobEnd[];
 /* kernel/arch/x86_64/ap-entry.asm: the AP's 64-bit entry. Not a callable C function; its address
  * is what the BSP stores in ApTrampData.entry64. */
 void apEntry64(void);
+
+/* ktest-only (D-198): runs the cross-CPU TSC check against AP `cpu` with `skew` ticks added to its
+ * readings, to prove the estimator recovers a known offset. Nothing is applied. `*warpsBefore` and
+ * `*warpsAfter` are the warps seen before and after the estimate is applied, `*estimate` is the
+ * offset found. Returns false if the protocol timed out. Needs IF=1, the AP idle. */
+bool archTscSyncTest(uint32_t cpu, int64_t skew, uint32_t *warpsBefore, uint32_t *warpsAfter,
+                     int64_t *estimate);
 
 #endif

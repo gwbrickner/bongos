@@ -99,6 +99,36 @@ bool smpCpuStopped(uint32_t cpuId);
  * `stopped` flag. Panics outside a ktest. */
 void smpStopTestMode(bool on);
 
+/* Work for an idle AP (D-202): until M4 has threads, an AP runs posted work from its idle loop in
+ * "thread" context: IF=1, irqDepth()==0, on its own kernel stack. `fn` may allocate, take locks and
+ * call smpCallFunction(); it must not use KTEST_ASSERT (the ktest state is the BSP's), so tests
+ * return results through shared memory and the BSP asserts. */
+typedef struct SmpWork {
+    SmpFn fn;
+    void *arg;
+    uint32_t remaining; /* CPUs still to finish; the poster waits for 0 */
+} SmpWork;
+
+/* Posts `w` (fn, arg and `remaining` set by the caller; `w` must stay valid until it reaches 0) to
+ * AP `cpuId` and kicks it. One work item per CPU at a time: posting while that CPU still has an
+ * earlier one pending is a panicBug, and so is posting to the calling CPU or an offline one. */
+void smpWorkPost(uint32_t cpuId, SmpWork *w);
+
+/* Waits (IF must be 1) until `w->remaining` reaches 0; panics after 30 s. */
+void smpWorkWait(SmpWork *w);
+
+/* Runs `fn(arg)` once on every online CPU in `cpuMask`: the caller's own inline (thread context),
+ * every other one in its idle loop, and returns when all are done. Not from a handler. */
+void smpWorkRun(uint64_t cpuMask, SmpFn fn, void *arg);
+
+/* Runs the posted work of the calling AP, if any (the idle loop calls it with IF=0; it enables
+ * interrupts around `fn`). Returns true if work ran. */
+bool smpWorkRunPending(void);
+
+/* The stop NMI of the test mode: true (the CPU is marked stopped) when smpStopTestMode() is on and
+ * the NMI is the stop IPI's fallback. Called by the NMI path. */
+bool smpStopNmiHook(void);
+
 /* The handler registered on all four IPI vectors by smpInit() (IrqHandler signature). */
 void smpIpiHandler(uint32_t vector, void *ctx);
 

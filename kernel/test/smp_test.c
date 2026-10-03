@@ -3,6 +3,8 @@
 #include "atomic.h"
 #include "cpu-local.h"
 #include "kernel-boot.h"
+#include "irq.h"
+#include "klog.h"
 #include "kmalloc.h"
 #include "ktest.h"
 #include "pmm.h"
@@ -10,6 +12,7 @@
 #include "smp.h"
 #include "timekeeping.h"
 #include "vmalloc.h"
+#include "vmm.h"
 
 #include <arch/cpu.h>
 #include <arch/trap.h>
@@ -215,4 +218,411 @@ KTEST(irq_handler_may_allocate) {
     }
     KTEST_ASSERT(allocCbDone);
     KTEST_ASSERT_EQ(allocCbOk, 1);
+}
+
+/* --- call-function storm ------------------------------------------------------------------------
+ */
+
+static uint32_t stormCalls;
+
+static void stormCounter(void *arg) {
+    (void)arg;
+    ATOMIC_FETCH_ADD(&stormCalls, 1, MEM_SEQ_CST);
+}
+
+#define STORM_ROUNDS 100u
+
+static void stormFn(void *arg) {
+    (void)arg;
+    for (uint32_t i = 0; i < STORM_ROUNDS; i++) {
+        smpCallFunction(smpOnlineMask(), stormCounter, NULL);
+    }
+}
+
+/* Every CPU calls every CPU at the same time, over and over: A waits for B while B waits for A, and
+ * both keep servicing IPIs because they wait with IF=1 (D-195). Nothing may deadlock and every call
+ * must reach every CPU exactly once. */
+KTEST(smp_call_function_storm) {
+    stormCalls = 0;
+    uint32_t n = smpOnlineCount();
+    smpWorkRun(smpOnlineMask(), stormFn, NULL);
+    KTEST_ASSERT_EQ(stormCalls, n * n * STORM_ROUNDS);
+}
+
+/* --- TLB shootdown stress (ROADMAP M3.5 item 7)
+ * --------------------------------------------------- */
+
+#define STRESS_PHASE_RUN   0u
+#define STRESS_PHASE_PAUSE 1u
+#define PAT_A              0xAAAAAAAAAAAAAAAAULL
+#define PAT_B              0xBBBBBBBBBBBBBBBBULL
+
+typedef struct {
+    uint64_t va;
+    uint32_t phase, stop;
+    uint32_t gen;      /* even: the page maps frame A, odd: frame B */
+    uint32_t pauseSeq; /* which pause the BSP is asking for */
+    uint32_t acks;     /* acknowledgements so far, all readers and pauses */
+    uint32_t reads;    /* verified reads, all readers */
+    uint32_t bad;      /* reads that saw the wrong frame's pattern */
+} Stress;
+
+static Stress stress;
+
+static void stressReader(void *arg) {
+    Stress *s = arg;
+    uint32_t ackedSeq = 0;
+    while (!ATOMIC_LOAD(&s->stop, MEM_ACQUIRE)) {
+        if (ATOMIC_LOAD(&s->phase, MEM_SEQ_CST) == STRESS_PHASE_PAUSE) {
+            uint32_t seq = ATOMIC_LOAD(&s->pauseSeq, MEM_SEQ_CST);
+            if (seq != ackedSeq) { /* stop touching the page, keeping whatever the TLB holds */
+                ackedSeq = seq;
+                ATOMIC_FETCH_ADD(&s->acks, 1, MEM_SEQ_CST);
+            }
+            archPause();
+            continue;
+        }
+        uint32_t g = ATOMIC_LOAD(&s->gen, MEM_ACQUIRE);
+        uint64_t want = (g & 1u) ? PAT_B : PAT_A;
+        volatile const uint64_t *p = (volatile const uint64_t *)(uintptr_t)s->va;
+        if (p[0] != want || p[511] != want) {
+            ATOMIC_FETCH_ADD(&s->bad, 1, MEM_SEQ_CST);
+        }
+        ATOMIC_FETCH_ADD(&s->reads, 1, MEM_SEQ_CST);
+    }
+}
+
+static Page *fillFrame(uint64_t pattern) {
+    Page *pg;
+    if (pmmAllocPages(0, 0, &pg) != STATUS_OK) {
+        return NULL;
+    }
+    uint64_t *w = pmmPageToVirt(pg);
+    for (uint32_t i = 0; i < 512; i++) {
+        w[i] = pattern;
+    }
+    return pg;
+}
+
+/* One CPU flips a kernel mapping between two frames while the others read it. A reader pauses
+ * (without touching the page, TLB entry intact) before each flip; after the flip it must see the
+ * new frame. A shootdown that missed a CPU leaves that CPU reading the old frame. */
+KTEST(smp_tlb_shootdown_stress) {
+    uint32_t readers = smpOnlineCount() - 1;
+    if (readers == 0) {
+        return;
+    }
+    Page *a = fillFrame(PAT_A), *b = fillFrame(PAT_B);
+    KTEST_ASSERT(a != NULL && b != NULL);
+    uint64_t va;
+    KTEST_ASSERT(vmmKvaAlloc(4096, &va) == STATUS_OK);
+    KTEST_ASSERT(vmmMapKernel(va, pmmPageToPhys(a), 4096, VMM_WRITE) == STATUS_OK);
+
+    stress = (Stress){0};
+    stress.va = va;
+    SmpWork w[CPU_MAX];
+    for (uint32_t cpu = 1; cpu <= readers; cpu++) {
+        w[cpu] = (SmpWork){.fn = stressReader, .arg = &stress, .remaining = 1};
+        smpWorkPost(cpu, &w[cpu]);
+    }
+    const uint32_t flips = 400;
+    bool ok = true;
+    for (uint32_t it = 0; it < flips && ok; it++) {
+        /* Let every reader verify at least one read of the current frame first. */
+        uint32_t target = ATOMIC_LOAD(&stress.reads, MEM_SEQ_CST) + readers;
+        uint64_t deadline = timeMonotonicNs() + 5000000000ull;
+        while (ATOMIC_LOAD(&stress.reads, MEM_SEQ_CST) < target && timeMonotonicNs() < deadline) {
+            archPause();
+        }
+        ATOMIC_STORE(&stress.pauseSeq, it + 1, MEM_SEQ_CST);
+        ATOMIC_STORE(&stress.phase, STRESS_PHASE_PAUSE, MEM_SEQ_CST);
+        deadline = timeMonotonicNs() + 5000000000ull;
+        while (ATOMIC_LOAD(&stress.acks, MEM_SEQ_CST) < readers * (it + 1) &&
+               timeMonotonicNs() < deadline) {
+            archPause();
+        }
+        if (ATOMIC_LOAD(&stress.acks, MEM_SEQ_CST) < readers * (it + 1)) {
+            klogWrite(KLOG_ERROR, "smp", "tlb-stress: flip %u: only %u of %u readers paused", it,
+                      (unsigned)stress.acks, readers);
+            ok = false;
+            break;
+        }
+        Status us = vmmUnmapKernel(va, 4096);
+        Page *next = (stress.gen & 1u) ? a : b;
+        Status ms = vmmMapKernel(va, pmmPageToPhys(next), 4096, VMM_WRITE);
+        ok = us == STATUS_OK && ms == STATUS_OK;
+        if (!ok) {
+            klogWrite(KLOG_ERROR, "smp", "tlb-stress: flip %u: unmap %d map %d", it, (int)us,
+                      (int)ms);
+        }
+        ATOMIC_STORE(&stress.gen, stress.gen + 1, MEM_RELEASE);
+        ATOMIC_STORE(&stress.phase, STRESS_PHASE_RUN, MEM_SEQ_CST);
+    }
+    uint32_t target = ATOMIC_LOAD(&stress.reads, MEM_SEQ_CST) + readers;
+    uint64_t deadline = timeMonotonicNs() + 5000000000ull;
+    while (ATOMIC_LOAD(&stress.reads, MEM_SEQ_CST) < target && timeMonotonicNs() < deadline) {
+        archPause();
+    }
+    ATOMIC_STORE(&stress.stop, 1, MEM_RELEASE);
+    for (uint32_t cpu = 1; cpu <= readers; cpu++) {
+        smpWorkWait(&w[cpu]);
+    }
+    klogWrite(KLOG_INFO, "smp", "tlb-stress readers=%u flips=%u reads=%u bad=%u", readers, flips,
+              stress.reads, stress.bad);
+    KTEST_ASSERT(ok);
+    KTEST_ASSERT_EQ(stress.bad, 0);
+    KTEST_ASSERT_EQ(stress.gen, flips);
+    KTEST_ASSERT(vmmUnmapKernel(va, 4096) == STATUS_OK);
+    vmmKvaFree(va, 4096);
+    pmmFreePages(a, 0);
+    pmmFreePages(b, 0);
+}
+
+/* --- concurrent pmm stress (ROADMAP M3.5 item 7) -------------------------------------------------
+ */
+
+#define PMM_STRESS_OPS  6000u
+#define PMM_STRESS_LIVE 48u
+#define PMM_STRESS_XCHG 64u
+
+typedef struct {
+    uint64_t seed;
+    uint32_t bad;
+    uint32_t ops;
+} PmmStressCpu;
+
+static PmmStressCpu pmmStress[CPU_MAX];
+static Page *volatile pmmExchange[PMM_STRESS_XCHG];
+
+static uint32_t rnd(uint64_t *s) {
+    uint64_t x = *s;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *s = x;
+    return (uint32_t)(x >> 11);
+}
+
+typedef struct {
+    Page *page;
+    uint32_t order;
+} Live;
+
+static void stampPage(Page *pg, uint64_t stamp) {
+    *(uint64_t *)pmmPageToVirt(pg) = stamp;
+}
+
+static bool stampOk(Page *pg, uint64_t stamp) {
+    return *(uint64_t *)pmmPageToVirt(pg) == stamp;
+}
+
+static void pmmStressFn(void *arg) {
+    (void)arg;
+    uint32_t cpu = smpThisCpu();
+    PmmStressCpu *st = &pmmStress[cpu];
+    st->seed = 0x9E3779B97F4A7C15ULL * (cpu + 1);
+    Live live[PMM_STRESS_LIVE] = {0};
+    for (uint32_t op = 0; op < PMM_STRESS_OPS; op++) {
+        uint32_t slot = rnd(&st->seed) % PMM_STRESS_LIVE;
+        if (live[slot].page != NULL) {
+            Page *pg = live[slot].page;
+            uint64_t stamp = ((uint64_t)cpu << 48) | op;
+            (void)stamp;
+            /* The stamp left in the page is (cpu, slot, order): check it survived. */
+            if (!stampOk(pg, ((uint64_t)cpu << 48) | ((uint64_t)slot << 8) | live[slot].order)) {
+                st->bad++;
+            }
+            if (live[slot].order == 0 && (rnd(&st->seed) & 3u) == 0) {
+                /* A quarter of the order-0 frees go through another CPU: swap with the exchange
+                 * array and free whatever was there (it belonged to some other CPU, which already
+                 * checked nothing else owns it). */
+                uint32_t x = rnd(&st->seed) % PMM_STRESS_XCHG;
+                Page *other = __atomic_exchange_n(&pmmExchange[x], pg, __ATOMIC_ACQ_REL);
+                if (other != NULL) {
+                    pmmFreePages(other, 0);
+                }
+            } else {
+                pmmFreePages(pg, live[slot].order);
+            }
+            live[slot].page = NULL;
+        } else {
+            uint32_t order = (rnd(&st->seed) & 7u) == 0 ? (rnd(&st->seed) % 4u) : 0u;
+            Page *pg;
+            if (pmmAllocPages(order, 0, &pg) != STATUS_OK) {
+                continue;
+            }
+            stampPage(pg, ((uint64_t)cpu << 48) | ((uint64_t)slot << 8) | order);
+            live[slot].page = pg;
+            live[slot].order = order;
+        }
+        st->ops++;
+    }
+    for (uint32_t i = 0; i < PMM_STRESS_LIVE; i++) {
+        if (live[i].page != NULL) {
+            pmmFreePages(live[i].page, live[i].order);
+        }
+    }
+}
+
+/* Every CPU allocates and frees mixed-order blocks at once, a quarter of the single pages through
+ * other CPUs' caches; afterwards, with every cache drained, the free count is back where it was and
+ * no stamp was overwritten. */
+KTEST(smp_pmm_concurrent_stress) {
+    pmmDrainAllCaches();
+    PmmStats before;
+    pmmGetStats(&before);
+    for (uint32_t i = 0; i < CPU_MAX; i++) {
+        pmmStress[i] = (PmmStressCpu){0};
+    }
+    for (uint32_t i = 0; i < PMM_STRESS_XCHG; i++) {
+        pmmExchange[i] = NULL;
+    }
+    smpWorkRun(smpOnlineMask(), pmmStressFn, NULL);
+    for (uint32_t i = 0; i < PMM_STRESS_XCHG; i++) {
+        if (pmmExchange[i] != NULL) {
+            pmmFreePages(pmmExchange[i], 0);
+            pmmExchange[i] = NULL;
+        }
+    }
+    pmmDrainAllCaches();
+    PmmStats after;
+    pmmGetStats(&after);
+    uint32_t bad = 0, ops = 0;
+    for (uint32_t i = 0; i < smpOnlineCount(); i++) {
+        bad += pmmStress[i].bad;
+        ops += pmmStress[i].ops;
+    }
+    klogWrite(KLOG_INFO, "smp", "pmm-stress cpus=%u ops=%u bad=%u", smpOnlineCount(), ops, bad);
+    KTEST_ASSERT_EQ(bad, 0);
+    KTEST_ASSERT_EQ(after.freePages, before.freePages);
+    KTEST_ASSERT_EQ(after.cachedPages, 0);
+}
+
+/* --- cross-CPU frees and double frees -----------------------------------------------------------
+ */
+
+static void *crossPtr;
+static Page *crossPage;
+
+static void crossFreeFn(void *arg) {
+    (void)arg;
+    kfree(crossPtr);
+    pmmFreePages(crossPage, 0);
+}
+
+static void crossDoubleFreeTrigger(void *arg) {
+    (void)arg;
+    kfree(crossPtr);
+}
+
+static void crossPageDoubleFreeTrigger(void *arg) {
+    (void)arg;
+    pmmFreePages(crossPage, 0);
+}
+
+/* An object or frame freed on another CPU is parked in that CPU's cache; freeing it again here must
+ * still be seen as a double free (D-199: the bufctl/Page state is global, not per cache). */
+KTEST(smp_cross_cpu_double_free_caught) {
+    if (smpOnlineCount() < 2) {
+        return;
+    }
+    crossPtr = kmalloc(48, KMALLOC_ZERO);
+    KTEST_ASSERT(crossPtr != NULL);
+    KTEST_ASSERT(pmmAllocPages(0, 0, &crossPage) == STATUS_OK);
+    SmpWork w = {.fn = crossFreeFn, .arg = NULL, .remaining = 1};
+    smpWorkPost(1, &w);
+    smpWorkWait(&w);
+    TrapCatchInfo info;
+    KTEST_ASSERT(archTrapCatch(TRAP_CATCH_KERNEL_BUG, crossDoubleFreeTrigger, NULL, &info));
+    KTEST_ASSERT(archTrapCatch(TRAP_CATCH_KERNEL_BUG, crossPageDoubleFreeTrigger, NULL, &info));
+}
+
+/* --- AP timers and the monotonic clock -----------------------------------------------------------
+ */
+
+typedef struct {
+    TimerObj timer;
+    volatile uint32_t fired;
+    volatile uint32_t firedOn, firedDepth, armedOn;
+} ApTimer;
+
+static ApTimer apTimers[CPU_MAX];
+
+static void apTimerCb(TimerObj *t, void *ctx) {
+    (void)t;
+    ApTimer *a = ctx;
+    a->firedOn = smpThisCpu();
+    a->firedDepth = irqDepth();
+    a->fired = 1;
+}
+
+static void apTimerFn(void *arg) {
+    (void)arg;
+    ApTimer *a = &apTimers[smpThisCpu()];
+    a->fired = 0;
+    a->armedOn = smpThisCpu();
+    timerInit(&a->timer, apTimerCb, a);
+    if (timerArm(&a->timer, timeMonotonicNs() + 10000000ull) != STATUS_OK) {
+        return;
+    }
+    uint64_t deadline = timeMonotonicNs() + 2000000000ull;
+    while (!a->fired && timeMonotonicNs() < deadline) {
+        archPause();
+    }
+    if (!a->fired) {
+        (void)timerCancel(&a->timer);
+    }
+}
+
+/* Every CPU's own LAPIC timer works: a timer armed on a CPU fires there, in IRQ context. */
+KTEST(smp_ap_timer_fires_locally) {
+    for (uint32_t i = 0; i < CPU_MAX; i++) {
+        apTimers[i] = (ApTimer){0};
+    }
+    smpWorkRun(smpOnlineMask(), apTimerFn, NULL);
+    for (uint32_t i = 0; i < smpOnlineCount(); i++) {
+        KTEST_ASSERT_EQ(apTimers[i].fired, 1);
+        KTEST_ASSERT_EQ(apTimers[i].firedOn, i);
+        KTEST_ASSERT_EQ(apTimers[i].firedDepth, 1);
+    }
+}
+
+typedef struct {
+    uint64_t last;
+    uint32_t turn;
+    uint32_t bad;
+    uint32_t rounds;
+} TscChain;
+
+static TscChain tscChain;
+
+static void tscChainFn(void *arg) {
+    TscChain *c = arg;
+    uint32_t me = smpThisCpu(), n = smpOnlineCount();
+    for (;;) {
+        uint32_t turn = ATOMIC_LOAD(&c->turn, MEM_ACQUIRE);
+        if (turn >= c->rounds * n) {
+            return;
+        }
+        if (turn % n != me) {
+            archPause();
+            continue;
+        }
+        uint64_t now = timeMonotonicNs();
+        if (now < c->last) {
+            ATOMIC_FETCH_ADD(&c->bad, 1, MEM_SEQ_CST);
+        }
+        c->last = now;
+        ATOMIC_STORE(&c->turn, turn + 1, MEM_RELEASE);
+    }
+}
+
+/* timeMonotonicNs() never goes backwards across CPUs: the CPUs take turns reading it, each read
+ * ordered after the previous one by the handoff, and every reading must be >= the last. */
+KTEST(smp_tsc_monotonic) {
+    tscChain = (TscChain){0};
+    tscChain.rounds = 2000;
+    smpWorkRun(smpOnlineMask(), tscChainFn, &tscChain);
+    KTEST_ASSERT_EQ(tscChain.bad, 0);
+    KTEST_ASSERT_EQ(tscChain.turn, tscChain.rounds * smpOnlineCount());
 }

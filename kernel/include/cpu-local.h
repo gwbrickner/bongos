@@ -21,6 +21,7 @@
  * 0 and runs every flagged slot. A sender has at most one outstanding request (it waits for the
  * completion), so one slot per sender is enough and nothing is allocated. */
 struct SmpReq;
+struct SmpWork;
 typedef struct SmpMailbox {
     uint64_t pending;
     struct SmpReq *slot[CPU_MAX];
@@ -43,6 +44,7 @@ typedef struct CpuLocal {
     void *slab;
     void *timer;
     SmpMailbox mbox;
+    struct SmpWork *work; /* work posted to this (idle) CPU by smpWorkPost(), D-202 */
     ArchCpuLocal arch;
 } CpuLocal;
 _Static_assert(offsetof(CpuLocal, self) == 0, "CpuLocal.self must be at offset 0");
