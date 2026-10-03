@@ -6,7 +6,7 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-02 (M3.3 merged; M3.4 finished, no PR yet)
 
 ## Next step
-**M3.4 Locking + lock validator is finished** (log `docs/logs/M3.4.md`; two finish sweeps `SWEEP: PASS`, reviewer
+**M3.4 Locking + lock validator is finished** (log `docs/logs/M3.4.md`; two finish sweeps `SWEEP: PASS` (a third confirmation round is being re-run), reviewer
 `VERDICT: PASS`) on the session branch `claude/resume-bongos-dev-prrfwz`; **no PR has been opened** (the session was
 told not to), `needs-owner`. Next: owner opens/merges the PR and answers the M3.4 questions below, then start **M3.5 SMP
 bring-up** (Needs M3.3 and M3.4 are done).
@@ -43,35 +43,8 @@ _(none)_
 
 ## Questions for owner
 - **M3.4:** (1) D-183: a profile-dependent `Spinlock` size (8 bytes release, 32 debug), so `.kmod`s must be built with the kernel's profile: OK? (2) D-186: about 110 KiB of debug-only `.bss` for the validator tables: OK? (3) D-188 (supersedes D-081/D-088/D-094 text): keep D-173's ban on allocating in IRQ handlers until M3.5 fixes D-085(1) and the slab's two-section free? (4) Same-class nesting is reported as recursion until a real user needs a `spinLockNested`: OK? (5) The D-187 balance checks in `irqDispatch`/`archTrapCatch` panic, and the harness has no expected-panic mode, so they have no permanent test (each was shown to fire with a temporary ktest): add an expected-panic harness row later?
-- **M3.3:** (1) The wall-clock ktest cannot take host time on the cmdline (it is fixed in the image before the firmware
-  runs): accept D-181 (the harness timestamps the kernel's `time: wall-check` serial line, <= 2 s) and update the
-  ROADMAP wording? (2) Panic on bare metal when the TSC is not invariant (ARCH 1.3 says required), warn only under a
-  hypervisor? (3) Is the reference PC's RTC kept in UTC (no Windows dual-boot)? (4) With no PM timer and no HPET,
-  boot panics until PIT/CPUID-0x15 fallbacks exist: OK? (5) The 100 ms one-shot ktest retries up to 3 times (D-182): OK?
-- **M3.2:** (1) LINT1 is programmed NMI/unmasked per the MADT (an NMI still panics, D-074): OK, or keep it masked
-  until a watchdog milestone? (2) LVT Error stays masked (no handler): OK? (3) An unregistered vector is logged once,
-  counted and EOI'd in every build, never a panic: OK? (4) `irqUnrouteGsi` of a level pin stalls (sweep lead S4):
-  fix at the first level-pin user? (5) CI may run KVM, so the x2APIC path may run there first: check its log for
-  `lapic: mode=x2apic`.
-- **M3.1:** (1) Checksum strictness: reject a bad-checksum table (D-167, as designed) or warn and use it
-  like Linux? (2) OK to commit QEMU's table blobs (incl. its DSDT AML) under `tests/data/acpi/`? (3) OK to keep
-  `acpidump=1` in `tests/harness/ktest-boot.cfg` (30-60 KiB extra serial per matrix row)? (4) Reclaiming
-  ACPI_RECLAIM for good means Phase-2 AML serves `DataTableRegion`, and SSDTs it `Load`s/`LoadTable`s, from the
-  kernel copies (anything in ACPI_RECLAIM is gone); accepted?
-- `BootInfo.bootDiskGuid` and `bootPartGuid` (D-056) have no milestone that fills them yet,
-  so both stay zero. Suggestion: use the UEFI PartitionInfo protocol plus a BlockIo
-  GPT-header read (the BIOS loader already has a GPT reader, D-105), in M6.4 (which adds the
-  kernel's own GPT scanner, per D-056).
-- **M2.6:** accept 8 bits of KASLR entropy (512 MiB window, D-121)? Keep the canary on D-077's seed
-  fold, or move it to `randomGetBytes` later (the serial-printed slide leaks ~8 bits of that seed)?
-  Is falling back to an unslid boot on a relocation failure (D-120) acceptable, versus refusing?
-- **M2.6 slide in logs:** the kernel prints its KASLR slide (the `kaslr: virtBase=` line and every
-  backtrace header). Once a user-readable kernel log exists (logd/dmesg) that defeats KASLR against
-  local users, so that milestone must make the log privileged or redact the slide. Agree?
-- **M2.6 vector provenance (needs network):** `libs/crypto/test/crypto-vectors.h` could not be diffed
-  against the RFC text (rfc-editor.org was denied by the proxy). Every field was cross-checked against
-  independent transcriptions, but someone with network access should still diff it against RFC 8439
-  2.3.2/2.4.2/A.1/A.2 and FIPS 180-4.
+- `BootInfo.bootDiskGuid`/`bootPartGuid` (D-056) stay zero until M6.4 (UEFI PartitionInfo + GPT read); see `docs/logs/M2.6.md`.
+- **Older milestone questions** (M2.6, M3.1, M3.2, M3.3) are still open; the full text moved to the "Owner questions" section of `docs/logs/M2.6.md`, `M3.1.md`, `M3.2.md` and `M3.3.md`.
 
 ## Waiting on owner (hardware checks and other owner-only steps)
 Optional hardware checks never block a merge; the full steps are in each milestone log ("Owner hardware check").
