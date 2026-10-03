@@ -7,7 +7,7 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 
 ## Next step
 **M3.5 SMP bring-up is in progress** (log `docs/logs/M3.5.md`) on the session branch `claude/optimistic-hawking-qw4tzr`.
-M3.4 merged (PR #22). Next: architect consult for the SMP design, then plan step 1 (`CpuLocal` through GS base).
+M3.4 merged (PR #22). Architect design is in the M3.5 log (plan of record). Next: implement sub-step 1 (`CpuLocal` on the BSP through GS base, `entry.asm`).
 
 ## Current milestone
 M3.5 SMP bring-up (`needs-owner`).
@@ -40,6 +40,7 @@ boot screens are in `docs/screenshots/`.
 _(none)_
 
 ## Questions for owner
+- **M3.5 (defaults taken, see `docs/logs/M3.5.md`):** CPU_MAX=64; D-200 lifts the IRQ-handler allocation ban for pmm/slab/kmalloc; per-CPU caches under global locks; bare-metal TSC warp = warn + offset; no USABLE low page = boot 1 CPU with a warning; ktest-only stop-IPI release hook; device IRQs stay on the BSP.
 - **M3.4:** (1) D-183: a profile-dependent `Spinlock` size (8 bytes release, 32 debug), so `.kmod`s must be built with the kernel's profile: OK? (2) D-186: about 110 KiB of debug-only `.bss` for the validator tables: OK? (3) D-188 (supersedes D-081/D-088/D-094 text): keep D-173's ban on allocating in IRQ handlers until M3.5 fixes D-085(1) and the slab's two-section free? (4) Same-class nesting is reported as recursion until a real user needs a `spinLockNested`: OK? (5) The D-187 balance checks in `irqDispatch`/`archTrapCatch` panic, and the harness has no expected-panic mode, so they have no permanent test (each was shown to fire with a temporary ktest): add an expected-panic harness row later?
 - `BootInfo.bootDiskGuid`/`bootPartGuid` (D-056) stay zero until M6.4 (UEFI PartitionInfo + GPT read); see `docs/logs/M2.6.md`.
 - **Older milestone questions** (M2.6, M3.1, M3.2, M3.3) are still open; the full text moved to the "Owner questions" section of `docs/logs/M2.6.md`, `M3.1.md`, `M3.2.md` and `M3.3.md`.
