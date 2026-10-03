@@ -169,6 +169,23 @@ KTEST(smp_tlb_shootdown_batched) {
 /* The stop IPI marks every other CPU stopped (here in test mode: they keep running afterwards). */
 KTEST(smp_stop_parks_cpus) {
     smpStopTestMode(true);
+    /* The IPI alone, with no NMI fallback behind it: smpStopOthers() below would NMI a CPU the IPI
+     * failed to stop, and that fallback would hide a broken stop-IPI handler (found by the M3.5
+     * bug sweep's mutation check). */
+    for (uint32_t cpu = 1; cpu < smpOnlineCount(); cpu++) {
+        archSmpSendIpi(cpu, SMP_VECTOR_STOP);
+        uint64_t deadline = timeMonotonicNs() + 2000000000ull;
+        while (!smpCpuStopped(cpu) && timeMonotonicNs() < deadline) {
+            archPause();
+        }
+        bool stoppedByIpi = smpCpuStopped(cpu);
+        if (!stoppedByIpi) {
+            smpStopTestMode(false);
+        }
+        KTEST_ASSERT(stoppedByIpi);
+    }
+    smpStopTestMode(false); /* clears every `stopped` flag */
+    smpStopTestMode(true);
     smpStopOthers();
     for (uint32_t cpu = 1; cpu < smpOnlineCount(); cpu++) {
         KTEST_ASSERT(smpCpuStopped(cpu));
