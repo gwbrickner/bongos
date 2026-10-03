@@ -1,0 +1,312 @@
+outline fallback 0 8 2
+ends 3 7
+pts 100.0 0.0 1 900.0 0.0 1 900.0 700.0 1 100.0 700.0 1 180.0 80.0 1 180.0 620.0 1 820.0 620.0 1 820.0 80.0 1
+outline fallback 1 4 1
+ends 3
+pts 0.0 0.0 1 1000.0 0.0 1 1000.0 40.0 1 0.0 40.0 1
+outline fallback 2 4 1
+ends 3
+pts 0.0 50.0 1 1000.0 50.0 1 1000.0 90.0 1 0.0 90.0 1
+outline fallback 3 4 1
+ends 3
+pts 0.0 100.0 1 1000.0 100.0 1 1000.0 140.0 1 0.0 140.0 1
+outline fallback 4 4 1
+ends 3
+pts 0.0 150.0 1 1000.0 150.0 1 1000.0 190.0 1 0.0 190.0 1
+outline fallback 5 4 1
+ends 3
+pts 0.0 200.0 1 1000.0 200.0 1 1000.0 240.0 1 0.0 240.0 1
+outline fallback 6 4 1
+ends 3
+pts 0.0 250.0 1 1000.0 250.0 1 1000.0 290.0 1 0.0 290.0 1
+outline fallback 7 4 1
+ends 3
+pts 0.0 300.0 1 1000.0 300.0 1 1000.0 340.0 1 0.0 340.0 1
+outline fallback 8 4 1
+ends 3
+pts 0.0 350.0 1 1000.0 350.0 1 1000.0 390.0 1 0.0 390.0 1
+outline fallback 9 4 1
+ends 3
+pts 0.0 400.0 1 1000.0 400.0 1 1000.0 440.0 1 0.0 440.0 1
+outline fallback 10 4 1
+ends 3
+pts 0.0 450.0 1 1000.0 450.0 1 1000.0 490.0 1 0.0 490.0 1
+outline fallback 11 4 1
+ends 3
+pts 0.0 500.0 1 1000.0 500.0 1 1000.0 540.0 1 0.0 540.0 1
+outline fallback 12 4 1
+ends 3
+pts 0.0 550.0 1 1000.0 550.0 1 1000.0 590.0 1 0.0 590.0 1
+outline fallback 13 4 1
+ends 3
+pts 0.0 600.0 1 1000.0 600.0 1 1000.0 640.0 1 0.0 640.0 1
+outline fallback 14 4 1
+ends 3
+pts 0.0 650.0 1 1000.0 650.0 1 1000.0 690.0 1 0.0 690.0 1
+outline fallback 15 4 1
+ends 3
+pts 0.0 700.0 1 1000.0 700.0 1 1000.0 740.0 1 0.0 740.0 1
+outline fallback 16 4 1
+ends 3
+pts 0.0 750.0 1 1000.0 750.0 1 1000.0 790.0 1 0.0 790.0 1
+outline fallback 17 4 1
+ends 3
+pts 800.0 650.0 0 200.0 650.0 0 200.0 50.0 0 800.0 50.0 0
+outline fallback 18 4 1
+ends 3
+pts 900.0 900.0 0 100.0 900.0 0 100.0 100.0 0 900.0 100.0 0
+outline fallback 19 4 1
+ends 3
+pts 575.0 575.0 0 175.0 575.0 0 175.0 175.0 0 575.0 175.0 0
+outline fallback 20 4 1
+ends 3
+pts -565.0 555.0 0 -565.0 155.0 0 -165.0 155.0 0 -165.0 555.0 0
+outline fallback 21 4 1
+ends 3
+pts 775.0 0.0 0 175.0 0.0 0 175.0 800.0 0 775.0 800.0 0
+kernpair fallback 1 2 -100
+metrics fallback 1000 700 -300 100 22 19
+kernpair gpos 1 2 -110
+kernpair gpos 3 4 -180
+kernpair gpos 3 6 -60
+kernpair gpos 5 6 -40
+kernpair gpos 7 4 -50
+kernpair gpos 1 4 0
+metrics gpos 1000 800 -200 0 8 8
+metrics grid 1000 800 -200 0 119 119
+cmap grid 32 1
+adv grid 1 500
+cmap grid 33 2
+adv grid 2 500
+cmap grid 34 3
+adv grid 3 500
+cmap grid 35 4
+adv grid 4 500
+cmap grid 36 5
+adv grid 5 500
+cmap grid 37 6
+adv grid 6 500
+cmap grid 38 7
+adv grid 7 500
+cmap grid 39 8
+adv grid 8 500
+cmap grid 40 9
+adv grid 9 500
+cmap grid 41 10
+adv grid 10 500
+cmap grid 42 11
+adv grid 11 500
+cmap grid 43 12
+adv grid 12 500
+cmap grid 44 13
+adv grid 13 500
+cmap grid 45 14
+adv grid 14 500
+cmap grid 46 15
+adv grid 15 500
+cmap grid 47 16
+adv grid 16 500
+cmap grid 48 17
+adv grid 17 500
+cmap grid 49 18
+adv grid 18 500
+cmap grid 50 19
+adv grid 19 500
+cmap grid 51 20
+adv grid 20 500
+cmap grid 52 21
+adv grid 21 500
+cmap grid 53 22
+adv grid 22 500
+cmap grid 54 23
+adv grid 23 500
+cmap grid 55 24
+adv grid 24 500
+cmap grid 56 25
+adv grid 25 500
+cmap grid 57 26
+adv grid 26 500
+cmap grid 58 27
+adv grid 27 500
+cmap grid 59 28
+adv grid 28 500
+cmap grid 60 29
+adv grid 29 500
+cmap grid 61 30
+adv grid 30 500
+cmap grid 62 31
+adv grid 31 500
+cmap grid 63 32
+adv grid 32 500
+cmap grid 64 33
+adv grid 33 500
+cmap grid 65 34
+adv grid 34 500
+cmap grid 66 35
+adv grid 35 500
+cmap grid 67 36
+adv grid 36 500
+cmap grid 68 37
+adv grid 37 500
+cmap grid 69 38
+adv grid 38 500
+cmap grid 70 39
+adv grid 39 500
+cmap grid 71 40
+adv grid 40 500
+cmap grid 72 41
+adv grid 41 500
+cmap grid 73 42
+adv grid 42 500
+cmap grid 74 43
+adv grid 43 500
+cmap grid 75 44
+adv grid 44 500
+cmap grid 76 45
+adv grid 45 500
+cmap grid 77 46
+adv grid 46 500
+cmap grid 78 47
+adv grid 47 500
+cmap grid 79 48
+adv grid 48 500
+cmap grid 80 49
+adv grid 49 500
+cmap grid 81 50
+adv grid 50 500
+cmap grid 82 51
+adv grid 51 500
+cmap grid 83 52
+adv grid 52 500
+cmap grid 84 53
+adv grid 53 500
+cmap grid 85 54
+adv grid 54 500
+cmap grid 86 55
+adv grid 55 500
+cmap grid 87 56
+adv grid 56 500
+cmap grid 88 57
+adv grid 57 500
+cmap grid 89 58
+adv grid 58 500
+cmap grid 90 59
+adv grid 59 500
+cmap grid 91 60
+adv grid 60 500
+cmap grid 92 61
+adv grid 61 500
+cmap grid 93 62
+adv grid 62 500
+cmap grid 94 63
+adv grid 63 500
+cmap grid 95 64
+adv grid 64 500
+cmap grid 96 65
+adv grid 65 500
+cmap grid 97 66
+adv grid 66 500
+cmap grid 98 67
+adv grid 67 500
+cmap grid 99 68
+adv grid 68 500
+cmap grid 100 69
+adv grid 69 500
+cmap grid 101 70
+adv grid 70 500
+cmap grid 102 71
+adv grid 71 500
+cmap grid 103 72
+adv grid 72 500
+cmap grid 104 73
+adv grid 73 500
+cmap grid 105 74
+adv grid 74 500
+cmap grid 106 75
+adv grid 75 500
+cmap grid 107 76
+adv grid 76 500
+cmap grid 108 77
+adv grid 77 500
+cmap grid 109 78
+adv grid 78 500
+cmap grid 110 79
+adv grid 79 500
+cmap grid 111 80
+adv grid 80 500
+cmap grid 112 81
+adv grid 81 500
+cmap grid 113 82
+adv grid 82 500
+cmap grid 114 83
+adv grid 83 500
+cmap grid 115 84
+adv grid 84 500
+cmap grid 116 85
+adv grid 85 500
+cmap grid 117 86
+adv grid 86 500
+cmap grid 118 87
+adv grid 87 500
+cmap grid 119 88
+adv grid 88 500
+cmap grid 120 89
+adv grid 89 500
+cmap grid 121 90
+adv grid 90 500
+cmap grid 122 91
+adv grid 91 500
+cmap grid 123 92
+adv grid 92 500
+cmap grid 124 93
+adv grid 93 500
+cmap grid 125 94
+adv grid 94 500
+cmap grid 126 95
+adv grid 95 500
+cmap grid 160 96
+adv grid 96 500
+cmap grid 8208 97
+adv grid 97 500
+cmap grid 8212 98
+adv grid 98 500
+cmap grid 12289 99
+adv grid 99 500
+cmap grid 12290 100
+adv grid 100 500
+cmap grid 19968 101
+adv grid 101 1000
+cmap grid 19969 102
+adv grid 102 1000
+cmap grid 19970 103
+adv grid 103 1000
+cmap grid 19971 104
+adv grid 104 1000
+cmap grid 19972 105
+adv grid 105 1000
+cmap grid 19973 106
+adv grid 106 1000
+cmap grid 19974 107
+adv grid 107 1000
+cmap grid 19975 108
+adv grid 108 1000
+cmap grid 19976 109
+adv grid 109 1000
+cmap grid 19977 110
+adv grid 110 1000
+cmap grid 19978 111
+adv grid 111 1000
+cmap grid 19979 112
+adv grid 112 1000
+cmap grid 19980 113
+adv grid 113 1000
+cmap grid 19981 114
+adv grid 114 1000
+cmap grid 19982 115
+adv grid 115 1000
+cmap grid 19983 116
+adv grid 116 1000
+cmap grid 65288 117
+adv grid 117 500
+cmap grid 65289 118
+adv grid 118 500
