@@ -132,6 +132,7 @@ static struct {
     TrapCatchCtx ctx;
     uint64_t mask;
     bool armed;
+    uint32_t cpu; /* the CPU that armed it: only its own faults/bugs count as caught (D-190) */
     TrapCatchInfo info;
 } trapCatch;
 
@@ -171,6 +172,7 @@ bool archTrapCatch(uint64_t mask, void (*fn)(void *), void *arg, TrapCatchInfo *
     }
 
     trapCatch.mask = mask;
+    trapCatch.cpu = smpThisCpu();
     trapCatch.armed = true;
     bool ifBefore = archInterruptsEnabled();
     uint32_t preemptBefore = preemptCount();
@@ -203,7 +205,8 @@ bool archTrapCatch(uint64_t mask, void (*fn)(void *), void *arg, TrapCatchInfo *
  * relying on never having UB in the first place. */
 __attribute__((no_sanitize("undefined"))) bool archTrapCatchSoftware(uint64_t kind, uint64_t pc) {
     /* Never from inside an interrupt handler: the longjmp would skip the EOI (D-173). */
-    if (!trapCatch.armed || (trapCatch.mask & kind) == 0 || irqDepth() != 0) {
+    if (!trapCatch.armed || (trapCatch.mask & kind) == 0 || irqDepth() != 0 ||
+        trapCatch.cpu != smpThisCpu()) {
         return false;
     }
     trapCatch.armed = false;
@@ -304,7 +307,7 @@ static _Noreturn void trapReportAndPanic(const TrapFrame *f, uint64_t cr2) {
  * stack; IST1-3 are reserved for #DF/NMI/#MC, both forbidden vectors archTrapCatch can never arm
  * for, so a legitimate catch's `f->rsp` is always on the boot stack too). */
 static bool archTrapCatchTryResume(TrapFrame *f, uint64_t cr2) {
-    if (!trapCatch.armed || (f->cs & 3) != 0 || f->vector >= 32) {
+    if (!trapCatch.armed || trapCatch.cpu != smpThisCpu() || (f->cs & 3) != 0 || f->vector >= 32) {
         return false;
     }
     if (irqDepth() != 0) {

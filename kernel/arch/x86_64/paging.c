@@ -11,6 +11,7 @@
 
 #include "bootinfo.h"
 #include "klog.h"
+#include "smp.h"
 #include "panic.h"
 #include "pmm.h"
 #include "sections.h"
@@ -672,10 +673,9 @@ void archPagingVerifyWx(void) {
               (unsigned long long)leafCount, (unsigned long long)execLeafCount);
 }
 
-/* Zeroes the 4 KiB leaf PTE at `va` -- does *not* invalidate anything; every caller batches its
- * own archTlbInvalidateKernelRange() call after clearing every leaf in its range (D-090/M3.5:
- * that's the one function a real IPI shootdown replaces, so nothing else may invalidate on its
- * own or a shootdown-based caller would still race a stale local TLB entry after this returns). */
+/* Zeroes the 4 KiB leaf PTE at `va` -- does *not* invalidate anything: the TLB shootdown is the
+ * caller's job, after it has dropped the vmm lock (D-196: an IPI-and-wait under an irqsave lock
+ * deadlocks against a CPU spinning on that lock with IRQs off). */
 static void clearLeaf(uint64_t va) {
     uint64_t *pte = findLeafPte(va);
     *pte = 0;
@@ -801,10 +801,7 @@ Status archMapPages(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags) {
         for (uint64_t off = 0; off < mapped; off += X86_PTE_SIZE_4K) {
             clearLeaf(va + off);
         }
-        if (mapped > 0) {
-            archTlbInvalidateKernelRange(va, mapped);
-        }
-        return st;
+        return st; /* the caller shoots the (never-used) range down after unlocking */
     }
     return STATUS_OK;
 }
@@ -825,7 +822,6 @@ Status archUnmapPages(uint64_t va, uint64_t size) {
     for (uint64_t off = 0; off < size; off += X86_PTE_SIZE_4K) {
         clearLeaf(va + off);
     }
-    archTlbInvalidateKernelRange(va, size);
     return STATUS_OK;
 }
 
@@ -862,10 +858,41 @@ Status archLookupKernel(uint64_t va, uint64_t *outPa, VmmFlags *outFlags) {
     return STATUS_OK;
 }
 
-void archTlbInvalidateKernelRange(uint64_t va, uint64_t size) {
+#define TLB_INVLPG_MAX_PAGES 32u
+
+void archTlbFlushLocal(uint64_t va, uint64_t size) {
+    if (size > (uint64_t)TLB_INVLPG_MAX_PAGES * X86_PTE_SIZE_4K) {
+        /* A CR4.PGE toggle flushes everything including the global entries the kernel mappings
+         * are; `mov cr3` would leave them (SDM Vol 3A §4.10.4.1). */
+        uint64_t cr4 = archReadCr4();
+        archWriteCr4(cr4 & ~X86_CR4_PGE_BIT);
+        archWriteCr4(cr4);
+        return;
+    }
     for (uint64_t off = 0; off < size; off += X86_PTE_SIZE_4K) {
         archInvlpg(va + off);
     }
+}
+
+typedef struct {
+    uint64_t va, size;
+} TlbRequest;
+
+static void tlbShootdownRemote(void *arg) {
+    const TlbRequest *r = arg;
+    archTlbFlushLocal(r->va, r->size);
+}
+
+void archTlbShootdownKernel(uint64_t va, uint64_t size) {
+    uint64_t f = archIrqSave();
+    archTlbFlushLocal(va, size);
+    archIrqRestore(f);
+    uint64_t others = smpOnlineMask() & ~((uint64_t)1 << smpThisCpu());
+    if (others == 0) {
+        return;
+    }
+    TlbRequest r = {.va = va, .size = size};
+    smpCallFunctionVec(others, tlbShootdownRemote, &r, SMP_VECTOR_TLB);
 }
 
 uint64_t archPagingRawPte(uint64_t va) {

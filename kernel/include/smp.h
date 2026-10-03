@@ -43,6 +43,14 @@ bool smpPickTrampolinePage(const BootMemRegion *map, uint32_t count, uint64_t *o
 
 /* --- smp.c / arch ---------------------------------------------------------------------------- */
 
+/* The IPI vectors (ARCHITECTURE §7.2). */
+#define SMP_VECTOR_TLB  0xF0u /* TLB shootdown */
+#define SMP_VECTOR_KICK 0xF1u /* reschedule / wake an idle CPU: an empty handler */
+#define SMP_VECTOR_CALL 0xF2u /* call-function */
+#define SMP_VECTOR_STOP 0xF3u /* stop / panic */
+
+typedef void (*SmpFn)(void *arg);
+
 /* Brings up every AP the MADT lists and `cpus=` allows (INIT-SIPI-SIPI, a trampoline page below
  * 1 MiB, then each AP's own init and idle loop). A failure is logged and boot continues with the
  * CPUs that came up; with no usable trampoline page or no MADT the system stays on the BSP.
@@ -52,6 +60,51 @@ void smpInit(void);
 /* Number of online CPUs (the BSP included) and the mask of their dense ids. No locks; IRQ-safe. */
 uint32_t smpOnlineCount(void);
 uint64_t smpOnlineMask(void);
+
+/* Runs `fn(arg)` on every online CPU in `cpuMask` (bit = dense id; offline bits are ignored),
+ * including the caller's own if its bit is set, and returns once every one has finished (D-195).
+ * `fn` runs in IRQ context on the target (IF=0, irqDepth()==1): it must follow the handler rules --
+ * no sleeping, no vmalloc/vmm map/unmap, no smpCallFunction() of its own -- and may use the pmm and
+ * kmalloc (D-200). The caller's own copy runs inline with IRQs disabled. With only the caller
+ * online it runs locally and there are no context restrictions; otherwise (some other CPU in the
+ * mask) the caller must have IF=1, irqDepth()==0 and hold no irqsave lock, or this panics
+ * (panicBug) rather than risking the A-waits-for-B/B-waits-for-A deadlock. IF stays 1 while it
+ * waits, so two CPUs calling each other at once both make progress. A CPU that does not answer in
+ * 10 s panics. Not IRQ-safe (waits); may not sleep (nothing sleeps yet). */
+void smpCallFunction(uint64_t cpuMask, SmpFn fn, void *arg);
+
+/* smpCallFunction() delivered on `vector` (SMP_VECTOR_TLB or SMP_VECTOR_CALL), so the TLB shootdown
+ * and the call-function users are told apart in the per-CPU counters. */
+void smpCallFunctionVec(uint64_t cpuMask, SmpFn fn, void *arg, uint32_t vector);
+
+/* Sends the kick IPI to CPU `cpuId` (a no-op handler: it just wakes the CPU from `hlt`). IRQ-safe.
+ */
+void smpKick(uint32_t cpuId);
+
+/* Panic path (D-197): stops every other CPU (0xF3, then an NMI for those that did not answer in
+ * 100 ms) and returns. Takes no locks, never allocates, uses no klog. Safe with IF=0 and from any
+ * context; a no-op with one CPU online. */
+void smpStopOthers(void);
+
+/* Parks the calling CPU forever, silently (IF=0, `hlt`): what a CPU that lost the race to panic
+ * does. Never returns; no locks. */
+_Noreturn void smpParkSelf(void);
+
+/* True if CPU `cpuId` has been stopped by smpStopOthers(). No locks; IRQ-safe. */
+bool smpCpuStopped(uint32_t cpuId);
+
+/* ktest-only (D-197): while set, the stop IPI marks the CPU stopped and returns instead of parking
+ * it, so the stop path can be tested without ending the run; clearing it also clears every
+ * `stopped` flag. Panics outside a ktest. */
+void smpStopTestMode(bool on);
+
+/* The handler registered on all four IPI vectors by smpInit() (IrqHandler signature). */
+void smpIpiHandler(uint32_t vector, void *ctx);
+
+/* The arch hooks (smp-x86.c): send vector `vector` (fixed, edge) or an NMI to CPU `cpuId`.
+ * IRQ-safe; `cpuId` must be an online CPU. */
+void archSmpSendIpi(uint32_t cpuId, uint32_t vector);
+void archSmpSendNmi(uint32_t cpuId);
 
 /* Adds dense id `cpuId` to the online mask (seq-cst). Called by a CPU after it published its
  * cpuTable entry; nothing removes a CPU. IRQ-safe. */

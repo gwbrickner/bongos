@@ -6,6 +6,7 @@
 #include "atomic.h"
 #include "klog.h"
 #include "ktest.h"
+#include "smp.h"
 
 #include <arch/cpu.h>
 #include <arch/qemu.h>
@@ -15,10 +16,23 @@
 #include <stdint.h>
 
 static bool panicking = false;
+static uint32_t panicCpu = UINT32_MAX; /* the CPU that won the race to panic */
 
+/* D-197: the first CPU to get here owns the panic: it stops every other CPU (so their output cannot
+ * interleave with the report) and prints. A CPU that loses the race to a panic on another CPU
+ * parks silently; only a CPU that panics again while already panicking reports the nesting. */
 bool panicEnter(void) {
     archDisableInterrupts();
-    return !ATOMIC_XCHG(&panicking, true, MEM_SEQ_CST); /* atomic: two CPUs must not both enter */
+    uint32_t me = smpThisCpu();
+    if (ATOMIC_XCHG(&panicking, true, MEM_SEQ_CST)) { /* atomic: two CPUs must not both enter */
+        if (ATOMIC_LOAD(&panicCpu, MEM_ACQUIRE) != me) {
+            smpParkSelf();
+        }
+        return false;
+    }
+    ATOMIC_STORE(&panicCpu, me, MEM_RELEASE);
+    smpStopOthers();
+    return true;
 }
 
 bool panicInProgress(void) {

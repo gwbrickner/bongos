@@ -11,6 +11,7 @@
 #include "atomic.h"
 #include "cmdline.h"
 #include "cpu-local.h"
+#include "irq.h"
 #include "kernel-boot.h"
 #include "klog.h"
 #include "kmalloc.h"
@@ -42,8 +43,10 @@ extern void *memset(void *dst, int value, size_t n);
 #define MSR_MTRR_FIX16K 0x258u
 #define MSR_MTRR_FIX4K0 0x268u
 
-#define ICR_INIT 0x4500u /* INIT, assert, edge-ignored: the SDM's MP initialization sequence */
-#define ICR_SIPI 0x4600u /* | startup page number (the trampoline's physical page >> 12) */
+#define ICR_INIT  0x4500u /* INIT, assert, edge-ignored: the SDM's MP initialization sequence */
+#define ICR_FIXED 0x4000u /* fixed delivery, assert */
+#define ICR_NMI   0x4400u
+#define ICR_SIPI  0x4600u /* | startup page number (the trampoline's physical page >> 12) */
 
 #define AP_STACK_SIZE        0x4000u
 #define AP_ONLINE_TIMEOUT_NS 2000000000ull /* D-193 */
@@ -256,6 +259,21 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
     smpIdleLoop();
 }
 
+void archSmpSendIpi(uint32_t cpuId, uint32_t vector) {
+    CpuLocal *cl = cpuLocalOf(cpuId);
+    if (cl == NULL) {
+        panicBug("archSmpSendIpi: cpu %u is not online", cpuId);
+    }
+    lapicSendIpi(cl->apicId, ICR_FIXED | vector);
+}
+
+void archSmpSendNmi(uint32_t cpuId) {
+    CpuLocal *cl = cpuLocalOf(cpuId);
+    if (cl != NULL) {
+        lapicSendIpi(cl->apicId, ICR_NMI);
+    }
+}
+
 /* --- the BSP side ------------------------------------------------------------------------------
  */
 
@@ -412,6 +430,12 @@ static bool bootAp(CpuLocal *cl) {
 }
 
 void smpInit(void) {
+    for (uint32_t v = SMP_VECTOR_TLB; v <= SMP_VECTOR_STOP; v++) {
+        Status st = irqRegister(v, smpIpiHandler, NULL);
+        if (st != STATUS_OK) {
+            panic("smp: cannot register IPI vector 0x%x (status %d)", (unsigned)v, (int)st);
+        }
+    }
     cpuLocalBsp.apicId = lapicId();
     cpuLocalBsp.bootStage = SMP_STAGE_ONLINE;
     const char *cmdline = kernelCmdline();

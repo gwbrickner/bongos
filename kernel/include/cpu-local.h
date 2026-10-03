@@ -16,6 +16,18 @@
 
 #define CPU_MAX 64 /* the online mask is one uint64_t */
 
+/* The cross-CPU request mailbox of one CPU (D-195): a sender stores its request (on its own stack)
+ * in slot[senderId], then sets its bit in `pending`; one IPI later the receiver swaps `pending` to
+ * 0 and runs every flagged slot. A sender has at most one outstanding request (it waits for the
+ * completion), so one slot per sender is enough and nothing is allocated. */
+struct SmpReq;
+typedef struct SmpMailbox {
+    uint64_t pending;
+    struct SmpReq *slot[CPU_MAX];
+    uint64_t handled[2];  /* requests run here, by kind: [0] call-function, [1] TLB shootdown */
+    uint64_t ipiCount[4]; /* IPIs received on vectors 0xF0..0xF3 */
+} SmpMailbox;
+
 typedef struct CpuLocal {
     struct CpuLocal *self; /* MUST stay at offset 0: cpuLocal() reads %gs:0 */
     uint32_t cpuId;        /* dense: BSP = 0, then in bring-up order */
@@ -30,6 +42,7 @@ typedef struct CpuLocal {
     void *pmm; /* per-CPU blobs owned by their subsystems (D-190) */
     void *slab;
     void *timer;
+    SmpMailbox mbox;
     ArchCpuLocal arch;
 } CpuLocal;
 _Static_assert(offsetof(CpuLocal, self) == 0, "CpuLocal.self must be at offset 0");

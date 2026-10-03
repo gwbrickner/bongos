@@ -64,6 +64,11 @@ Status vmmMapKernel(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags) {
     uint64_t irqFlags = vmmLock();
     Status st = archMapPages(va, pa, size, flags);
     vmmUnlock(irqFlags);
+    if (st != STATUS_OK) {
+        /* A fresh 0->1 mapping needs no flush (not-present entries are never cached), but a failed
+         * map rolled leaves back; make sure no CPU holds a translation for them (D-196). */
+        archTlbShootdownKernel(va, size);
+    }
     return st;
 }
 
@@ -77,6 +82,11 @@ Status vmmUnmapKernel(uint64_t va, uint64_t size) {
     uint64_t irqFlags = vmmLock();
     Status st = archUnmapPages(va, size);
     vmmUnlock(irqFlags);
+    if (st == STATUS_OK) {
+        /* After the unlock (D-196): the caller still owns the KVA range, so nobody can remap it
+         * until every CPU has dropped its stale translations. */
+        archTlbShootdownKernel(va, size);
+    }
     return st;
 }
 

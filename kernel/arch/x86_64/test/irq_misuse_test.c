@@ -9,7 +9,9 @@
 #include "apic.h"
 
 #include "acpi.h"
+#include "cpu-local.h"
 #include "irq.h"
+#include "smp.h"
 #include "timekeeping.h"
 #include "ktest.h"
 
@@ -118,11 +120,11 @@ KTEST(irq_api_refused_in_handler) {
     KTEST_ASSERT(lapicIsrEmpty());
     KTEST_ASSERT_EQ(irqDepth(), 0);
 
-    /* Nothing the handler tried took effect: v is still registered and allocated, 0xF0 is free,
-     * GSI 2 is not routed, and no vector leaked. */
+    /* Nothing the handler tried took effect: v is still registered and allocated, 0xF0 is still the
+     * SMP handler's, GSI 2 is not routed, and no vector leaked. */
     KTEST_ASSERT(irqRegister(v, apiFromHandler, &inHandler) == STATUS_ERR_INVALID);
     KTEST_ASSERT(irqMaskGsi(2) == STATUS_ERR_NOT_FOUND);
-    KTEST_ASSERT(irqUnregister(0xF0) == STATUS_ERR_INVALID);
+    KTEST_ASSERT(irqRegister(0xF0, apiFromHandler, &inHandler) == STATUS_ERR_INVALID); /* SMP's */
     KTEST_ASSERT(irqUnregister(v) == STATUS_OK);
     KTEST_ASSERT(irqFreeVector(v) == STATUS_OK);
     uint32_t got[193];
@@ -232,41 +234,45 @@ static void fixedHandler(uint32_t vector, void *ctx) {
 
 KTEST(irq_fixed_vectors_dispatch) {
     static Fixed s;
-    /* 0xFE belongs to the LAPIC timer since M3.3 (D-179): timekeeping registers it at boot, so a
-     * second registration is refused and the test only dispatches it. */
+    /* 0xFE belongs to the LAPIC timer since M3.3 (D-179) and 0xF0-0xF3 to the SMP IPIs since M3.5
+     * (D-195): their owners register them at boot, so a second registration is refused (and the
+     * test must never unregister them -- the APs would stop answering IPIs) and the test only
+     * dispatches them. */
     static const uint32_t fixed[] = {0xF0, 0xF1, 0xF2, 0xF3};
     s.count = 0;
     for (uint32_t i = 0; i < 4; i++) {
-        KTEST_ASSERT(irqRegister(fixed[i], fixedHandler, &s) == STATUS_OK);
         KTEST_ASSERT(irqRegister(fixed[i], fixedHandler, &s) == STATUS_ERR_INVALID);
         KTEST_ASSERT(irqFreeVector(fixed[i]) == STATUS_ERR_INVALID); /* never allocated */
     }
     KTEST_ASSERT(irqRegister(0xFE, fixedHandler, &s) == STATUS_ERR_INVALID); /* the timer's */
-    uint64_t c0 = irqVectorCount(0xF0);
+    uint64_t c[4];
+    for (uint32_t i = 0; i < 4; i++) {
+        c[i] = irqVectorCount(fixed[i]);
+    }
     uint64_t cTimer = irqVectorCount(0xFE);
+    /* The mailbox is empty, so 0xF0/0xF2 run nothing; 0xF3 would stop this CPU for good unless the
+     * ktest-only stop hook is on (it then only marks the CPU stopped). */
+    smpStopTestMode(true);
     __asm__ volatile("int $0xF0");
-    KTEST_ASSERT_EQ(s.lastVector, 0xF0);
     __asm__ volatile("int $0xF1");
-    KTEST_ASSERT_EQ(s.lastVector, 0xF1);
     __asm__ volatile("int $0xF2");
-    KTEST_ASSERT_EQ(s.lastVector, 0xF2);
     __asm__ volatile("int $0xF3");
-    KTEST_ASSERT_EQ(s.lastVector, 0xF3);
+    smpStopTestMode(false);
     __asm__ volatile("int $0xFE"); /* runs the timer handler (nothing due), then the EOI */
     KTEST_ASSERT(irqVectorCount(0xFE) >= cTimer + 1);
-    KTEST_ASSERT_EQ(s.count, 4);
-    KTEST_ASSERT_EQ(irqVectorCount(0xF0), c0 + 1);
+    for (uint32_t i = 0; i < 4; i++) {
+        KTEST_ASSERT_EQ(irqVectorCount(fixed[i]), c[i] + 1);
+    }
 
     /* A real LAPIC delivery of a fixed vector is EOI'd like any other. */
+    uint64_t kicks = cpuLocal()->mbox.ipiCount[1];
     lapicSendSelfIpi(0xF1);
-    KTEST_ASSERT(waitFor(&s.count, 5));
-    KTEST_ASSERT_EQ(s.lastVector, 0xF1);
-    KTEST_ASSERT(lapicIsrEmpty());
-
-    for (uint32_t i = 0; i < 4; i++) {
-        KTEST_ASSERT(irqUnregister(fixed[i]) == STATUS_OK);
-        KTEST_ASSERT(irqUnregister(fixed[i]) == STATUS_ERR_INVALID);
+    uint64_t t0 = timeMonotonicNs();
+    while (cpuLocal()->mbox.ipiCount[1] == kicks && timeMonotonicNs() - t0 < 2000000000ull) {
+        archPause();
     }
+    KTEST_ASSERT_EQ(cpuLocal()->mbox.ipiCount[1], kicks + 1);
+    KTEST_ASSERT(lapicIsrEmpty());
 
     /* Neither fixed nor allocatable, or not a vector at all. */
     static const uint32_t bad[] = {0, 31, 32, 47, 0xF4, 0xFD, 0xFF, 256, 0x10030, 0xFFFFFFFFu};

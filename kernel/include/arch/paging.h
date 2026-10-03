@@ -72,16 +72,25 @@ void archPagingVerifyWx(void);
  * STATUS_ERR_INVALID if any leaf in the range is already present) with X86_PTE_G always set;
  * STATUS_ERR_NO_MEMORY rolls back any leaf this call already wrote (never a partial mapping left
  * behind). archUnmapPages: STATUS_ERR_NOT_FOUND if any leaf in the range isn't present; never
- * frees page-table pages. Both panic if called before archPagingActivate(). No locks (the caller's
- * vmmLock covers both); IRQ-safe; may not sleep. */
+ * frees page-table pages. Neither invalidates any TLB entry: the caller shoots the range down
+ * (archTlbShootdownKernel) after unlocking, for an unmap and for a rolled-back map alike. Both
+ * panic if called before archPagingActivate(). No locks (the caller's vmmLock covers both);
+ * IRQ-safe; may not sleep. */
 Status archMapPages(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags);
 Status archUnmapPages(uint64_t va, uint64_t size);
 Status archLookupKernel(uint64_t va, uint64_t *outPa, VmmFlags *outFlags);
 
-/* Invalidates every translation this CPU has cached for `[va, va+size)` (one INVLPG per 4 KiB
- * page -- M3.5 replaces the body with a real IPI shootdown to other CPUs, nothing else in vmm.c
- * changes). No locks; IRQ-safe. */
-void archTlbInvalidateKernelRange(uint64_t va, uint64_t size);
+/* Invalidates this CPU's cached translations for `[va, va+size)`: one INVLPG per page up to 32
+ * pages, a full flush (CR4.PGE toggle) beyond that. No locks; IRQ-safe. */
+void archTlbFlushLocal(uint64_t va, uint64_t size);
+
+/* The kernel-mapping TLB shootdown (D-196): flushes `[va, va+size)` on this CPU and on every other
+ * online CPU (one request per call, however many pages) and returns once all of them have. Callers
+ * (vmm.c) invoke it AFTER dropping the vmm lock and while the range is still reserved in the KVA
+ * allocator, so no one can remap that VA before every CPU has flushed it. With other CPUs online it
+ * needs IF=1 and no handler running (smpCallFunction()'s rule); with one CPU it is just the local
+ * flush, with no restriction. Not IRQ-safe once SMP is up; never sleeps. */
+void archTlbShootdownKernel(uint64_t va, uint64_t size);
 
 /* Test/debug only (mirrors archBreakpointHits()'s existing precedent): the raw 4 KiB leaf PTE
  * value at `va` in the live kernel PML4, or 0 if not present at the 4 KiB level (including if a

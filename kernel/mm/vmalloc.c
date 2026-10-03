@@ -63,30 +63,42 @@ void vmallocInit(void) {
     }
 }
 
-/* Unmaps/frees every page of `area` already mapped (`area->pages` pages, indices [0, upTo)) and
- * returns its KVA reservation and the area record itself. Used both by vmalloc()'s own unwind on
- * partial failure and (conceptually) mirrors vfree()'s teardown order -- frames go before the KVA
- * range that addressed them. */
-static void vmallocUnwind(VmallocArea *area, uint64_t va, uint64_t upTo, uint64_t mapSize) {
-    for (uint64_t i = 0; i < upTo; i++) {
-        uint64_t pageVa = va + i * 4096;
-        uint64_t pa;
-        VmmFlags outFlags;
-        if (vmmLookupKernel(pageVa, &pa, &outFlags) == STATUS_OK) {
-            /* A page this same function just confirmed is mapped, unmapped by a range/alignment
-             * this function itself controls, failing to unmap is not a caller-input problem --
-             * it means the vmm's own page tables are in a state this code doesn't understand, and
-             * continuing to free the frame anyway would let it be reused while still mapped here.
-             */
-            if (vmmUnmapKernel(pageVa, 4096) != STATUS_OK) {
+#define VMALLOC_RELEASE_CHUNK 64u
+
+/* Unmaps and frees `count` pages starting at `va`, all of which must be mapped vmalloc pages. The
+ * unmap runs in chunks of VMALLOC_RELEASE_CHUNK pages: one vmmUnmapKernel() (hence one TLB
+ * shootdown round, D-196) per chunk, and a frame goes back to the pmm only after the shootdown that
+ * made it unreachable on every CPU. */
+static void vmallocReleasePages(uint64_t va, uint64_t count) {
+    uint64_t pas[VMALLOC_RELEASE_CHUNK];
+    for (uint64_t done = 0; done < count;) {
+        uint64_t n = count - done < VMALLOC_RELEASE_CHUNK ? count - done : VMALLOC_RELEASE_CHUNK;
+        for (uint64_t k = 0; k < n; k++) {
+            VmmFlags outFlags;
+            /* Proven mapped by the caller; a failure here means the vmm's own tables disagree,
+             * and freeing the frame anyway would let it be reused while still mapped. */
+            if (vmmLookupKernel(va + (done + k) * 4096, &pas[k], &outFlags) != STATUS_OK) {
                 vmallocBug(VMALLOC_BUG_CORRUPT);
             }
-            Page *page = pmmPhysToPage(pa);
+        }
+        if (vmmUnmapKernel(va + done * 4096, n * 4096) != STATUS_OK) {
+            vmallocBug(VMALLOC_BUG_CORRUPT);
+        }
+        for (uint64_t k = 0; k < n; k++) {
+            Page *page = pmmPhysToPage(pas[k]);
             page->flags = (uint16_t)(page->flags & ~PAGE_F_OWNER_MASK);
             page->privateWord = 0;
             pmmFreePages(page, 0);
         }
+        done += n;
     }
+}
+
+/* Unmaps/frees every page of `area` already mapped (indices [0, upTo)) and returns its KVA
+ * reservation and the area record itself. Used by vmalloc()'s own unwind on partial failure; the
+ * order mirrors vfree()'s teardown -- frames go before the KVA range that addressed them. */
+static void vmallocUnwind(VmallocArea *area, uint64_t va, uint64_t upTo, uint64_t mapSize) {
+    vmallocReleasePages(va, upTo);
     vmmKvaFree(va, mapSize);
     area->magic = 0;
     slabFree(vmallocAreaCache, area);
@@ -197,21 +209,7 @@ void vfree(void *ptr) {
         vmallocBug(VMALLOC_BUG_CORRUPT);
     }
 
-    for (uint64_t i = 0; i < pages; i++) {
-        uint64_t pa;
-        VmmFlags outFlags;
-        vmmLookupKernel(va + i * 4096, &pa, &outFlags);
-        /* Already proven mapped by the validation pass above; a failure here means the vmm's own
-         * tables disagree with what was just confirmed, not caller misuse -- freeing the frame
-         * anyway would let it be reused while still mapped through this VA. */
-        if (vmmUnmapKernel(va + i * 4096, 4096) != STATUS_OK) {
-            vmallocBug(VMALLOC_BUG_CORRUPT);
-        }
-        Page *page = pmmPhysToPage(pa);
-        page->flags = (uint16_t)(page->flags & ~PAGE_F_OWNER_MASK);
-        page->privateWord = 0;
-        pmmFreePages(page, 0);
-    }
+    vmallocReleasePages(va, pages);
     vmmKvaFree(va, mapSize);
     area->magic = 0;
     slabFree(vmallocAreaCache, area);
