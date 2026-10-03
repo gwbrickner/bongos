@@ -3,16 +3,16 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-02 (M3.3 merged; M3.4 finished, no PR yet)
+**Last updated:** 2026-10-02 (M3.3 merged; M3.4 finished, PR #22 open)
 
 ## Next step
 **M3.4 Locking + lock validator is finished** (log `docs/logs/M3.4.md`; three finish sweeps `SWEEP: PASS`, reviewer
-`VERDICT: PASS`) on the session branch `claude/resume-bongos-dev-prrfwz`; **no PR has been opened** (the session was
-told not to), `needs-owner`. Next: owner opens/merges the PR and answers the M3.4 questions below, then start **M3.5 SMP
-bring-up** (Needs M3.3 and M3.4 are done).
+`VERDICT: PASS`) on the session branch `claude/resume-bongos-dev-prrfwz`; PR [#22](https://github.com/gwbrickner/bongos/pull/22) is open,
+`needs-owner`. Next: owner merges it and answers the M3.4 questions below, then start **M3.5 SMP bring-up** (Needs M3.3 and
+M3.4 are done).
 
 ## Current milestone
-None in progress (M3.4 awaits the owner's PR and merge).
+None in progress (M3.4 awaits the owner's merge of PR #22).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -33,7 +33,7 @@ None in progress (M3.4 awaits the owner's PR and merge).
 | M3.1 | [#19](https://github.com/gwbrickner/bongos/pull/19) | ACPI tables: RSDP/XSDT/RSDT loader, FADT/MADT/MCFG/HPET/IVRS parsers, tables copied through temporary KVA windows (works on BIOS and UEFI), ACPI_RECLAIM freed after the copy, `acpidump=1` + `tools/acpiextract`, stored QEMU q35 tables, D-166..D-170 |
 | M3.2 | [#20](https://github.com/gwbrickner/bongos/pull/20) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
 | M3.3 | [#21](https://github.com/gwbrickner/bongos/pull/21) | Timekeeping: TSC calibrated against the PM timer (HPET optional), `timeMonotonicNs`, LAPIC timer (one-shot or TSC-deadline) + per-CPU 256-entry timer heap (`timerArm`/`timerCancel`), CMOS RTC `timeWallNs`, harness wall-clock-vs-host check, 25 ktests, D-176..D-182 |
-| M3.4 | (not opened) | Locking: ticket `Spinlock` (irqsave, trylock), `preemptCount` via an interim `CpuSync`, `atomic.h`, the debug lock validator (classes by init site, order graph with both stacks on an inversion, recursion, IRQ-safety; ktest expect mode), klog/pmm/vmm/slab/vmalloc/random converted to real spinlocks, D-183..D-189 |
+| M3.4 | [#22](https://github.com/gwbrickner/bongos/pull/22) | Locking: ticket `Spinlock` (irqsave, trylock), `preemptCount` via an interim `CpuSync`, `atomic.h`, the debug lock validator (classes by init site, order graph with both stacks on an inversion, recursion, IRQ-safety; ktest expect mode), klog/pmm/vmm/slab/vmalloc/random converted to real spinlocks, D-183..D-189 |
 
 The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB and 4-CPU rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
