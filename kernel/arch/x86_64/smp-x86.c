@@ -54,6 +54,7 @@ extern void *memset(void *dst, int value, size_t n);
 #define AP_INIT_DELAY_NS     10000000ull   /* the SDM's 10 ms after INIT */
 #define AP_SIPI_DELAY_NS     200000ull     /* and 200 us between SIPIs */
 #define AP_PARK_DELAY_NS     10000000ull
+#define AP_DEBUG_BSP_LAG_NS  300000000ull /* D-204: KERNEL_DEBUG only; below TSC_WAIT_NS */
 
 #define MTRR_VAR_MAX 16u
 
@@ -629,6 +630,11 @@ static void reportTscSync(const CpuLocal *cl, const TscSyncResult *tr) {
 
 /* Starts one AP and waits for it (D-193). true once it is ONLINE. */
 static bool bootAp(CpuLocal *cl) {
+    /* The TSC check's shared state is reset BEFORE the AP is released: an AP can reach its half of
+     * the check before the BSP gets here again, and a reset under it would wipe its barrier arrival
+     * or the ticket lock it holds (and a stale state left by the previous AP would let it run ahead
+     * through every barrier alone). */
+    memset(&tscSync, 0, sizeof(tscSync));
     buildTrampTables();
     prepareTrampoline(cl, cl->apicId, lapicIsX2apic());
     ATOMIC_FENCE(MEM_SEQ_CST);
@@ -643,8 +649,18 @@ static bool bootAp(CpuLocal *cl) {
     if (trampWord(offsetof(ApTrampData, claimed)) == 0) {
         lapicSendIpi(cl->apicId, sipi);
     }
+#ifdef KERNEL_DEBUG
+    /* D-204: debug builds play a BSP that lags its AP: it lets the AP run ahead to the TSC check
+     * (bounded) before doing anything else, so state the BSP still touched after releasing the AP
+     * would be caught on every debug boot rather than only on fast hardware. */
+    uint64_t lagEnd = timeMonotonicNs() + AP_DEBUG_BSP_LAG_NS;
+    while (ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE) != SMP_STAGE_TSC &&
+           ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE) != SMP_STAGE_FAILED &&
+           timeMonotonicNs() < lagEnd) {
+        archPause();
+    }
+#endif
 
-    memset(&tscSync, 0, sizeof(tscSync));
     bool tscDone = false;
     uint64_t deadline = timeMonotonicNs() + AP_ONLINE_TIMEOUT_NS;
     while (ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE) != SMP_STAGE_ONLINE) {
