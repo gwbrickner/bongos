@@ -77,8 +77,8 @@ void slabFree(SlabCache *cache, void *obj);
 /* Gives CPU `cl` its per-CPU magazines (`cl->slab`, one per cache slot) in the caller-provided
  * `storage` (at least slabCpuBlobSize() bytes, larger than KMALLOC_MAX_SIZE: use vmalloc; kept for
  * the life of the system) and registers it so cache create/shrink/destroy/stats cover that CPU
- * (D-199). Called by the BSP for an AP before the AP starts. STATUS_ERR_INVALID: `cl`/`storage` NULL
- * or `cl` already attached. STATUS_ERR_NO_MEMORY: more than CPU_MAX CPUs. Locks: slabLock.
+ * (D-199). Called by the BSP for an AP before the AP starts. STATUS_ERR_INVALID: `cl`/`storage`
+ * NULL or `cl` already attached. STATUS_ERR_NO_MEMORY: more than CPU_MAX CPUs. Locks: slabLock.
  * IRQ-safe: yes. */
 struct CpuLocal;
 size_t slabCpuBlobSize(void);
