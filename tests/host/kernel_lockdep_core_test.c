@@ -304,3 +304,85 @@ TEST(lockdepLongPathTruncates) {
     ASSERT_EQ(f.pathClass[f.pathLen], 21);
     free(g);
 }
+
+TEST(lockdepIrqSafeToUnsafeDirect) {
+    LockdepGraph *g = newGraph();
+    LockdepHeldStack hs = {0};
+    /* Class 0 is taken in a hard IRQ handler. */
+    ASSERT_EQ(acq(g, &hs, 0, 0, 1, false, false), LOCKDEP_OK);
+    rel(g, &hs, 0, false);
+    /* Process context: hold it with IRQs off, then take class 1 with IRQs enabled. */
+    ASSERT_EQ(acq(g, &hs, 0, 0, 0, false, false), LOCKDEP_OK);
+    LockdepFinding f;
+    uint16_t c1 = cls(g, 1);
+    ASSERT_EQ((int)lockdepCoreCheckAcquire(g, &hs, &keys[1], c1, 0, true, false, &f),
+              LOCKDEP_REPORT_IRQ_SAFE_UNSAFE);
+    ASSERT_EQ(f.safeClass, cls(g, 0));
+    ASSERT_EQ(f.unsafeClass, c1);
+    ASSERT_EQ(f.heldClass, cls(g, 0));
+    /* Taking it with IRQs off (irqsave) is fine. */
+    ASSERT_EQ((int)lockdepCoreCheckAcquire(g, &hs, &keys[1], c1, 0, false, false, &f), LOCKDEP_OK);
+    free(g);
+}
+
+TEST(lockdepIrqSafeToUnsafeTransitive) {
+    LockdepGraph *g = newGraph();
+    LockdepHeldStack hs = {0};
+    ASSERT_EQ(acq(g, &hs, 0, 0, 1, false, false), LOCKDEP_OK); /* class 0: hard-IRQ lock */
+    rel(g, &hs, 0, false);
+    /* 0 -> 1 -> (2 taken with IRQs on): 1 itself has no usage, but 0 reaches it. */
+    ASSERT_EQ(acq(g, &hs, 0, 0, 0, false, false), LOCKDEP_OK);
+    ASSERT_EQ(acq(g, &hs, 1, 1, 0, false, false), LOCKDEP_OK);
+    LockdepFinding f;
+    uint16_t c2 = cls(g, 2);
+    ASSERT_EQ((int)lockdepCoreCheckAcquire(g, &hs, &keys[2], c2, 0, true, false, &f),
+              LOCKDEP_REPORT_IRQ_SAFE_UNSAFE);
+    ASSERT_EQ(f.safeClass, cls(g, 0));
+    ASSERT_EQ(f.unsafeClass, c2);
+    free(g);
+}
+
+TEST(lockdepIrqSafeToUnsafeWhenUsageAppearsLater) {
+    LockdepGraph *g = newGraph();
+    LockdepHeldStack hs = {0};
+    /* 0 -> 1, with 1 taken with IRQs on: fine while nothing is IRQ-safe. */
+    ASSERT_EQ(acq(g, &hs, 0, 0, 0, false, false), LOCKDEP_OK);
+    ASSERT_EQ(acq(g, &hs, 1, 1, 0, true, false), LOCKDEP_OK);
+    rel(g, &hs, 1, true);
+    rel(g, &hs, 0, false);
+    /* Now class 0 is taken in a hard IRQ: it reaches the IRQ-unsafe class 1. */
+    LockdepFinding f;
+    ASSERT_EQ((int)lockdepCoreCheckAcquire(g, &hs, &keys[0], cls(g, 0), 1, false, false, &f),
+              LOCKDEP_REPORT_IRQ_SAFE_UNSAFE);
+    ASSERT_EQ(f.safeClass, cls(g, 0));
+    ASSERT_EQ(f.unsafeClass, cls(g, 1));
+    /* And the other order: class 3 reaches IRQ-safe class 2 via held 2 -> 3? No: 2 is IRQ-safe and
+     * is held while 3 (IRQ-unsafe, first usage) is taken. */
+    ASSERT_EQ(acq(g, &hs, 2, 2, 1, false, false), LOCKDEP_OK);
+    rel(g, &hs, 2, false);
+    ASSERT_EQ(acq(g, &hs, 2, 2, 0, false, false), LOCKDEP_OK);
+    ASSERT_EQ((int)lockdepCoreCheckAcquire(g, &hs, &keys[3], cls(g, 3), 0, true, false, &f),
+              LOCKDEP_REPORT_IRQ_SAFE_UNSAFE);
+    free(g);
+}
+
+TEST(lockdepIrqSafeToUnsafeNoFalsePositive) {
+    LockdepGraph *g = newGraph();
+    LockdepHeldStack hs = {0};
+    /* An IRQ-safe lock and an IRQ-unsafe lock with no dependency between them. */
+    ASSERT_EQ(acq(g, &hs, 0, 0, 1, false, false), LOCKDEP_OK);
+    rel(g, &hs, 0, false);
+    ASSERT_EQ(acq(g, &hs, 1, 1, 0, true, false), LOCKDEP_OK);
+    rel(g, &hs, 1, true);
+    /* Unsafe -> safe is the harmless direction (a handler never waits for the process-context
+     * holder of the safe lock to release the unsafe one). */
+    ASSERT_EQ(acq(g, &hs, 1, 1, 0, true, false), LOCKDEP_OK);
+    ASSERT_EQ(acq(g, &hs, 0, 0, 0, false, false), LOCKDEP_OK);
+    rel(g, &hs, 0, false);
+    rel(g, &hs, 1, true);
+    /* A chain of irqsave locks with no usage at all. */
+    ASSERT_EQ(acq(g, &hs, 4, 4, 0, false, false), LOCKDEP_OK);
+    ASSERT_EQ(acq(g, &hs, 5, 5, 0, false, false), LOCKDEP_OK);
+    ASSERT_EQ(acq(g, &hs, 6, 6, 0, false, false), LOCKDEP_OK);
+    free(g);
+}

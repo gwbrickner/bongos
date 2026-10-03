@@ -110,6 +110,27 @@ KTEST(lockdep_irq_safe_then_irqs_on_reported) {
     KTEST_ASSERT_EQ(reports, 1);
 }
 
+static Spinlock suSafe = SPINLOCK_INIT("lt-su-safe");
+static Spinlock suUnsafe = SPINLOCK_INIT("lt-su-unsafe");
+
+/* D-201: a lock taken in a hard IRQ must not be held while taking one that is also taken with IRQs
+ * enabled: if the interrupt lands while process context holds the unsafe one and the handler holds
+ * the safe one and waits for it, nothing makes progress. The unsafe lock has IRQs-on usage from an
+ * earlier acquire, so the report fires even though this acquire itself runs with IRQs off. */
+KTEST(lockdep_irq_safe_unsafe_reported) {
+    bool ran = runIrqCallback(&suSafe);
+    KTEST_ASSERT(ran);
+    lockdepTestTakeIrqsOn(&suUnsafe);
+    uint64_t f = spinLockIrqSave(&suSafe);
+    lockdepExpectBegin(LOCKDEP_REPORT_IRQ_SAFE_UNSAFE);
+    spinLock(&suUnsafe);
+    uint32_t reports = lockdepExpectEnd();
+    spinUnlock(&suUnsafe);
+    spinUnlockIrqRestore(&suSafe, f);
+    KTEST_ASSERT_EQ(reports, 1);
+    KTEST_ASSERT(!lockdepDependsOn("lt-su-safe", "lt-su-unsafe")); /* no edge recorded */
+}
+
 static Spinlock sameSite[2];
 
 KTEST(lockdep_class_recursion_reported) {
@@ -260,15 +281,20 @@ KTEST(lockdep_irq_segment_records_no_edge) {
     uint32_t depthAfterIrq = lockdepHeldDepth();
     spinUnlock(&segOuter);
     bool falseEdge = lockdepDependsOn("lt-seg-outer", "lt-seg-irq");
-    /* Reverse order in process context (irqsave, as segIrq is IRQ-safe): must not report. */
+    /* Reverse order in process context (irqsave, as segIrq is IRQ-safe): not an INVERSION (an
+     * inversion report would not be swallowed below and would panic). Since D-201 it is a genuine
+     * IRQ-safe -> IRQ-unsafe dependency, because segOuter is also taken with IRQs enabled, and that
+     * is the one report expected here. */
     uint64_t f = spinLockIrqSave(&segIrq);
+    lockdepExpectBegin(LOCKDEP_REPORT_IRQ_SAFE_UNSAFE);
     uint64_t g = spinLockIrqSave(&segOuter);
+    uint32_t reports = lockdepExpectEnd();
     spinUnlockIrqRestore(&segOuter, g);
     spinUnlockIrqRestore(&segIrq, f);
     KTEST_ASSERT(ran);
     KTEST_ASSERT_EQ(depthAfterIrq, depthHeld);
     KTEST_ASSERT(!falseEdge);
-    KTEST_ASSERT(lockdepDependsOn("lt-seg-irq", "lt-seg-outer"));
+    KTEST_ASSERT_EQ(reports, 1);
 }
 
 static Spinlock tcSite[2];

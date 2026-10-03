@@ -4,6 +4,7 @@
 
 #include "acpi.h"
 #include "klog.h"
+#include "spinlock.h"
 #include "timekeeping.h"
 
 #include <arch/cpu.h>
@@ -26,12 +27,15 @@
 #define RTC_UIP_TIMEOUT_NS 20000000ull
 #define RTC_MAX_TRIES      5
 
-/* Index (bit 7 clear: NMI stays enabled) then data, as one IRQ-disabled pair. */
+/* One lock for the index/data pair (D-201): two CPUs must not interleave them. */
+static Spinlock rtcLockObj = SPINLOCK_INIT("rtc");
+
+/* Index (bit 7 clear: NMI stays enabled) then data, as one locked pair. */
 static uint8_t cmosRead(uint8_t idx) {
-    uint64_t f = archIrqSave();
+    uint64_t f = spinLockIrqSave(&rtcLockObj);
     ioOutByte(CMOS_INDEX, idx);
     uint8_t v = ioInByte(CMOS_DATA);
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&rtcLockObj, f);
     return v;
 }
 

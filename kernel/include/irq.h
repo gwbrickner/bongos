@@ -78,7 +78,7 @@ typedef struct {
     uint64_t legacySpurious; /* 8259 IRQ7/IRQ15 that were not real */
     uint64_t unhandled;      /* a vector with no registered handler (EOI'd and counted) */
 } IrqStats;
-/* An atomic snapshot (IRQ-disabled). */
+/* A snapshot of the counters (each read atomically; they keep counting on every CPU). */
 void irqGetStats(IrqStats *out);
 /* How many times `vector` has been dispatched to its handler path. No locks; IRQ-safe. */
 uint64_t irqVectorCount(uint32_t vector);

@@ -119,6 +119,36 @@ static void buildPath(const LockdepGraph *g, uint16_t src, uint16_t dst, Lockdep
     }
 }
 
+/* BFS from `start` (forward over held-while-acquiring edges, or backward over their reverse) for a
+ * class, `start` included, whose usageMask has `bit`; returns its id or 0. Uses the BFS scratch. */
+static uint16_t findUsageReach(LockdepGraph *g, uint16_t start, bool forward, unsigned bit) {
+    for (uint32_t i = 0; i < LOCKDEP_MAX_CLASSES / 64u; i++) {
+        g->bfsSeen[i] = 0;
+    }
+    uint32_t head = 0, tail = 0;
+    g->bfsQueue[tail++] = start;
+    g->bfsSeen[(start - 1u) / 64u] |= 1ULL << ((start - 1u) % 64u);
+    while (head < tail) {
+        uint16_t cur = g->bfsQueue[head++];
+        if ((g->classes[cur - 1u].usageMask & (1u << bit)) != 0) {
+            return cur;
+        }
+        for (uint32_t k = 1; k <= g->classCount; k++) {
+            uint32_t w = (k - 1u) / 64u;
+            uint64_t m = 1ULL << ((k - 1u) % 64u);
+            if ((g->bfsSeen[w] & m) != 0) {
+                continue;
+            }
+            bool edge = forward ? adjTest(g, cur, (uint16_t)k) : adjTest(g, (uint16_t)k, cur);
+            if (edge) {
+                g->bfsSeen[w] |= m;
+                g->bfsQueue[tail++] = (uint16_t)k;
+            }
+        }
+    }
+    return 0;
+}
+
 static void findingInit(LockdepFinding *f, LockdepVerdict kind, uint16_t newClass) {
     *f = (LockdepFinding){0};
     f->kind = kind;
@@ -168,6 +198,8 @@ LockdepVerdict lockdepCoreCheckAcquire(LockdepGraph *g, const LockdepHeldStack *
     }
 
     if (!trylock) {
+        bool newHard = irqCtx != 0;
+        bool newOn = irqCtx == 0 && irqsOn;
         for (uint32_t i = base; i < hs->depth; i++) {
             uint16_t h = hs->held[i].classId;
             if (h == classId || adjTest(g, h, classId)) {
@@ -179,6 +211,49 @@ LockdepVerdict lockdepCoreCheckAcquire(LockdepGraph *g, const LockdepHeldStack *
                 f->heldIndex = i;
                 buildPath(g, classId, h, f);
                 return LOCKDEP_REPORT_INVERSION;
+            }
+        }
+
+        /* IRQ-safe -> IRQ-unsafe (D-201): a lock taken in a hard IRQ that can reach, through the
+         * graph, a lock taken with IRQs enabled is a deadlock waiting for an interrupt to land
+         * while the unsafe one is held. Checked for each new edge held -> new (counting this
+         * acquire's own usage), and when this acquire gives a class its first usage of a kind. */
+        const unsigned hard = LOCKDEP_USAGE_IN_HARDIRQ, on = LOCKDEP_USAGE_IRQS_ON;
+        for (uint32_t i = base; i < hs->depth; i++) {
+            uint16_t h = hs->held[i].classId;
+            if (h == classId || adjTest(g, h, classId)) {
+                continue;
+            }
+            uint16_t safe = findUsageReach(g, h, false, hard);
+            if (safe == 0) {
+                continue;
+            }
+            uint16_t unsafe = newOn ? classId : findUsageReach(g, classId, true, on);
+            if (unsafe != 0) {
+                findingInit(f, LOCKDEP_REPORT_IRQ_SAFE_UNSAFE, classId);
+                f->heldClass = h;
+                f->heldIndex = i;
+                f->safeClass = safe;
+                f->unsafeClass = unsafe;
+                return LOCKDEP_REPORT_IRQ_SAFE_UNSAFE;
+            }
+        }
+        if (newHard && (cls->usageMask & (1u << hard)) == 0) {
+            uint16_t unsafe = findUsageReach(g, classId, true, on);
+            if (unsafe != 0 && unsafe != classId) {
+                findingInit(f, LOCKDEP_REPORT_IRQ_SAFE_UNSAFE, classId);
+                f->safeClass = classId;
+                f->unsafeClass = unsafe;
+                return LOCKDEP_REPORT_IRQ_SAFE_UNSAFE;
+            }
+        }
+        if (newOn && (cls->usageMask & (1u << on)) == 0) {
+            uint16_t safe = findUsageReach(g, classId, false, hard);
+            if (safe != 0 && safe != classId) {
+                findingInit(f, LOCKDEP_REPORT_IRQ_SAFE_UNSAFE, classId);
+                f->safeClass = safe;
+                f->unsafeClass = classId;
+                return LOCKDEP_REPORT_IRQ_SAFE_UNSAFE;
             }
         }
     }

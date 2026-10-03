@@ -28,6 +28,7 @@ static RawSpinlock graphLock = RAW_SPINLOCK_INIT;
 static bool lockdepOff;
 static struct {
     bool armed;
+    uint32_t cpu; /* the arming CPU: another CPU's report of the same kind still panics (D-201) */
     LockdepVerdict kind;
     uint32_t count;
     uint32_t totalExpected;
@@ -51,6 +52,8 @@ static const char *kindName(LockdepVerdict k) {
             return "too many locks held";
         case LOCKDEP_REPORT_BAD_INIT:
             return "bad lock init";
+        case LOCKDEP_REPORT_IRQ_SAFE_UNSAFE:
+            return "IRQ-safe lock reaches an IRQ-unsafe lock";
         default:
             return "?";
     }
@@ -103,7 +106,7 @@ static void printHeld(const LockdepHeldStack *hs) {
 static void report(const LockdepFinding *f, const LockdepHeldStack *hs) {
     /* Re-taking the very same lock would spin forever once the report returns, so that one is never
      * swallowed. */
-    bool expected = expect.armed && expect.kind == f->kind &&
+    bool expected = expect.armed && expect.kind == f->kind && expect.cpu == smpThisCpu() &&
                     !(f->kind == LOCKDEP_REPORT_RECURSION && f->sameInstance);
     outLine("%s: %s\n", expected ? "LOCKDEP (expected by ktest)" : "LOCKDEP", kindName(f->kind));
     switch (f->kind) {
@@ -132,6 +135,21 @@ static void report(const LockdepFinding *f, const LockdepHeldStack *hs) {
                     (unsigned)f->newClass, usageName(f->usageNew));
             outLine("  but it was earlier %s, at:\n", usageName(f->usageOld));
             printTrace(&graph.classes[f->newClass - 1u].usageTrace[f->usageOld]);
+            break;
+        case LOCKDEP_REPORT_IRQ_SAFE_UNSAFE:
+            outLine("  \"%s\" (class %u) is %s, and through held-while-acquiring edges it\n",
+                    className(f->safeClass), (unsigned)f->safeClass,
+                    usageName(LOCKDEP_USAGE_IN_HARDIRQ));
+            outLine("  reaches \"%s\" (class %u), which is %s; acquiring \"%s\" now (class %u)\n",
+                    className(f->unsafeClass), (unsigned)f->unsafeClass,
+                    usageName(LOCKDEP_USAGE_IRQS_ON), className(f->newClass),
+                    (unsigned)f->newClass);
+            outLine("  \"%s\" first %s at:\n", className(f->safeClass),
+                    usageName(LOCKDEP_USAGE_IN_HARDIRQ));
+            printTrace(&graph.classes[f->safeClass - 1u].usageTrace[LOCKDEP_USAGE_IN_HARDIRQ]);
+            outLine("  \"%s\" first %s at:\n", className(f->unsafeClass),
+                    usageName(LOCKDEP_USAGE_IRQS_ON));
+            printTrace(&graph.classes[f->unsafeClass - 1u].usageTrace[LOCKDEP_USAGE_IRQS_ON]);
             break;
         case LOCKDEP_REPORT_NOT_HELD:
             outLine("  a lock is released that this CPU does not hold\n");
@@ -285,11 +303,13 @@ uint32_t lockdepHeldDepth(void) {
 void lockdepExpectBegin(LockdepVerdict kind) {
     if (ktestCurrentName() == NULL || irqDepth() != 0 || expect.armed ||
         (kind != LOCKDEP_REPORT_INVERSION && kind != LOCKDEP_REPORT_RECURSION &&
-         kind != LOCKDEP_REPORT_IRQ_INCONSISTENT && kind != LOCKDEP_REPORT_NOT_HELD)) {
+         kind != LOCKDEP_REPORT_IRQ_INCONSISTENT && kind != LOCKDEP_REPORT_NOT_HELD &&
+         kind != LOCKDEP_REPORT_IRQ_SAFE_UNSAFE)) {
         panic("lockdepExpectBegin: not in a ktest, in a handler, already armed, or bad kind");
     }
     uint64_t flags = archIrqSave();
     expect.kind = kind;
+    expect.cpu = smpThisCpu();
     expect.count = 0;
     expect.armed = true;
     archIrqRestore(flags);

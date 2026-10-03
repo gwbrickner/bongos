@@ -3,9 +3,12 @@
 #include "atomic.h"
 #include "cpu-local.h"
 #include "kernel-boot.h"
+#include "kmalloc.h"
 #include "ktest.h"
+#include "pmm.h"
 #include "preempt.h"
 #include "smp.h"
+#include "timekeeping.h"
 #include "vmalloc.h"
 
 #include <arch/cpu.h>
@@ -172,4 +175,44 @@ KTEST(smp_stop_parks_cpus) {
     for (uint32_t cpu = 0; cpu < smpOnlineCount(); cpu++) {
         KTEST_ASSERT(!smpCpuStopped(cpu));
     }
+}
+
+/* --- allocation from a handler (D-200) ---------------------------------------------------------
+ */
+
+static volatile uint32_t allocCbDone, allocCbOk;
+
+static void allocInIrqCallback(TimerObj *t, void *ctx) {
+    (void)t;
+    (void)ctx;
+    uint32_t ok = 1;
+    void *small = kmalloc(64, KMALLOC_ZERO);
+    void *big = kmalloc(4096, 0);
+    Page *pg = NULL;
+    if (small == NULL || big == NULL || pmmAllocPages(0, 0, &pg) != STATUS_OK) {
+        ok = 0;
+    } else {
+        pmmFreePages(pg, 0);
+    }
+    kfree(small);
+    kfree(big);
+    allocCbOk = ok;
+    allocCbDone = 1;
+}
+
+/* pmm, slab and kmalloc are usable from a hard-IRQ handler since M3.5 (D-200): their locks are
+ * irqsave and the validate/claim steps run under them. vmalloc and the vmm map/unmap paths are not
+ * (they may wait for a TLB shootdown). */
+KTEST(irq_handler_may_allocate) {
+    static TimerObj timer;
+    allocCbDone = 0;
+    allocCbOk = 0;
+    timerInit(&timer, allocInIrqCallback, NULL);
+    KTEST_ASSERT(timerArm(&timer, timeMonotonicNs()) == STATUS_OK);
+    uint64_t deadline = timeMonotonicNs() + 1000000000ull;
+    while (!allocCbDone && timeMonotonicNs() < deadline) {
+        archPause();
+    }
+    KTEST_ASSERT(allocCbDone);
+    KTEST_ASSERT_EQ(allocCbOk, 1);
 }

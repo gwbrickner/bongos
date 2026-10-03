@@ -13,6 +13,7 @@
 #include "panic.h"
 #include "preempt.h"
 #include "lockdep.h"
+#include "spinlock.h"
 
 #include <arch/cpu.h>
 #include <arch/io.h>
@@ -34,6 +35,11 @@ static bool vectorUnmasked[IRQ_VECTOR_COUNT]; /* the routed pin is currently unm
 static uint64_t warnedUnhandled[IRQ_VECTOR_COUNT / 64];
 static IrqVectorMap vectorMap;
 static IrqStats stats;
+
+/* Protects slots[], vectorGsi[], vectorUnmasked[] and the vector map across CPUs (D-201); the
+ * dispatch path reads slots[] lock-free (release/acquire on the handler pointer) and the counters
+ * are relaxed atomics. Lock order: irqLock -> ioapicLock. */
+static Spinlock irqLockObj = SPINLOCK_INIT("irq");
 static bool inited = false;
 static const AcpiMadtInfo *madtInfo = NULL;
 
@@ -97,9 +103,9 @@ Status irqAllocVector(uint32_t *outVector) {
     if (!callable() || outVector == NULL) {
         return STATUS_ERR_INVALID;
     }
-    uint64_t f = archIrqSave();
+    uint64_t f = spinLockIrqSave(&irqLockObj);
     Status st = irqVectorMapAlloc(&vectorMap, outVector);
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&irqLockObj, f);
     return st;
 }
 
@@ -107,12 +113,12 @@ Status irqFreeVector(uint32_t vector) {
     if (!callable()) {
         return STATUS_ERR_INVALID;
     }
-    uint64_t f = archIrqSave();
+    uint64_t f = spinLockIrqSave(&irqLockObj);
     Status st = STATUS_ERR_INVALID;
     if (vector < IRQ_VECTOR_COUNT && slots[vector].handler == NULL && vectorGsi[vector] == NO_GSI) {
         st = irqVectorMapFree(&vectorMap, vector);
     }
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&irqLockObj, f);
     return st;
 }
 
@@ -120,7 +126,7 @@ Status irqRegister(uint32_t vector, IrqHandler handler, void *ctx) {
     if (!callable() || handler == NULL || vector >= IRQ_VECTOR_COUNT) {
         return STATUS_ERR_INVALID;
     }
-    uint64_t f = archIrqSave();
+    uint64_t f = spinLockIrqSave(&irqLockObj);
     Status st = STATUS_ERR_INVALID;
     if ((irqVectorMapIsAllocated(&vectorMap, vector) || vectorIsFixed(vector)) &&
         slots[vector].handler == NULL) {
@@ -129,7 +135,7 @@ Status irqRegister(uint32_t vector, IrqHandler handler, void *ctx) {
         __atomic_store_n(&slots[vector].handler, handler, __ATOMIC_RELEASE);
         st = STATUS_OK;
     }
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&irqLockObj, f);
     return st;
 }
 
@@ -137,14 +143,14 @@ Status irqUnregister(uint32_t vector) {
     if (!callable() || vector >= IRQ_VECTOR_COUNT) {
         return STATUS_ERR_INVALID;
     }
-    uint64_t f = archIrqSave();
+    uint64_t f = spinLockIrqSave(&irqLockObj);
     Status st = STATUS_ERR_INVALID;
     if (slots[vector].handler != NULL && !(vectorGsi[vector] != NO_GSI && vectorUnmasked[vector])) {
         __atomic_store_n(&slots[vector].handler, NULL, __ATOMIC_RELEASE);
         slots[vector].ctx = NULL;
         st = STATUS_OK;
     }
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&irqLockObj, f);
     return st;
 }
 
@@ -164,8 +170,8 @@ Status irqRouteGsi(uint32_t gsi, uint32_t vector, uint32_t flags) {
     if (!callable() || (flags & ~(IRQ_ACTIVE_LOW | IRQ_LEVEL)) != 0 || vector >= IRQ_VECTOR_COUNT) {
         return STATUS_ERR_INVALID;
     }
-    uint32_t apicId = lapicId();
-    uint64_t f = archIrqSave();
+    uint32_t apicId = cpuLocalOf(0)->apicId; /* device IRQs stay on the boot CPU (D-201) */
+    uint64_t f = spinLockIrqSave(&irqLockObj);
     Status st;
     if (!ioapicGsiUsable(gsi)) {
         st = STATUS_ERR_NOT_FOUND;
@@ -183,7 +189,7 @@ Status irqRouteGsi(uint32_t gsi, uint32_t vector, uint32_t flags) {
             vectorUnmasked[vector] = false;
         }
     }
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&irqLockObj, f);
     return st;
 }
 
@@ -213,7 +219,7 @@ static Status setGsiMask(uint32_t gsi, bool masked) {
     if (!callable()) {
         return STATUS_ERR_INVALID;
     }
-    uint64_t f = archIrqSave();
+    uint64_t f = spinLockIrqSave(&irqLockObj);
     uint32_t v = vectorOfGsi(gsi);
     Status st;
     if (v == NO_GSI) {
@@ -226,7 +232,7 @@ static Status setGsiMask(uint32_t gsi, bool masked) {
             vectorUnmasked[v] = !masked;
         }
     }
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&irqLockObj, f);
     return st;
 }
 
@@ -242,7 +248,7 @@ Status irqUnrouteGsi(uint32_t gsi) {
     if (!callable()) {
         return STATUS_ERR_INVALID;
     }
-    uint64_t f = archIrqSave();
+    uint64_t f = spinLockIrqSave(&irqLockObj);
     uint32_t v = vectorOfGsi(gsi);
     Status st;
     if (v == NO_GSI) {
@@ -272,18 +278,18 @@ Status irqUnrouteGsi(uint32_t gsi) {
             vectorUnmasked[v] = false;
         }
     }
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&irqLockObj, f);
     return st;
 }
 
 void irqGetStats(IrqStats *out) {
-    uint64_t f = archIrqSave();
-    *out = stats;
-    archIrqRestore(f);
+    out->spurious = __atomic_load_n(&stats.spurious, __ATOMIC_RELAXED);
+    out->legacySpurious = __atomic_load_n(&stats.legacySpurious, __ATOMIC_RELAXED);
+    out->unhandled = __atomic_load_n(&stats.unhandled, __ATOMIC_RELAXED);
 }
 
 uint64_t irqVectorCount(uint32_t vector) {
-    return vector < IRQ_VECTOR_COUNT ? vectorCounts[vector] : 0;
+    return vector < IRQ_VECTOR_COUNT ? __atomic_load_n(&vectorCounts[vector], __ATOMIC_RELAXED) : 0;
 }
 
 /* --- dispatch ------------------------------------------------------------------------------ */
@@ -297,7 +303,7 @@ void irqDispatch(TrapFrame *f) {
     if (v == LAPIC_SPURIOUS_VECTOR) {
         /* A spurious interrupt never sets an ISR bit, so an EOI here would retire some other
          * in-service vector instead (SDM Vol 3A §10.9). */
-        stats.spurious++;
+        __atomic_fetch_add(&stats.spurious, 1, __ATOMIC_RELAXED);
         return;
     }
 
@@ -307,12 +313,12 @@ void irqDispatch(TrapFrame *f) {
          * involved (ExtINT never uses it), so no LAPIC EOI either way. */
         if (v == 0x27) {
             if ((pic8259ReadIsr(0) & 0x80) == 0) {
-                stats.legacySpurious++;
+                __atomic_fetch_add(&stats.legacySpurious, 1, __ATOMIC_RELAXED);
                 return;
             }
         } else if (v == 0x2F) {
             if ((pic8259ReadIsr(1) & 0x80) == 0) {
-                stats.legacySpurious++;
+                __atomic_fetch_add(&stats.legacySpurious, 1, __ATOMIC_RELAXED);
                 pic8259EoiMaster(); /* the cascade line (IRQ2) was real */
                 return;
             }
@@ -324,7 +330,7 @@ void irqDispatch(TrapFrame *f) {
         panic("irq: nested interrupt (vector %u inside a handler)", v);
     }
     cpuLocal()->irqDepth = 1;
-    vectorCounts[v]++;
+    __atomic_fetch_add(&vectorCounts[v], 1, __ATOMIC_RELAXED);
     IrqHandler h = __atomic_load_n(&slots[v].handler, __ATOMIC_ACQUIRE);
     if (h != NULL) {
         uint32_t preemptBefore = preemptCount();
@@ -339,9 +345,9 @@ void irqDispatch(TrapFrame *f) {
     } else {
         /* Firmware leaves stale IRR bits, and QEMU latches edges on masked pins and delivers them
          * on unmask: neither may kill boot. Count it, log the first one per vector, and EOI. */
-        stats.unhandled++;
-        if ((warnedUnhandled[v / 64] & (1ULL << (v % 64))) == 0) {
-            warnedUnhandled[v / 64] |= 1ULL << (v % 64);
+        __atomic_fetch_add(&stats.unhandled, 1, __ATOMIC_RELAXED);
+        uint64_t bit = 1ULL << (v % 64);
+        if ((__atomic_fetch_or(&warnedUnhandled[v / 64], bit, __ATOMIC_RELAXED) & bit) == 0) {
             klogWrite(KLOG_WARN, "irq",
                       "unhandled vector %u (EOI sent; further occurrences counted silently)", v);
         }

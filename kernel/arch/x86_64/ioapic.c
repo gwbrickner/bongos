@@ -6,6 +6,7 @@
 #include "include/irq-core.h"
 
 #include "klog.h"
+#include "spinlock.h"
 #include "vmm.h"
 
 #include <arch/cpu.h>
@@ -30,8 +31,12 @@ static uint32_t count = 0;
 static uint32_t reservedGsi[ACPI_MAX_NMI_SOURCES];
 static uint32_t reservedCount = 0;
 
-/* Index/data access, serialized by the caller's IRQ-disable (the pair must not be interleaved with
- * another access to the same IOAPIC). */
+/* One lock for every IOAPIC's IOREGSEL/IOWIN pair (D-201): two CPUs interleaving an index write
+ * with another's data access would corrupt a redirection entry. */
+static Spinlock ioapicLockObj = SPINLOCK_INIT("ioapic");
+
+/* Index/data access, serialized by ioapicLockObj (held by the caller) (the pair must not be
+ * interleaved with another access to the same IOAPIC). */
 static uint32_t regRead(const Ioapic *io, uint32_t reg) {
     *(volatile uint32_t *)(io->mmio + 0x00) = reg;
     return *(volatile uint32_t *)(io->mmio + 0x10);
@@ -61,10 +66,10 @@ void ioapicInitAll(const AcpiMadtInfo *madt) {
             continue;
         }
         Ioapic io = {.mmio = (volatile uint8_t *)va, .id = a->id};
-        uint64_t f = archIrqSave();
+        uint64_t f = spinLockIrqSave(&ioapicLockObj);
         uint32_t idReg = regRead(&io, IOAPIC_REG_ID);
         uint32_t ver = regRead(&io, IOAPIC_REG_VER);
-        archIrqRestore(f);
+        spinUnlockIrqRestore(&ioapicLockObj, f);
         IrqGsiRange range = {a->gsiBase, irqCoreIoapicPins(ver)};
         if (range.pins > IOAPIC_MAX_PINS) {
             /* IOREGSEL is 8 bits: entry p occupies registers 0x10+2p and 0x11+2p, so only 120
@@ -82,12 +87,12 @@ void ioapicInitAll(const AcpiMadtInfo *madt) {
         if ((idReg >> 24) != a->id) {
             klogWrite(KLOG_WARN, "ioapic", "id register says %u, MADT says %u", idReg >> 24, a->id);
         }
-        f = archIrqSave();
+        f = spinLockIrqSave(&ioapicLockObj);
         for (uint32_t p = 0; p < range.pins; p++) {
             regWrite(&io, IOAPIC_REG_REDIR + 2 * p, IOAPIC_RTE_MASK_BIT);
             regWrite(&io, IOAPIC_REG_REDIR + 2 * p + 1, 0);
         }
-        archIrqRestore(f);
+        spinUnlockIrqRestore(&ioapicLockObj, f);
         ioapics[count] = io;
         ranges[count] = range;
         count++;
@@ -138,11 +143,11 @@ Status ioapicWriteRte(uint32_t gsi, uint64_t rte) {
     if (io == NULL) {
         return STATUS_ERR_NOT_FOUND;
     }
-    uint64_t f = archIrqSave();
+    uint64_t f = spinLockIrqSave(&ioapicLockObj);
     regWrite(io, IOAPIC_REG_REDIR + 2 * pin, (uint32_t)rte | IOAPIC_RTE_MASK_BIT);
     regWrite(io, IOAPIC_REG_REDIR + 2 * pin + 1, (uint32_t)(rte >> 32));
     regWrite(io, IOAPIC_REG_REDIR + 2 * pin, (uint32_t)rte);
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&ioapicLockObj, f);
     return STATUS_OK;
 }
 
@@ -152,11 +157,11 @@ Status ioapicSetMask(uint32_t gsi, bool masked) {
     if (io == NULL) {
         return STATUS_ERR_NOT_FOUND;
     }
-    uint64_t f = archIrqSave();
+    uint64_t f = spinLockIrqSave(&ioapicLockObj);
     uint32_t lo = regRead(io, IOAPIC_REG_REDIR + 2 * pin);
     lo = masked ? (lo | IOAPIC_RTE_MASK_BIT) : (lo & ~IOAPIC_RTE_MASK_BIT);
     regWrite(io, IOAPIC_REG_REDIR + 2 * pin, lo);
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&ioapicLockObj, f);
     return STATUS_OK;
 }
 
@@ -166,10 +171,10 @@ Status ioapicReadRte(uint32_t gsi, uint64_t *out) {
     if (io == NULL) {
         return STATUS_ERR_NOT_FOUND;
     }
-    uint64_t f = archIrqSave();
+    uint64_t f = spinLockIrqSave(&ioapicLockObj);
     uint32_t lo = regRead(io, IOAPIC_REG_REDIR + 2 * pin);
     uint32_t hi = regRead(io, IOAPIC_REG_REDIR + 2 * pin + 1);
-    archIrqRestore(f);
+    spinUnlockIrqRestore(&ioapicLockObj, f);
     *out = ((uint64_t)hi << 32) | lo;
     return STATUS_OK;
 }

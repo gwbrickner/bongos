@@ -70,6 +70,8 @@ typedef enum LockdepVerdict {
     LOCKDEP_REPORT_NOT_HELD,
     LOCKDEP_REPORT_HELD_OVERFLOW,
     LOCKDEP_REPORT_BAD_INIT,
+    LOCKDEP_REPORT_IRQ_SAFE_UNSAFE, /* a lock taken in a hard IRQ can reach, through held-while-
+                                     * acquiring edges, one taken with IRQs enabled (D-201) */
     LOCKDEP_FULL, /* a table is full: not a report, the validator turns itself off */
 } LockdepVerdict;
 
@@ -79,6 +81,8 @@ typedef struct LockdepFinding {
     uint16_t heldClass;         /* the held class it conflicts with (0 if none) */
     uint32_t heldIndex;         /* index of that entry in the held stack */
     uint8_t usageNew, usageOld; /* IRQ_INCONSISTENT: the usage now / the conflicting earlier one */
+    uint16_t safeClass;         /* IRQ_SAFE_UNSAFE: the class seen in a hard IRQ ... */
+    uint16_t unsafeClass;       /* ... and the class seen with IRQs enabled it reaches */
     bool sameInstance;          /* RECURSION: the very same lock object */
     uint32_t pathLen;           /* INVERSION: edges in pathClass */
     bool pathTruncated;         /* the chain is longer than LOCKDEP_MAX_PATH; its start was cut */

@@ -153,9 +153,10 @@ LOCK_REQUIRED_KTESTS := spin_trylock_semantics spin_irqsave_restores_if preempt_
                         preempt_in_atomic_irqs_off klog_exception_in_section_does_not_hang
 # M3.5 (SMP bring-up): grows as the sub-steps land.
 SMP_REQUIRED_KTESTS := smp_cpulocal_bsp smp_online_matches_madt smp_call_function_all_cpus \
+                       irq_handler_may_allocate \
                        smp_call_function_refused_with_irqs_off smp_tlb_shootdown_batched \
                        smp_stop_parks_cpus
-LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_unsafe_in_irq_reported \
+LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_safe_unsafe_reported lockdep_irq_unsafe_in_irq_reported \
                            lockdep_irq_safe_then_irqs_on_reported lockdep_class_recursion_reported \
                            lockdep_trylock_records_no_edge lockdep_out_of_order_release \
                            lockdep_sees_kernel_locks lockdep_not_held_reported \
@@ -324,6 +325,7 @@ _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	        for re in '^LOCKDEP \(expected by ktest\): lock order inversion$$' \
 	                  '^LOCKDEP \(expected by ktest\): inconsistent IRQ lock state$$' \
 	                  '^LOCKDEP \(expected by ktest\): recursive locking$$' \
+	                  '^LOCKDEP \(expected by ktest\): IRQ-safe lock reaches an IRQ-unsafe lock$$' \
 	                  '^  #[0-9]+ 0x[0-9a-f]{16} lockdepTestTakeAB\+0x' \
 	                  '^  #[0-9]+ 0x[0-9a-f]{16} lockdepTestTakeBA\+0x' \
 	                  '^  #[0-9]+ 0x[0-9a-f]{16} lockdepTestIrqCallback\+0x' \
