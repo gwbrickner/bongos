@@ -20,6 +20,12 @@
  * not IRQ-safe (disables caching for the duration); called once, before archPagingBuildKernel(). */
 void archPatInit(void);
 
+/* The per-CPU half of archPatInit(): programs IA32_PAT on the calling CPU with the SDM's MP-safe
+ * procedure (D-087) and panics on a readback mismatch; no log line. An AP calls it from apMain()
+ * (D-194) before anything that could touch the WC framebuffer. IF must be 0 and CR4.PGE set. Not
+ * IRQ-safe; boot-time only. */
+void archPatProgramThisCpu(void);
+
 /* Builds the kernel's own PML4 (not yet active): the HHDM over `map[0..mapCount)` (WB for
  * USABLE/LOADER_RECLAIM/KERNEL/INITRD/ACPI_RECLAIM/ACPI_NVS, WC for FRAMEBUFFER, RESERVED/BAD left
  * unmapped, the kernel text+rodata physical range carved out read-only), the kernel image at its

@@ -72,3 +72,18 @@ void archCpuInitBsp(void) {
 
     trapIdtInit(); /* must come after archLoadTss(): see this file's top comment */
 }
+
+void archCpuInitAp(CpuLocal *cl) {
+    ArchCpuLocal *arch = &cl->arch;
+    tssBuild(&arch->tss, arch->istTop[0], arch->istTop[1], arch->istTop[2]);
+    gdtBuild(arch->gdt, &arch->tss);
+
+    X86DescriptorPtr gdtr = {
+        .limit = sizeof(arch->gdt) - 1,
+        .base = (uint64_t)(uintptr_t)arch->gdt,
+    };
+    archLoadGdt(&gdtr);
+    archLoadTss(GDT_SEL_TSS);
+
+    trapIdtLoad(); /* after LTR, like the BSP's */
+}

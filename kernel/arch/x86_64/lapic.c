@@ -107,6 +107,23 @@ void lapicSendSelfIpi(uint8_t v) {
     archIrqRestore(f);
 }
 
+void lapicSendIpi(uint32_t apicId, uint32_t icrLo) {
+    if (x2apic) {
+        /* WRMSR to an x2APIC MSR is not serializing: without the fence the stores the receiver is
+         * about to read (mailbox slots, the trampoline page) may not be visible yet (SDM Vol 3A
+         * §10.12.3). */
+        archMfence();
+        archWrmsr(MSR_X2APIC_ICR, ((uint64_t)apicId << 32) | icrLo);
+        return;
+    }
+    uint64_t f = archIrqSave();
+    icrWaitIdle();
+    lapicWrite(LAPIC_REG_ICR_HI, apicId << 24);
+    lapicWrite(LAPIC_REG_ICR_LO, icrLo); /* the low write sends */
+    icrWaitIdle();
+    archIrqRestore(f);
+}
+
 static bool vendorIsIntel(void) {
     uint32_t r[4];
     archCpuid(0, 0, r);
@@ -126,7 +143,10 @@ static uint32_t madtUidFor(const AcpiMadtInfo *madt, uint32_t id) {
     return ACPI_LAPIC_NMI_ALL;
 }
 
-void lapicInit(const AcpiMadtInfo *madt) {
+/* One CPU's local APIC bring-up. `bsp` is the boot CPU: it chooses the mode and maps the xAPIC
+ * window, and it alone logs; an AP follows the BSP's mode (x2APIC on every CPU or none) and stays
+ * quiet unless something is wrong (D-194). */
+static void lapicInitCpu(const AcpiMadtInfo *madt, bool bsp) {
     uint32_t r[4];
     archCpuid(1, 0, r);
     bool x2Supported = (r[2] >> 21) & 1u;
@@ -149,19 +169,29 @@ void lapicInit(const AcpiMadtInfo *madt) {
     if (((r[3] >> 9) & 1u) == 0) {
         panic("lapic: no usable local APIC (CPUID.1:EDX[9]=0)");
     }
-    if ((base & APIC_BASE_BSP) == 0) {
+    if (bsp && (base & APIC_BASE_BSP) == 0) {
         klogWrite(KLOG_WARN, "lapic", "the boot CPU's IA32_APIC_BASE.BSP bit is clear");
     }
 
     /* SDM Vol 3A §10.12.5: never go from x2APIC back to xAPIC (that needs a pass through the
      * disabled state, which resets the APIC), and never go from disabled straight to x2APIC (#GP):
      * EN is already set here. */
-    if ((base & APIC_BASE_EXTD) != 0) {
-        x2apic = true;
-    } else if (x2Supported) {
+    if (bsp) {
+        if ((base & APIC_BASE_EXTD) != 0) {
+            x2apic = true;
+        } else if (x2Supported) {
+            archWrmsr(MSR_IA32_APIC_BASE, base | APIC_BASE_EN | APIC_BASE_EXTD);
+            base = archRdmsr(MSR_IA32_APIC_BASE);
+            x2apic = true;
+        }
+    } else if (x2apic && (base & APIC_BASE_EXTD) == 0) {
+        if (!x2Supported) {
+            panic("lapic: an AP lacks x2APIC but the BSP runs it");
+        }
         archWrmsr(MSR_IA32_APIC_BASE, base | APIC_BASE_EN | APIC_BASE_EXTD);
         base = archRdmsr(MSR_IA32_APIC_BASE);
-        x2apic = true;
+    } else if (!x2apic && (base & APIC_BASE_EXTD) != 0) {
+        panic("lapic: an AP is in x2APIC mode but the BSP is not");
     }
     if (!x2apic && !mapped) {
         volatile void *va;
@@ -173,7 +203,7 @@ void lapicInit(const AcpiMadtInfo *madt) {
         mmio = va;
         mapped = true;
     }
-    if (madt != NULL && madt->lapicAddress != (base & APIC_BASE_ADDR)) {
+    if (bsp && madt != NULL && madt->lapicAddress != (base & APIC_BASE_ADDR)) {
         klogWrite(
             KLOG_WARN, "lapic", "MADT local APIC address 0x%llx differs from the MSR's 0x%llx",
             (unsigned long long)madt->lapicAddress, (unsigned long long)(base & APIC_BASE_ADDR));
@@ -220,14 +250,14 @@ void lapicInit(const AcpiMadtInfo *madt) {
         lapicEoi();
         drained++;
     }
-    if (drained != 0) {
+    if (drained != 0 && bsp) {
         klogWrite(KLOG_WARN, "lapic", "firmware left %u vectors in service; retired", drained);
     }
     uint32_t pending = 0;
     for (uint32_t i = 0; i < 8; i++) {
         pending += (uint32_t)__builtin_popcount(lapicRead(LAPIC_REG_IRR + 0x10u * i));
     }
-    if (pending != 0) {
+    if (pending != 0 && bsp) {
         klogWrite(KLOG_WARN, "lapic",
                   "%u vectors pending at init; they deliver, unhandled, once IF=1", pending);
     }
@@ -248,15 +278,27 @@ void lapicInit(const AcpiMadtInfo *madt) {
                 v |= 1u << 13; /* active low */
             }
             lapicWrite(n->lint == 0 ? LAPIC_REG_LINT0 : LAPIC_REG_LINT1, v);
-            klogWrite(KLOG_INFO, "lapic", "LINT%u = NMI (MADT flags=0x%x)", (unsigned)n->lint,
-                      (unsigned)n->flags);
+            if (bsp) {
+                klogWrite(KLOG_INFO, "lapic", "LINT%u = NMI (MADT flags=0x%x)", (unsigned)n->lint,
+                          (unsigned)n->flags);
+            }
         }
     }
 
     if (id != archCpuApicId()) {
         klogWrite(KLOG_WARN, "lapic", "APIC id %u differs from CPUID's %u", id, archCpuApicId());
     }
-    klogWrite(KLOG_INFO, "lapic", "mode=%s id=%u version=0x%02x maxlvt=%u base=0x%llx",
-              x2apic ? "x2apic" : "xapic", id, ver & 0xFFu, maxLvt,
-              (unsigned long long)(base & APIC_BASE_ADDR));
+    if (bsp) {
+        klogWrite(KLOG_INFO, "lapic", "mode=%s id=%u version=0x%02x maxlvt=%u base=0x%llx",
+                  x2apic ? "x2apic" : "xapic", id, ver & 0xFFu, maxLvt,
+                  (unsigned long long)(base & APIC_BASE_ADDR));
+    }
+}
+
+void lapicInit(const AcpiMadtInfo *madt) {
+    lapicInitCpu(madt, true);
+}
+
+void lapicInitAp(const AcpiMadtInfo *madt) {
+    lapicInitCpu(madt, false);
 }

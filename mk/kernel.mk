@@ -70,6 +70,20 @@ $(KERNEL_BUILD)/%.o: %.c $(BRANDING_HDR)
 	$(KERNEL_CC) $(KERNEL_CFLAGS) $(KERNEL_UBSAN_FLAGS) -c -o $@ $<
 -include $(KERNEL_C_OBJECTS:.o=.d)
 
+# The AP startup trampoline (D-192) is a flat binary, assembled apart from the kernel's ELF objects
+# (it lives in kernel/arch/x86_64/trampoline/, which KERNEL_ASM_SOURCES' wildcard does not reach)
+# and embedded into .rodata by ap-blob.asm through incbin.
+AP_TRAMP_DIR := kernel/arch/x86_64/trampoline
+AP_TRAMP_BIN := $(KERNEL_BUILD)/ap-trampoline.bin
+
+$(AP_TRAMP_BIN): $(AP_TRAMP_DIR)/ap-trampoline.asm $(AP_TRAMP_DIR)/ap-tramp.inc
+	@mkdir -p $(dir $@)
+	$(KERNEL_AS) -f bin -I $(AP_TRAMP_DIR)/ -o $@ $<
+
+$(KERNEL_BUILD)/kernel/arch/x86_64/ap-blob.o: kernel/arch/x86_64/ap-blob.asm $(AP_TRAMP_BIN)
+	@mkdir -p $(dir $@)
+	$(KERNEL_AS) -f elf64 -g -F dwarf -I $(KERNEL_BUILD)/ -o $@ $<
+
 $(KERNEL_BUILD)/%.o: %.asm
 	@mkdir -p $(dir $@)
 	$(KERNEL_AS) -f elf64 -g -F dwarf -o $@ $<

@@ -11,4 +11,10 @@
  * privileged CPU state); never called again after the one BSP call. */
 void archCpuInitBsp(void);
 
+/* The AP's equivalent (D-190): builds its GDT/TSS inside `cl->arch` (whose stack and IST ranges the
+ * BSP filled in beforehand), loads them with LTR, then loads the shared IDT. Runs on the AP, IF=0,
+ * with IA32_GS_BASE already pointing at `cl`. Not IRQ-safe; boot-time-only, once per CPU. */
+struct CpuLocal;
+void archCpuInitAp(struct CpuLocal *cl);
+
 #endif

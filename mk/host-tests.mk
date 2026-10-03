@@ -57,6 +57,7 @@ HOST_TEST_EXTRA_SRCS := tools/mkimage/gpt.c tools/mkimage/crc32.c tools/mkimage/
                         $(wildcard libs/crypto/*.c) kernel/core/random-core.c \
                         kernel/drivers/acpi/acpi-tables.c kernel/drivers/acpi/acpi-dump.c \
                         kernel/arch/x86_64/irq-core.c kernel/core/time-core.c kernel/sync/lockdep-core.c \
+                        kernel/core/cmdline.c kernel/core/smp-core.c \
                         $(filter-out tools/acpiextract/main.c,$(wildcard tools/acpiextract/*.c))
 HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/biosboot.h \
                         $(wildcard boot/uefi/include/efi/*.h) \
@@ -70,6 +71,8 @@ HOST_TEST_EXTRA_HDRS := tools/mkimage/gpt.h tools/mkimage/crc32.h tools/mkimage/
                         kernel/include/random-core.h $(wildcard kernel/include/acpi*.h) \
                         kernel/arch/x86_64/include/irq-core.h kernel/include/time-core.h \
                         kernel/include/atomic.h kernel/include/spinlock-raw.h kernel/include/lockdep-core.h \
+                        kernel/include/smp.h kernel/include/cmdline.h kernel/include/cpu-local.h \
+                        kernel/include/cpu-sync.h \
                         $(wildcard tools/acpiextract/*.h)
 HOST_TEST_EXTRA_INCLUDES := -Itools/mkimage -Iboot/uefi -Iboot/common/include -Iboot/common \
                             -Itools/imgdiff -Ikernel/drivers/fbcon -Ikernel/include -Itools/ksyms \

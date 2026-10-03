@@ -68,6 +68,7 @@ bootGdt:
     dq 0                    ; null descriptor
     dq 0x00AF9B000000FFFF   ; code64, base=0, limit=max, present, DPL0, L=1, Accessed
     dq 0x00CF93000000FFFF   ; data, base=0, limit=max, present, DPL0, D/B=1, Accessed
+global bootGdtr
 bootGdtr:
     dw 3 * 8 - 1
     dq bootGdt

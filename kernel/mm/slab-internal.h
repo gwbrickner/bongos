@@ -16,9 +16,10 @@
 #define SLAB_BUFCTL_BUSY 0xFFFEu /* held by a caller */
 /* Magazine-cached states (D-199): which CPU's magazine holds an object is not recorded, so a
  * double free is detected from the bufctl state alone on any CPU. */
-#define SLAB_BUFCTL_MAG     0xFFFDu /* parked in some CPU's magazine */
-#define SLAB_BUFCTL_FREEING 0xFFFCu /* claimed by a slabFree in progress (not yet in a magazine)   \
-                                     */
+#define SLAB_BUFCTL_MAG 0xFFFDu /* parked in some CPU's magazine */
+#define SLAB_BUFCTL_FREEING                                                                        \
+    0xFFFCu /* claimed by a slabFree in progress (not yet in a magazine)                           \
+             */
 #define SLAB_MAX_OBJECTS    1024u
 #define SLAB_MAX_ORDER      3u /* a slab is at most 4096 << 3 = 32 KiB */
 #define SLAB_NAME_MAX       24

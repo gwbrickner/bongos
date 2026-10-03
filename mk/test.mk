@@ -152,7 +152,7 @@ LOCK_REQUIRED_KTESTS := spin_trylock_semantics spin_irqsave_restores_if preempt_
                         spin_unlock_irqrestore_unlocked_caught spin_assert_held \
                         preempt_in_atomic_irqs_off klog_exception_in_section_does_not_hang
 # M3.5 (SMP bring-up): grows as the sub-steps land.
-SMP_REQUIRED_KTESTS := smp_cpulocal_bsp
+SMP_REQUIRED_KTESTS := smp_cpulocal_bsp smp_online_matches_madt
 LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_unsafe_in_irq_reported \
                            lockdep_irq_safe_then_irqs_on_reported lockdep_class_recursion_reported \
                            lockdep_trylock_records_no_edge lockdep_out_of_order_release \
@@ -292,6 +292,20 @@ _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	            status=1; \
 	        fi; \
 	    done; \
+	    if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxE "\[info\] smp: $$cpus cpus online"; then \
+	        echo "make test: $$log does not contain '[info] smp: $$cpus cpus online' (ROADMAP M3.5: every vCPU must come up)"; \
+	        status=1; \
+	    fi; \
+	    nap=$$(tr -d '\r' < "$$log" 2>/dev/null | grep -cE '^\[info\] smp: cpu [0-9]+ apic-id=[0-9]+ online$$'); \
+	    if [ "$$nap" != "$$((cpus - 1))" ]; then \
+	        echo "make test: $$log has $$nap 'smp: cpu N apic-id=A online' lines, expected $$((cpus - 1)) (ROADMAP M3.5)"; \
+	        status=1; \
+	    fi; \
+	    nsw=$$(tr -d '\r' < "$$log" 2>/dev/null | grep -cE '^\[(warn|error)\] smp:'); \
+	    if [ "$$nsw" != 0 ]; then \
+	        echo "make test: $$log has $$nsw smp warn/error lines (ROADMAP M3.5: AP bring-up must be clean)"; \
+	        status=1; \
+	    fi; \
 	    for t in $(LOCK_REQUIRED_KTESTS); do \
 	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
 	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M3.4 Done-when guarantee not met)"; \

@@ -398,6 +398,10 @@ void trapIdtInit(void) {
         idtGateSet(idt, v, trapStubTable[v], ist, attr);
     }
 
+    trapIdtLoad();
+}
+
+void trapIdtLoad(void) {
     X86DescriptorPtr idtr = {
         .limit = sizeof(idt) - 1,
         .base = (uint64_t)(uintptr_t)idt,

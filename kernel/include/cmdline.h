@@ -6,11 +6,20 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
-/* Splits `cmdline` on spaces/tabs and copies the value of the *last* "ktest=" token into `out`
+/* Splits `cmdline` on spaces/tabs and copies the value of the *last* "<key>=" token into `out`
  * (capacity `outCap`, truncated if needed); returns false (leaving `out` untouched) if no such
- * token exists. No locks, boot-time only; pure. */
+ * token exists. `key` is given without the '='. No locks, boot-time only; pure. */
+bool cmdlineFindValue(const char *cmdline, const char *key, char *out, size_t outCap);
+
+/* cmdlineFindValue(cmdline, "ktest", ...). */
 bool cmdlineFindKtest(const char *cmdline, char *out, size_t outCap);
+
+/* Parses `s` as a plain decimal number (digits only, no sign or whitespace, at most UINT32_MAX)
+ * into `*out`; false (leaving `out` untouched) for anything else, including an empty string. No
+ * locks; pure. */
+bool cmdlineParseUint(const char *s, uint32_t *out);
 
 /* Whole-string glob match: '*' in `pattern` matches any substring (including empty), every other
  * character must match `name` literally. The match is anchored at both ends (the pattern must

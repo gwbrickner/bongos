@@ -9,6 +9,7 @@
 #include "ktest.h"
 #include "panic.h"
 #include "random.h"
+#include "smp.h"
 #include "sections.h"
 #include "stack-protector.h"
 #include "timekeeping.h"
@@ -248,6 +249,7 @@ __attribute__((no_stack_protector)) _Noreturn void kernelMain(const BootInfo *bi
     archEnableInterrupts();
     klogWrite(KLOG_INFO, "irq", "interrupts enabled");
     timeInit(); /* M3.3, D-176..D-180: TSC/LAPIC-timer calibration, RTC wall clock */
+    smpInit();  /* M3.5, D-190..D-194: start the APs (INIT-SIPI-SIPI), each to its idle loop */
 
     pmmPrintMeminfo(); /* the post-reclaim totals (both reclaims); panics if the check fails */
 

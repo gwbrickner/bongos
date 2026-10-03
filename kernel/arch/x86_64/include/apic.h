@@ -65,6 +65,17 @@ void pic8259EoiMaster(void); /* no locks; IRQ-safe; may not sleep */
  * made once, by the first call). */
 void lapicInit(const AcpiMadtInfo *madt);
 
+/* An AP's local APIC bring-up (D-194): the same register setup as lapicInit() on the calling CPU,
+ * following the BSP's mode and mapping, quiet unless something is wrong. The BSP must have run
+ * lapicInit() already. Panics if the AP cannot match the BSP's mode. Boot-time, IF=0, on the AP. */
+void lapicInitAp(const AcpiMadtInfo *madt);
+
+/* Sends an IPI to the CPU whose APIC ID is `apicId` (physical destination): `icrLo` is the ICR's
+ * low dword (delivery mode, vector, level; e.g. 0x4500 INIT, 0x4600|page SIPI, 0x4000|vector
+ * fixed). x2APIC: an mfence then one WRMSR; xAPIC: the two-register sequence in an IRQ-disable
+ * section with bounded waits on the delivery status. IRQ-safe; never sleeps. */
+void lapicSendIpi(uint32_t apicId, uint32_t icrLo);
+
 /* True once lapicInit() chose x2APIC mode. No locks; IRQ-safe; may not sleep. */
 bool lapicIsX2apic(void);
 /* This CPU's APIC ID (32-bit in x2APIC mode, 8-bit in xAPIC mode). No locks, IRQ-safe. */

@@ -211,30 +211,32 @@ static void adoptPageArraySubtree(uint64_t pdptPhys) {
     }
 }
 
-void archPatInit(void) {
+void archPatProgramThisCpu(void) {
     uint32_t regs[4];
     archCpuid(1, 0, regs);
     if (!(regs[3] & (1u << 16))) { /* CPUID.01H:EDX[16] = PAT */
-        panic("archPatInit: CPU does not report PAT support");
+        panic("archPatProgramThisCpu: CPU does not report PAT support");
     }
 
     /* SDM Vol 3A §11.11.8/§11.12.4's MP-safe MSR-write procedure: disable/flush caching around the
      * WRMSR so no stale line survives under the old PAT interpretation. Both preconditions this
      * relies on are asserted, not just assumed: IF must already be 0 (archPatInit runs before
      * irqInit() enables interrupts, so a set IF here would mean that contract broke silently --
-     * panic rather than mask it by disabling interrupts anyway) and this is the BSP alone (SMP is
-     * M3.5, so there's no other CPU to race). CR4.PGE toggling below is what performs the required
-     * TLB flush around the WRMSR (SDM step 5) -- that only works if PGE was actually 1 to begin
-     * with, which ARCHITECTURE §5.4 guarantees the loader always leaves set; asserted rather than
-     * trusted silently, the same way. */
+     * panic rather than mask it by disabling interrupts anyway) and each CPU runs this for itself
+     * (the BSP from archPatInit(), an AP from apMain(), before any klog because the framebuffer is
+     * a WC mapping). CR4.PGE toggling below is what performs the required TLB flush around the
+     * WRMSR (SDM step 5) -- that only works if PGE was actually 1 to begin with, which ARCHITECTURE
+     * §5.4 guarantees the loader always leaves set; asserted rather than trusted silently, the same
+     * way. */
     uint64_t rflags = archIrqSave(); /* restored below -- this is an assertion, not a lock */
     if (rflags & (1ULL << 9)) {
-        panic("archPatInit: interrupts are enabled (IF=1), violating the boot-time contract");
+        panic("archPatProgramThisCpu: interrupts are enabled (IF=1), violating the boot-time "
+              "contract");
     }
     uint64_t cr0 = archReadCr0();
     uint64_t cr4 = archReadCr4();
     if (!(cr4 & X86_CR4_PGE_BIT)) {
-        panic("archPatInit: CR4.PGE is not set (ARCHITECTURE §5.4 loader contract)");
+        panic("archPatProgramThisCpu: CR4.PGE is not set (ARCHITECTURE §5.4 loader contract)");
     }
     archWriteCr0((cr0 | X86_CR0_CD_BIT) & ~X86_CR0_NW_BIT);
     archWbinvd();
@@ -246,12 +248,16 @@ void archPatInit(void) {
 
     uint64_t readback = archRdmsr(X86_MSR_IA32_PAT);
     if (readback != X86_PAT_VALUE) {
-        panic("archPatInit: IA32_PAT readback mismatch (wrote 0x%llx, read 0x%llx)",
+        panic("archPatProgramThisCpu: IA32_PAT readback mismatch (wrote 0x%llx, read 0x%llx)",
               (unsigned long long)X86_PAT_VALUE, (unsigned long long)readback);
     }
+    archIrqRestore(rflags);
+}
+
+void archPatInit(void) {
+    archPatProgramThisCpu();
     klogWrite(KLOG_INFO, "vmm", "IA32_PAT=0x%016llx (WB/WC/UC-/UC)",
               (unsigned long long)X86_PAT_VALUE);
-    archIrqRestore(rflags);
 }
 
 void archPagingBuildKernel(const BootInfo *bi, const BootMemRegion *map, uint32_t mapCount) {

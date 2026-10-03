@@ -13,6 +13,10 @@
  * why IDT setup isn't part of archCpuInitBsp's own GDT/TSS step. No locks, boot-time-only. */
 void trapIdtInit(void);
 
+/* Loads the (shared, already built) IDT on the calling CPU: what an AP does after its own LTR
+ * (D-190). Same ordering rule as trapIdtInit(). No locks, boot-time-only. */
+void trapIdtLoad(void);
+
 /* trap-entry.asm's trapCommon calls this once it has built a TrapFrame on the stack. Never called
  * from anywhere else, so no header outside this arch-internal one declares it. No locks; called
  * with IF=0 (interrupt gates clear IF, and a fault inside an IRQ handler is fatal, so this never
