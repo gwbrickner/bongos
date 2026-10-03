@@ -1,6 +1,6 @@
 /* The physical memory manager (ARCHITECTURE §6.2, D-079..D-082, ROADMAP M2.2): a bump allocator
  * used only during pmmInit(), backing a buddy allocator (orders 0-10, DMA32/NORMAL zones) with a
- * BSP-only per-CPU page cache in front of it for order-0 allocations. `kernel/mm/pmm-internal.h`
+ * per-CPU page cache in front of it for order-0 allocations. `kernel/mm/pmm-internal.h`
  * has the zone/cache structs and the bump/buddy internals; this header is the public surface every
  * other subsystem uses. */
 #ifndef KERNEL_PMM_H
@@ -39,7 +39,7 @@ typedef struct {
     uint64_t usablePages;  /* BootInfo USABLE total */
     uint64_t managedPages; /* handed to the buddy allocator via pmmAddFreeRange */
     uint64_t freePages;    /* managedPages currently free: buddy free lists + every cache */
-    uint64_t cachedPages;  /* subset of freePages sitting in the (BSP) per-CPU cache */
+    uint64_t cachedPages;  /* subset of freePages sitting in the per-CPU caches (every CPU's) */
     uint64_t allocatedPages;
     uint64_t earlyPages;         /* consumed by the bump allocator (Page array + its page tables) */
     uint64_t pageArrayPages;     /* subset of earlyPages: the Page array itself */
@@ -107,12 +107,14 @@ void pmmDrainLocalCache(void);
  * can be drained from here; D-199). Locks: pmmLock. IRQ-safe: yes. May sleep: no. */
 void pmmDrainAllCaches(void);
 
-/* Gives CPU `cl` its per-CPU page cache (`cl->pmm`) and registers it for the stats and
- * drain-all paths. Called by the BSP for an AP before the AP starts (D-199); needs kmalloc, so only
- * after slabInit(). STATUS_ERR_INVALID: `cl` NULL or already attached. STATUS_ERR_NO_MEMORY.
- * Locks: pmmLock (not held across the allocation). IRQ-safe: no (allocates). May sleep: no. */
+/* Gives CPU `cl` its per-CPU page cache (`cl->pmm`) in the caller-provided `storage` (zeroed or
+ * not, at least pmmCpuBlobSize() bytes, suitably aligned, kept for the life of the system) and
+ * registers it for the stats and drain-all paths (D-199). The caller allocates (kmalloc) because
+ * the pmm never calls the allocators above it. STATUS_ERR_INVALID: `cl`/`storage` NULL or `cl`
+ * already attached. STATUS_ERR_NO_MEMORY: more than CPU_MAX CPUs. Locks: pmmLock. IRQ-safe: yes. */
 struct CpuLocal;
-Status pmmCpuAttach(struct CpuLocal *cl);
+size_t pmmCpuBlobSize(void);
+Status pmmCpuAttach(struct CpuLocal *cl, void *storage);
 
 /* True if `pfn` has a Page entry at all (not necessarily free or even RAM -- see page.h). No
  * locks (span table is immutable after pmmInit); pure. */

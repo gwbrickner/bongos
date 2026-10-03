@@ -1,6 +1,6 @@
 /* The slab allocator and kmalloc (ARCHITECTURE §6.2 item 5, D-092..D-096, ROADMAP M2.4): named
  * object caches with a fixed size/alignment and optional constructor/destructor, fronted by one
- * magazine per cache (today: the BSP's only, D-094 -- M3.5 makes it real per-CPU state). kmalloc
+ * magazine per cache and CPU (D-094, D-199). kmalloc
  * is 12 fixed size classes (16..8192 bytes) built on top of the same machinery. Anything larger
  * goes to vmalloc.h. Never called from kernel/mm/pmm.c or vmm.c (kernel/mm/README.md's
  * no-recursion rule) -- slabInit() runs after both are already up. */
@@ -74,12 +74,15 @@ void slabCacheDestroy(SlabCache *cache);
 void *slabAlloc(SlabCache *cache, KmallocFlags flags);
 void slabFree(SlabCache *cache, void *obj);
 
-/* Gives CPU `cl` its per-CPU magazines (`cl->slab`, one per cache slot, vmalloc'd) and registers
- * them so cache create/shrink/destroy/stats cover that CPU (D-199). Called by the BSP for an AP
- * before the AP starts, after vmallocInit(). STATUS_ERR_INVALID: `cl` NULL or already attached.
- * STATUS_ERR_NO_MEMORY. Locks: slabLock (not held across the allocation). IRQ-safe: no. */
+/* Gives CPU `cl` its per-CPU magazines (`cl->slab`, one per cache slot) in the caller-provided
+ * `storage` (at least slabCpuBlobSize() bytes, larger than KMALLOC_MAX_SIZE: use vmalloc; kept for
+ * the life of the system) and registers it so cache create/shrink/destroy/stats cover that CPU
+ * (D-199). Called by the BSP for an AP before the AP starts. STATUS_ERR_INVALID: `cl`/`storage` NULL
+ * or `cl` already attached. STATUS_ERR_NO_MEMORY: more than CPU_MAX CPUs. Locks: slabLock.
+ * IRQ-safe: yes. */
 struct CpuLocal;
-Status slabCpuAttach(struct CpuLocal *cl);
+size_t slabCpuBlobSize(void);
+Status slabCpuAttach(struct CpuLocal *cl, void *storage);
 
 /* Drains `cache`'s magazines (every CPU's, D-199) back to its slabs and releases every slab left
  * fully empty. `slabShrinkAll()` does this for every cache (kmalloc's included) -- ktest/diagnostic

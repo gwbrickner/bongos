@@ -2,10 +2,10 @@
  * allocator, handler registration, and IOAPIC routing of legacy ISA IRQs and GSIs. The hardware
  * (8259, local APIC, IOAPIC) lives under kernel/arch/x86_64/.
  *
- * Handler rules (D-173): a handler runs with IF=0 on the interrupted context's stack, is never
- * nested, must not sleep, must not call the allocators (pmm, slab, kmalloc, vmm, vmalloc) until
- * M3.5 fixes what the M3.4 spinlocks leave open (D-188: D-085(1), the slab's two-section free), and
- * must not call archTrapCatch() or ktestFail(). A level-triggered
+ * Handler rules (D-173, D-200): a handler runs with IF=0 on the interrupted context's stack, is
+ * never nested, must not sleep, may use the pmm, slab and kmalloc but must not call vmalloc/vfree or
+ * the vmm map/unmap calls (they can wait for a TLB shootdown, D-196), and must not call
+ * archTrapCatch() or ktestFail(). A level-triggered
  * source must be deasserted before the handler returns, or it fires again straight after the EOI.
  * The kernel sends the EOI itself, after the handler returns. */
 #ifndef KERNEL_IRQ_H
@@ -69,8 +69,8 @@ Status irqMaskGsi(uint32_t gsi); /* STATUS_ERR_NOT_FOUND if `gsi` is not routed 
  * pins are never polled. */
 Status irqUnrouteGsi(uint32_t gsi);
 
-/* 1 while an interrupt handler is running on this CPU, else 0 (BSP-global until M3.5 moves it to
- * the per-CPU area). No locks; IRQ-safe. */
+/* 1 while an interrupt handler is running on this CPU, else 0 (per CPU, in its CpuLocal, since
+ * M3.5). No locks; IRQ-safe. */
 uint32_t irqDepth(void);
 
 typedef struct {

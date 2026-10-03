@@ -4,11 +4,11 @@
 #ifndef KERNEL_INCLUDE_ARCH_CPU_INIT_H
 #define KERNEL_INCLUDE_ARCH_CPU_INIT_H
 
-/* Builds and loads the BSP's GDT/TSS (and, once trap handling exists, the IDT). Must run before
+/* Builds and loads the BSP's GDT/TSS (in `cpuLocalBsp.arch`, D-190) and the IDT. Must run before
  * anything that could fault, and before any other protected (`-fstack-protector-strong`) frame
- * outlives it. Panics if called more than once (D-072: BSP-only through M3.4 -- SMP bring-up in
- * M3.5 gives each AP its own tables instead). No locks, boot-time-only, not IRQ-safe (changes
- * privileged CPU state); never called again after the one BSP call. */
+ * outlives it. Panics if called more than once (an AP uses archCpuInitAp() below instead). No
+ * locks, boot-time-only, not IRQ-safe (changes privileged CPU state); never called again after the
+ * one BSP call. */
 void archCpuInitBsp(void);
 
 /* The AP's equivalent (D-190): builds its GDT/TSS inside `cl->arch` (whose stack and IST ranges the

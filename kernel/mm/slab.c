@@ -10,7 +10,6 @@
 #include "panic.h"
 #include "pmm.h"
 #include "spinlock.h"
-#include "vmalloc.h"
 #include "vmm.h"
 
 #include <arch/cpu.h>
@@ -645,23 +644,25 @@ void slabCacheGetStats(const SlabCache *cache, SlabCacheStats *out) {
     slabUnlock(flags);
 }
 
-Status slabCpuAttach(CpuLocal *cl) {
-    if (cl == NULL || cl->slab != NULL) {
+size_t slabCpuBlobSize(void) {
+    return sizeof(SlabCpu);
+}
+
+Status slabCpuAttach(CpuLocal *cl, void *storage) {
+    if (cl == NULL || storage == NULL || cl->slab != NULL) {
         return STATUS_ERR_INVALID;
     }
-    SlabCpu *c = vmalloc(sizeof(*c), VMALLOC_ZERO);
-    if (c == NULL) {
-        return STATUS_ERR_NO_MEMORY;
-    }
+    SlabCpu *c = storage;
     uint64_t flags = slabLock();
     if (slabCpuCount >= CPU_MAX) {
         slabUnlock(flags);
-        vfree(c);
         return STATUS_ERR_NO_MEMORY;
     }
     for (uint32_t i = 0; i < SLAB_MAX_CACHES; i++) {
         if (slabCacheInUse[i]) {
             slabMagInit(&c->mags[i], &slabCaches[i]);
+        } else {
+            c->mags[i] = (SlabMagazine){0};
         }
     }
     slabCpus[slabCpuCount++] = c;

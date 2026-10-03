@@ -7,7 +7,7 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 
 ## Next step
 **M3.5 SMP bring-up is in progress** (log `docs/logs/M3.5.md`) on the session branch `claude/optimistic-hawking-qw4tzr`.
-M3.4 merged (PR #22). Architect design is in the M3.5 log (plan of record). Sub-step 1 (CpuLocal on the BSP) is done. Next: sub-step 2 (per-CPU pmm/slab/timer blobs, D-085(1), slab bufctl states), see the log's Next step.
+M3.4 merged (PR #22). Architect design is in the M3.5 log (plan of record). Sub-steps 1-8 are implemented (AP bring-up, IPIs, TLB shootdown, per-CPU caches, ktests, D-190..D-203). An uncompiled refactor (pmm/slab attach take caller storage) is committed as WIP. Next: build it, run the ktests on 1 and 4 CPUs, then `make test`, `make test-full`, release profile, `make analyze` and the finish protocol; see the log's Next step.
 
 ## Current milestone
 M3.5 SMP bring-up (`needs-owner`).

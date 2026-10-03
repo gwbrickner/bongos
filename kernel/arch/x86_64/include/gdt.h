@@ -1,5 +1,5 @@
-/* x86_64 GDT selectors and the shared pseudo-descriptor layout (ARCHITECTURE §7.1, D-072). BSP-
- * only through M3.4 (SMP bring-up is M3.5): one static table, not one per CPU yet. */
+/* x86_64 GDT selectors and the shared pseudo-descriptor layout (ARCHITECTURE §7.1, D-072). One GDT
+ * per CPU since M3.5, inside its CpuLocal (D-190); the selector layout is the same on every CPU. */
 #ifndef KERNEL_ARCH_X86_64_GDT_H
 #define KERNEL_ARCH_X86_64_GDT_H
 

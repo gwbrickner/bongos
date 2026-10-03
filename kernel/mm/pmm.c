@@ -3,7 +3,6 @@
  * public alloc/free/stats API on top of per-CPU page caches (D-199). */
 #include "arch/early-map.h"
 #include "cpu-local.h"
-#include "kmalloc.h"
 #include "bootinfo-validate.h" /* bootMemTypeName */
 #include "klog.h"
 #include "panic.h"
@@ -324,8 +323,12 @@ void pmmDrainAllCaches(void) {
     pmmUnlock(flags);
 }
 
-Status pmmCpuAttach(CpuLocal *cl) {
-    if (cl == NULL || cl->pmm != NULL) {
+size_t pmmCpuBlobSize(void) {
+    return sizeof(PmmCpu);
+}
+
+Status pmmCpuAttach(CpuLocal *cl, void *storage) {
+    if (cl == NULL || storage == NULL || cl->pmm != NULL) {
         return STATUS_ERR_INVALID;
     }
     uint64_t flags = pmmLock();
@@ -333,20 +336,8 @@ Status pmmCpuAttach(CpuLocal *cl) {
         pmmUnlock(flags);
         return STATUS_ERR_NO_MEMORY;
     }
-    pmmUnlock(flags);
-    /* The blob comes from kmalloc (the slab owns pmm pages, so this nests pmm only through the
-     * slab's own grow path, never under pmmLock). */
-    PmmCpu *c = kmalloc(sizeof(*c), KMALLOC_ZERO);
-    if (c == NULL) {
-        return STATUS_ERR_NO_MEMORY;
-    }
+    PmmCpu *c = storage;
     pmmCpuInit(c);
-    flags = pmmLock();
-    if (pmmCpuCount >= CPU_MAX) {
-        pmmUnlock(flags);
-        kfree(c);
-        return STATUS_ERR_NO_MEMORY;
-    }
     pmmCpus[pmmCpuCount++] = c;
     cl->pmm = c;
     pmmUnlock(flags);

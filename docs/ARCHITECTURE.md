@@ -491,8 +491,9 @@ randomized yet (§6.6).
 The PML4 entries 256-511 (the kernel half) are allocated at boot and shared by every address
 space, so kernel mappings never need to be synced between them. M2.3 (D-086) allocates all 256 of
 them eagerly, from the pmm, as part of building the kernel's own PML4, and never writes any of
-them again afterward -- every later address space (M4+) and the SMP AP trampoline PML4 (M3.5)
-copies these 256 entries by value rather than syncing individual mappings into them.
+them again afterward -- every later address space (M4+) and the SMP AP trampoline PML4 (M3.5,
+D-192: rebuilt per AP, after that AP's stacks exist) copy these 256 entries by value rather than
+syncing individual mappings into them.
 
 ### 6.2 Physical memory
 1. **`Page` array (M2.2, D-079):** one 64-byte `Page` per managed physical frame (state/order/
@@ -511,17 +512,20 @@ copies these 256 entries by value rather than syncing individual mappings into t
    fixed by address) and `NORMAL`, with block state living entirely in the Page array (no separate
    bitmap). `pmmAddFreeRange()` is the only way memory enters a zone -- used for BootInfo's USABLE
    ranges at boot, and reused as-is for `LOADER_RECLAIM` (M2.3), `ACPI_RECLAIM` (M3.1), and
-   `INITRD` (M5.5). A BSP-only per-CPU page cache (order 0 only, one free list per zone) fronts
-   every order-0 request through a single accessor M3.5 replaces with real per-CPU state.
+   `INITRD` (M5.5). A per-CPU page cache (order 0 only, one free list per zone; a `PmmCpu` blob per
+   CPU behind `cpuLocal()->pmm`, M3.5, D-199) fronts every order-0 request. The caches are still
+   protected by the one `pmmLock` (no lockless fast path), so stats and `pmmDrainAllCaches()` can
+   reach every CPU's.
 4. **Misuse detection (M2.2, D-082):** `pmmFreePages()` validates every call against the Page
-   state machine *before* mutating anything -- a double free, a wrong order, or freeing an
+   state machine (under `pmmLock` since M3.5, D-085(1)/D-199, so a racing double free is seen by
+   exactly one caller) *before* mutating anything -- a double free, a wrong order, or freeing an
    interior/reserved page panics via `panicBug()` (always on, not just debug builds). `KERNEL_DEBUG`
    builds (§3) additionally poison a freed block's content and verify it on the next allocation,
    catching a write-after-free.
 5. **Slab allocator, kmalloc, vmalloc (M2.4, D-092..D-098):** named object caches
    (`slabCacheCreate`/`slabAlloc`/`slabFree`, optional constructor/destructor) with one magazine
-   per cache (today: BSP-only, same honest single-CPU pattern as the pmm's own page cache; M3.5
-   makes it real per-CPU state). An out-of-band `bufctl` free list sits after each slab's header,
+   per cache and CPU (a `SlabCpu` blob per CPU behind `cpuLocal()->slab`, D-199; the bufctl states
+   `MAG`/`FREEING` detect a double free whichever CPU's magazine holds the object). An out-of-band `bufctl` free list sits after each slab's header,
    never inside the objects themselves, so constructed state and write-after-free poison never
    fight over the same bytes. `kmalloc`/`kfree` are 12 fixed size classes, 16 to 8192 bytes,
    16-byte aligned; a custom cache's own `align` is honored exactly. Ownership of a slab's pages
@@ -570,10 +574,14 @@ copies these 256 entries by value rather than syncing individual mappings into t
   memory only through `copyFromUser`, `copyToUser`, and `copyStringFromUser` (STAC/CLAC plus
   an exception fixup table).
 - **PCID:** enabled when present (a later milestone). Without it, switching CR3 does a full flush.
-- **TLB shootdown:** by IPI, with a batched list of invalidations. Kernel threads use lazy TLB.
-  M2.3's `vmmMapKernel`/`vmmUnmapKernel` (D-088) invalidate only the local CPU (`archTlbInvalidate
-  KernelRange()`, one INVLPG per page) -- M3.5 replaces that one function's body with a real
-  shootdown once SMP exists, nothing else in `kernel/mm/vmm.c` changes.
+- **TLB shootdown:** by IPI, one request per call (M3.5, D-196). Kernel threads use lazy TLB.
+  `archUnmapPages` and a rolled-back `archMapPages` do not invalidate; `vmmUnmapKernel` (and a
+  failed `vmmMapKernel`) call `archTlbShootdownKernel()` **after dropping `vmmLock`**, while the
+  caller still owns the KVA range (an IPI-and-wait under an irqsave lock would deadlock against a
+  CPU spinning on it with IRQs off; this supersedes M2.3/D-088's "only the invalidate function
+  changes"). A fresh 0->1 mapping needs no flush. Local flush: `invlpg` up to 32 pages, else a
+  CR4.PGE toggle (`mov cr3` leaves the global kernel entries). `vfree` unmaps in 64-page chunks, one
+  round each, and frees frames only after it.
 - **Kernel virtual area (M2.3, D-088):** `vmmMapKernel`/`vmmUnmapKernel`/`vmmLookupKernel`
   (`kernel/include/vmm.h`) hand out 4 KiB RW/RO, WB/WC mappings within `[VM_KVA_BASE,
   VM_KVA_END)` (§6.1), backed by a pure, host-tested first-fit extent allocator
@@ -668,14 +676,16 @@ does not feed the canary) -- never reseeded afterward.
 ## 7. CPU, SMP, interrupts, time
 
 ### 7.1 Per-CPU data and CPU setup
-- **BSP-only through M3.4 (D-072):** SMP bring-up is M3.5. From M2.1 through M3.4 there is one
-  static `ArchCpuTables` (GDT+TSS) built and loaded for the BSP only; the `CpuLocal`/per-CPU
-  design below is the target M3.5 moves to, not what exists yet. `gdtBuild`/`tssBuild` already
-  take an explicit struct pointer so that move needs no rewrite.
-- **Per-CPU data:** each CPU's GS base points to a `CpuLocal` struct. It holds `self`,
-  `cpuId`, `apicId`, `currentThread`, `idleThread`, `runQueue`, `preemptCount`, `irqDepth`,
-  the TSS, the GDT, scratch space for syscall entry, and stats. The kernel uses `swapgs` on
-  entry from user mode.
+- **Per-CPU data (M3.5, D-190):** each CPU's `IA32_GS_BASE` points to its `CpuLocal`
+  (`kernel/include/cpu-local.h`; `self` at offset 0 so `cpuLocal()` is one `mov %gs:0`). It holds
+  `cpuId` (dense, BSP 0), `apicId`, `CpuSync` (`preemptCount`, `klogHeld`, the validator's held-lock
+  stack), `irqDepth`, the boot stage, `currentThread`/`idleThread`/`runQueue` (NULL until M4),
+  pointers to the pmm/slab/timer blobs, the SMP mailbox and work slot, and `ArchCpuLocal`: the
+  GDT, TSS, kernel stack and IST ranges and the TSC offset. The BSP's is the static `cpuLocalBsp`
+  (`entry.asm` writes its GS base before `kernelMain`); an AP's is allocated by the BSP together
+  with its stacks (D-191). `CPU_MAX` is 64. There is no `swapgs` and no FSGSBASE yet
+  (`IA32_KERNEL_GS_BASE` = 0): the kernel never leaves ring 0 until M5, which adds `swapgs` on
+  entry from user mode, and nothing may reload FS/GS (a null selector zeroes the base on Intel).
 - **CPU features:** CPUID results are stored in a feature bitset. If a required feature is
   missing, boot panics with a clear message naming it.
 - **FPU/SIMD:** saved and restored eagerly on context switch, with XSAVE/XSAVEOPT (or FXSAVE
@@ -693,7 +703,7 @@ does not feed the canary) -- never reseeded afterward.
 - **IDT:** shared by all CPUs, all 256 entries populated (D-074) so a stray vector gets a
   diagnosable #GP/#DF chain instead of a triple fault off a not-present gate. Each CPU gets three
   16 KiB IST stacks, each behind its own unmapped guard page (D-073, superseding D-061's
-  "exactly four `PT_LOAD`s"): IST1 for #DF, IST2 for NMI, IST3 for #MC. Every other vector uses
+  "exactly four `PT_LOAD`s"; an AP's come from `vmalloc`, whose KVA guards give the same protection, D-191): IST1 for #DF, IST2 for NMI, IST3 for #MC. Every other vector uses
   the normal kernel stack. IF is 0 until `irqInit()` has run; `kernelMain` then executes `sti` (D-173, M3.2), so the rest
   of boot and every ktest run with interrupts enabled.
 
@@ -702,9 +712,10 @@ All 256 IDT gates are populated (interrupt gates, DPL0 except vector 3's DPL3); 
 exception (0-31) reports a diagnosable panic rather than triple-faulting (vectors 32-255 follow the
 dispatch policy below). #BP (int3) resumes normally
 (a trap, not a fault: the saved RIP already points past the `int3` byte); every other exception
-panics unless a ktest has armed `archTrapCatch()` for it (§23) -- NMI/#DF/#MC can never be caught
-this way and always panic, since M2.1 has no legitimate source for any of them and CR4.MCE isn't
-set until M3.6.
+panics unless a ktest has armed `archTrapCatch()` on that CPU for it (§23) -- NMI/#DF/#MC can never
+be caught this way and always panic, since M2.1 has no legitimate source for any of them and
+CR4.MCE isn't set until M3.6. (An NMI that arrives while another CPU is already panicking is that
+CPU's stop request: the panic path parks the receiving CPU silently, D-197.)
 
 | Vectors | Use |
 |---|---|
@@ -723,7 +734,9 @@ registered handler runs with IF=0, then the LAPIC EOI is sent. Vector 0xFF (spur
 with no EOI. After the 8259 remap only a spurious IRQ7/15 (vectors 39/47, told apart by the 8259
 in-service register) or a software `int` can reach 32-47; anything else there panics. A vector with
 no handler is counted, logged once, EOI'd, and is not fatal. Handlers are never nested, must not
-sleep, and must not allocate until M3.5 closes what the M3.4 spinlocks leave open (D-188).
+sleep, and may use the pmm, slab and kmalloc (their locks are irqsave, D-200) but not vmalloc or the vmm
+map/unmap calls (they can wait for a TLB shootdown, D-196). The IPI vectors are registered by
+`smpInit()` (D-195).
 `archTrapCatch` refuses inside a handler. `kernelMain` enables interrupts right after `irqInit()`.
 
 ### 7.3 Interrupt controllers
@@ -736,22 +749,38 @@ sleep, and must not allocate until M3.5 closes what the M3.4 spinlocks leave ope
 - **PCIe devices:** use **MSI/MSI-X** by default. Legacy INTx goes through `_PRT` routing.
 - **API (`kernel/include/irq.h`, D-174):** `irqAllocVector`, `irqRegister(vector, handler, ctx)`,
   `irqRouteIsa`/`irqRouteGsi` with `irqUnmaskGsi`/`irqMaskGsi`/`irqUnrouteGsi`, and (later) MSI
-  programming helpers. Device IRQs are spread across CPUs once SMP exists (M3.5).
+  programming helpers. Device IRQs are routed to the BSP's APIC id for now (D-201); spreading
+  them across CPUs is later work. The irq tables, the IOAPIC index/data pair and the RTC index/data
+  pair have their own spinlocks since M3.5.
 
-### 7.4 SMP bring-up (multi-core from day one)
-1. The MADT lists the CPUs (Local APIC and x2APIC entries, respecting the enabled and
-   online-capable flags).
-2. A trampoline page below 1 MiB is reserved early.
-3. For each AP, send INIT, then SIPI twice, with the delays from the Intel SDM's MP
-   initialization protocol.
-4. The AP goes from real mode to protected mode to long mode, loads the kernel CR3, GDT, and
-   IDT, sets up its per-CPU state, and enters the scheduler idle loop.
-5. The BSP waits for each AP with a timeout. An AP that fails is logged, and boot continues
-   without it.
+### 7.4 SMP bring-up (multi-core from day one; M3.5, D-190..D-203)
+1. The MADT lists the CPUs (Local APIC and x2APIC entries). Only Enabled entries start
+   (Online-Capable alone is not present now); the BSP is skipped; `cpus=N` (total including the
+   BSP, clamped to `CPU_MAX` = 64) limits the count.
+2. A trampoline page below 1 MiB (the highest 4 KiB page of USABLE memory below 0x9F000, which
+   the pmm already withholds from the buddy allocator, D-080) holds a flat 16/32/64-bit startup
+   blob (`incbin`ned from `ap-trampoline.asm`), a GDT and a parameter block (D-192). No such
+   page: the system boots on the BSP alone, with a warning.
+3. APs start one at a time: INIT, 10 ms, SIPI, 200 us, a second SIPI if the first was not claimed,
+   then a 2 s wait for the AP to report `ONLINE` (D-193). Before that, the BSP has allocated the
+   AP's `CpuLocal`, four 16 KiB stacks (kernel + IST1-3) and its pmm/slab/timer blobs, and built a
+   temporary PML4 (a copy of the kernel half, plus an identity mapping of the trampoline page that
+   is read-only and executable).
+4. The AP checks its APIC id, claims the run, goes real -> protected -> long mode on that PML4,
+   reloads the kernel boot GDT and CS, switches to the kernel CR3, sets its GS base and runs
+   `apMain`: per-CPU GDT/TSS/IDT, the BSP's CR0/CR4/EFER, its own PAT (before any klog) and MTRRs
+   (D-194), the local APIC and LAPIC timer, the cross-CPU TSC check (§7.5), then it publishes
+   itself (`cpuTable`, the online mask, a full local TLB flush) and enters the idle loop (no
+   scheduler yet: `sti; hlt`, running work posted by `smpWorkPost`, D-202).
+5. The BSP waits for each AP with a timeout. An AP that fails is logged (`[warn] smp:`), sent an
+   INIT to park it, and boot continues without it. `smp: N cpus online` is always logged.
 
-`cpus=N` on the command line limits how many CPUs are brought up.
-
-**IPIs:** reschedule, TLB shootdown, call-function (with completion), and stop.
+**IPIs (D-195, D-196, D-197):** vector 0xF0 TLB shootdown, 0xF1 kick (wakes an idle CPU), 0xF2
+call-function and 0xF3 stop. `smpCallFunction()` posts an on-stack request in the target's mailbox
+(one slot per sender), sends the IPI and waits for completion with IF=1; with another CPU in the
+mask it needs IF=1 and no handler running (else `panicBug`). The TLB shootdown is one request per
+call (§6.3). A panic stops the other CPUs (stop IPI, then NMI for those that do not answer in
+100 ms) before printing; a CPU that loses the race to panic parks silently.
 
 ### 7.5 Time
 - **Clocksource: the TSC** (`lfence; rdtsc`, scaled by a 32.32 multiplier, D-176/D-178). It must be
@@ -759,11 +788,17 @@ sleep, and must not allocate until M3.5 closes what the M3.4 spinlocks leave ope
   **ACPI PM timer** (from the FADT): three 50 ms windows, median, one repeat if the spread exceeds
   1000 ppm (D-177). The HPET is optional and never required, since some AM5 boards disable it; it
   is the calibration fallback when the PM timer is missing, and with neither the boot panics. Cross-CPU
-  TSC sync is checked, and per-CPU offsets are used if needed (M3.5).
+  TSC sync is checked while each AP boots (M3.5, D-198): the BSP and the AP stamp a shared value
+  alternately and count readings that go backwards; only if there are any, a ping-pong estimates the
+  AP's offset (smallest round trip wins), which becomes `tscOffset` and is subtracted by
+  `timeMonotonicNs()`. The LAPIC timer programming uses the raw local TSC, and `IA32_TSC_ADJUST` is
+  never written.
 - **Clock events:** the LAPIC timer on vector 0xFE in one-shot mode (divide 16), or TSC-deadline mode
   when CPUID advertises it (D-179). Calibrated against the TSC.
 - **Timers:** a high-resolution timer queue per CPU (a fixed 256-entry min-heap ordered by deadline
-  then arm order, intrusive `TimerObj`s, callbacks in IRQ context, D-176). Tickless idle comes later.
+  then arm order, intrusive `TimerObj`s, callbacks in IRQ context, D-176). Since M3.5 each CPU has
+  its own queue and its own LAPIC timer, and a timer is CPU-local: it fires on the CPU that armed it
+  and must be re-armed or cancelled there (D-199). Tickless idle comes later.
 - **Wall clock:** read from the CMOS RTC at boot (UTC, D-180; accurate to about +-0.5 s). Later corrected by
   SNTP in `netd`.
 - **APIs (`kernel/include/timekeeping.h`):** `timeMonotonicNs()`, `timeWallNs()`, and timer objects
@@ -789,14 +824,16 @@ sleep, and must not allocate until M3.5 closes what the M3.4 spinlocks leave ope
 
 **M3.4 (D-183..D-189).** Delivered: the ticket `Spinlock` (`kernel/include/spinlock.h`,
 `spinlock-raw.h`; irqsave variants, `spinTryLock`, `spinAssertHeld`), `preemptCount` through an interim
-`CpuSync` (`preempt.h`; the `CpuLocal` field arrives with M3.5, §7.1), the `atomic.h` wrappers and the
+`CpuSync` (`cpu-sync.h`, a member of `CpuLocal` since M3.5, §7.1), the `atomic.h` wrappers and the
 lock validator. `Mutex`, `RwLock`, `Semaphore`, `WaitQueue` and `Completion` need a scheduler and move
 to M4; `preemptEnable()` does not reschedule yet.
 - **Validator (debug builds, `kernel/sync/lockdep*.c`):** classes by init site (the static lock's
   address, or one `static LockClassKey` per `spinInit()` call site), a bit-matrix order graph with a
   BFS on each new edge, and per-CPU held-lock stacks. Reports: order inversion (with the stored
   stack of every edge on the existing chain and the current stack), recursive locking, IRQ-unsafe
-  use (a lock taken in a hard IRQ and also with IRQs enabled), unlock of a lock not held. Every
+  use (a lock taken in a hard IRQ and also with IRQs enabled), IRQ-safe -> IRQ-unsafe (a lock taken
+  in a hard IRQ that can reach, through held-while-acquiring edges, one taken with IRQs enabled:
+  the real SMP deadlock class, M3.5, D-201), unlock of a lock not held. Every
   report panics; ktests use `lockdepExpectBegin()`/`lockdepExpectEnd()` to assert one (D-187), and
   the ktest-only `lockdepTestOff()`/`lockdepTestOn()` switch checks behavior while the validator is off (D-189).
 - **Lock order:** `vmm -> pmm`, anything `-> klog` (a leaf). The slab drops its lock before calling
@@ -804,9 +841,12 @@ to M4; `preemptEnable()` does not reschedule yet.
   already inside its sink section (an exception that logs and resumes, `CpuSync.klogHeld`). The
   validator's raw graph lock sits just above klog: its reports print through klog while holding it,
   with validation of klog's own lock skipped.
-- **Which code uses them:** klog, pmm, vmm, slab, vmalloc and random hold real irqsave spinlocks;
-  timekeeping, the irq/IOAPIC tables, the RTC and LAPIC code stay IRQ-disable sections until M3.5
-  (D-188). Handlers still must not call the allocators until M3.5.
+- **Which code uses them:** klog, pmm, vmm, slab, vmalloc and random hold real irqsave spinlocks
+  (D-188), and since M3.5 so do the irq tables, the IOAPIC index/data pair and the RTC index/data pair
+  (D-201; lock order irq -> ioapic). Timekeeping and the LAPIC code stay IRQ-disable sections: their
+  state is per-CPU. Handlers may use the pmm, slab and kmalloc but not vmalloc or the vmm map/unmap
+  calls (D-200, D-196). With several CPUs the validator's expect mode is per CPU: a report of the
+  armed kind raised on another CPU still panics (D-201).
 
 ---
 

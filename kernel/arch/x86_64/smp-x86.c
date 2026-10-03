@@ -602,8 +602,10 @@ static CpuLocal *allocAp(uint32_t cpuId, uint32_t apicId) {
         cl->arch.istBottom[i] = (uint64_t)(uintptr_t)ist[i];
         cl->arch.istTop[i] = (uint64_t)(uintptr_t)ist[i] + AP_STACK_SIZE;
     }
-    if (pmmCpuAttach(cl) != STATUS_OK || slabCpuAttach(cl) != STATUS_OK ||
-        timeCpuAttach(cl) != STATUS_OK) {
+    void *pmmBlob = kmalloc(pmmCpuBlobSize(), KMALLOC_ZERO);
+    void *slabBlob = vmalloc(slabCpuBlobSize(), VMALLOC_ZERO);
+    if (pmmBlob == NULL || slabBlob == NULL || pmmCpuAttach(cl, pmmBlob) != STATUS_OK ||
+        slabCpuAttach(cl, slabBlob) != STATUS_OK || timeCpuAttach(cl) != STATUS_OK) {
         return NULL;
     }
     return cl;
