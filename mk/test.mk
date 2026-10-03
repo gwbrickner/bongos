@@ -145,6 +145,23 @@ TIME_REQUIRED_KTESTS := time_monotonic_1m_reads time_oneshot_100ms time_wall_mat
                         time_timer_init_misuse_panics time_timer_arm_from_other_irq \
                         time_timer_hw_tracks_root time_lapic_oneshot_count_edges
 TIME_LOG_REGEX_FILE := tests/harness/time-log-regexes.txt
+# M3.4 (D-183..D-188): the spinlock/preempt ktests run in both profiles; the lock validator exists
+# (and so do its ktests) only in debug builds.
+LOCK_REQUIRED_KTESTS := spin_trylock_semantics spin_irqsave_restores_if preempt_count_balance \
+                        spin_unlock_unlocked_caught spin_ticket_wraparound \
+                        spin_unlock_irqrestore_unlocked_caught spin_assert_held \
+                        preempt_in_atomic_irqs_off klog_exception_in_section_does_not_hang
+LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_unsafe_in_irq_reported \
+                           lockdep_irq_safe_then_irqs_on_reported lockdep_class_recursion_reported \
+                           lockdep_trylock_records_no_edge lockdep_out_of_order_release \
+                           lockdep_sees_kernel_locks lockdep_not_held_reported \
+                           lockdep_irqs_enabled_while_held_reported \
+                           lockdep_transitive_inversion_reported lockdep_irq_segment_records_no_edge \
+                           lockdep_trylock_same_class_allowed \
+                           lockdep_trylock_irqs_on_then_irq_reported lockdep_repeat_order_adds_nothing \
+                           lockdep_spininit_stack_locks lockdep_kernel_lock_order \
+                           lockdep_expected_report_records_no_edge \
+                           lockdep_disabled_release_drops_held_entry
 _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	@status=0; \
 	while read -r fw cpus mem; do \
@@ -264,6 +281,37 @@ _check-ktest-pass: $(ACPIEXTRACT_BIN)
 	    else \
 	        if ! awk '{ split($$NF, a, "="); d = $$1 - a[2]; if (d < 0) d = -d; printf "make test: %s: wall clock vs host: %.3f s\n", FILENAME, d; exit !(d <= 2.0) }' "$$wt"; then \
 	            echo "make test: $$wt: the guest wall clock differs from the host's by more than 2 s (ROADMAP M3.3 item 5)"; \
+	            status=1; \
+	        fi; \
+	    fi; \
+	    for t in $(LOCK_REQUIRED_KTESTS); do \
+	        if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	            echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M3.4 Done-when guarantee not met)"; \
+	            status=1; \
+	        fi; \
+	    done; \
+	    if [ "$(RELEASE)" != 1 ]; then \
+	        for t in $(LOCKDEP_REQUIRED_KTESTS); do \
+	            if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qxF "KTEST PASS $$t"; then \
+	                echo "make test: $$log does not contain 'KTEST PASS $$t' (ROADMAP M3.4 Done-when guarantee not met)"; \
+	                status=1; \
+	            fi; \
+	        done; \
+	        for re in '^LOCKDEP \(expected by ktest\): lock order inversion$$' \
+	                  '^LOCKDEP \(expected by ktest\): inconsistent IRQ lock state$$' \
+	                  '^LOCKDEP \(expected by ktest\): recursive locking$$' \
+	                  '^  #[0-9]+ 0x[0-9a-f]{16} lockdepTestTakeAB\+0x' \
+	                  '^  #[0-9]+ 0x[0-9a-f]{16} lockdepTestTakeBA\+0x' \
+	                  '^  #[0-9]+ 0x[0-9a-f]{16} lockdepTestIrqCallback\+0x' \
+	                  '^\[info\] lockdep: summary: enabled=1 classes=[0-9]+ edges=[0-9]+ expected-reports=[0-9]+$$'; do \
+	            if ! tr -d '\r' < "$$log" 2>/dev/null | grep -qE "$$re"; then \
+	                echo "make test: $$log has no line matching '$$re' (ROADMAP M3.4 items 2-3: the validator report with both stacks)"; \
+	                status=1; \
+	            fi; \
+	        done; \
+	        nld=$$(tr -d '\r' < "$$log" 2>/dev/null | grep -cE '^LOCKDEP: |^\[(warn|error)\] lockdep: '); \
+	        if [ "$$nld" != 0 ]; then \
+	            echo "make test: $$log has $$nld unexpected LOCKDEP report/warning lines (ROADMAP M3.4 Done-when: no false positives)"; \
 	            status=1; \
 	        fi; \
 	    fi; \

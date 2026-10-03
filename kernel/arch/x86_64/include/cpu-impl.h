@@ -59,6 +59,13 @@ static inline _Noreturn void archHaltForever(void) {
     }
 }
 
+/* `int3`: raises #BP, which the trap handler counts (archBreakpointHits()), logs through
+ * klogWrite() and resumes (a trap: execution continues after the instruction); archTrapCatch()
+ * never catches it. For ktests. Any context klogWrite() allows; takes no lock itself. */
+static inline void archBreakpoint(void) {
+    __asm__ volatile("int3" ::: "memory");
+}
+
 /* Spin-wait hint (SDM Vol 2B `PAUSE`): reduces power/bus contention in a busy-wait loop and
  * avoids a memory-order mis-speculation penalty on exit from the loop. No locks, boot-time/IRQ-
  * safe: a single instruction with no side effect other than the hint itself. */

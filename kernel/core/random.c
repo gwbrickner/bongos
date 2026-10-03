@@ -6,6 +6,7 @@
 #include "klog.h"
 #include "panic.h"
 #include "random-core.h"
+#include "spinlock.h"
 
 #include <arch/cpu.h>
 #include <arch/hwrandom.h>
@@ -18,12 +19,13 @@
 static RandomState rng;
 static bool rngSeeded;
 
-/* IRQ-disable-only lock (single CPU until M3.4/M3.5), the same shape as pmmLock(). */
+/* An irqsave Spinlock since M3.4 (D-188), the same shape as pmmLock(). It is a leaf. */
+static Spinlock randomLockObj = SPINLOCK_INIT("random");
 static uint64_t randomLock(void) {
-    return archIrqSave();
+    return spinLockIrqSave(&randomLockObj);
 }
 static void randomUnlock(uint64_t flags) {
-    archIrqRestore(flags);
+    spinUnlockIrqRestore(&randomLockObj, flags);
 }
 
 __attribute__((noinline)) void randomInit(const uint8_t seed[RANDOM_SEED_SIZE]) {

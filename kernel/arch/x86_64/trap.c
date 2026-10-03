@@ -14,9 +14,11 @@
 #include "backtrace.h"
 #include "format.h"
 #include "klog.h"
+#include "lockdep.h"
 #include "ksym.h"
 #include "ktest.h"
 #include "panic.h"
+#include "preempt.h"
 #include "sections.h"
 
 #include <arch/cpu.h>
@@ -171,8 +173,18 @@ bool archTrapCatch(uint64_t mask, void (*fn)(void *), void *arg, TrapCatchInfo *
     trapCatch.mask = mask;
     trapCatch.armed = true;
     bool ifBefore = archInterruptsEnabled();
+    uint32_t preemptBefore = preemptCount();
+    uint32_t heldBefore = lockdepHeldDepth();
     uint32_t caught = archTrapCatchCall(&trapCatch.ctx, fn, arg);
     trapCatch.armed = false; /* one-shot; also covers the "returned without faulting" case */
+    /* D-187: the catch is a longjmp, so a spinlock still held at the fault (or a preemptDisable
+     * never undone) would stay held forever. The contract (panicBug callers hold no lock) is
+     * enforced here rather than silently corrupting every later test. */
+    if (caught != 0 && (preemptCount() != preemptBefore || lockdepHeldDepth() != heldBefore)) {
+        panic("archTrapCatch: a caught fault/bug left a spinlock held (preemptCount %u->%u, held "
+              "%u->%u)",
+              preemptBefore, preemptCount(), heldBefore, lockdepHeldDepth());
+    }
     if (caught != 0 && ifBefore) {
         /* The resume is a longjmp: it may have left an archIrqSave() section of `fn` (or the
          * fault's own IF=0) without the matching restore, so put IF back as it was (D-173). */

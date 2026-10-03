@@ -27,4 +27,9 @@ void backtracePrint(uint64_t pc, uint64_t fp);
  * correctness programmatically instead of scraping klog text. No locks; safe from any context. */
 size_t backtraceCapture(uint64_t fp, uint64_t *out, size_t max);
 
+/* Prints `n` stored return addresses as "  #i 0x<addr> name+0xoff" lines (symbolized like the
+ * frames of backtracePrint), for stacks captured earlier, e.g. by the lock validator. No locks;
+ * any context. */
+void backtracePrintAddrs(const uint64_t *pcs, size_t n);
+
 #endif

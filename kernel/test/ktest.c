@@ -4,6 +4,8 @@
 #include "cmdline.h"
 #include "format.h"
 #include "klog.h"
+#include "lockdep.h"
+#include "preempt.h"
 
 #include <arch/cpu.h>
 #include <arch/qemu.h>
@@ -141,10 +143,27 @@ void ktestRunFromCmdline(const char *cmdline) {
         klogRaw(startLine);
 
         bool ifBefore = archInterruptsEnabled();
+        uint32_t preemptBefore = preemptCount();
+        uint32_t heldBefore = lockdepHeldDepth();
         ktestRunning = tc;
         KtestCtx ctx = {tc, false};
         tc->fn(&ctx);
         ktestRunning = NULL;
+        /* D-187: a test must not leave a spinlock held or preemption disabled; the baseline is
+         * taken per test, so one leak does not fail every later test. */
+        if (preemptCount() != preemptBefore || lockdepHeldDepth() != heldBefore) {
+            ktestFail(&ctx, __FILE__, __LINE__, "left a spinlock held or preemption disabled");
+        }
+        if (lockdepExpectArmed()) {
+            ktestFail(&ctx, __FILE__, __LINE__, "left lockdepExpectBegin() armed");
+#ifdef KERNEL_DEBUG
+            (void)lockdepExpectEnd();
+#endif
+        }
+        /* D-189: the switch-off is per test; turn the validator back on before reporting. */
+        if (lockdepTestOffReset()) {
+            ktestFail(&ctx, __FILE__, __LINE__, "left the lock validator off (lockdepTestOff)");
+        }
         /* D-173: a test that returns with IF=0 leaked an IRQ-disable (a lock, an unbalanced
          * archIrqSave). Report it and re-enable, so one leak does not hang every later test. */
         if (ifBefore && !archInterruptsEnabled()) {
@@ -162,6 +181,15 @@ void ktestRunFromCmdline(const char *cmdline) {
         }
     }
 
+#ifdef KERNEL_DEBUG
+    {
+        LockdepStats ls;
+        lockdepGetStats(&ls);
+        klogWrite(KLOG_INFO, "lockdep",
+                  "summary: enabled=%u classes=%u edges=%u expected-reports=%u",
+                  (unsigned)ls.enabled, ls.classes, ls.edges, ls.expectedReports);
+    }
+#endif
     char doneLine[96];
     ksnprintf(doneLine, sizeof(doneLine), "KTEST DONE passed=%u failed=%u\n", realPassed,
               realFailed + patternMisses);

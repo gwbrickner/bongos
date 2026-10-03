@@ -50,7 +50,7 @@ KERNEL_C_SOURCES := $(sort $(wildcard kernel/core/*.c) $(wildcard kernel/drivers
                            $(wildcard kernel/drivers/fbcon/*.c) $(wildcard kernel/drivers/acpi/*.c) \
                            $(wildcard kernel/test/*.c) \
                            $(wildcard kernel/arch/x86_64/*.c) $(wildcard kernel/arch/x86_64/test/*.c) \
-                           $(wildcard kernel/mm/*.c) $(wildcard libs/crypto/*.c) \
+                           $(wildcard kernel/mm/*.c) $(wildcard kernel/sync/*.c) $(wildcard libs/crypto/*.c) \
                            boot/common/fbtext.c boot/common/boot-status.c) $(CONSOLE_FONT_C)
 KERNEL_ASM_SOURCES := $(sort $(wildcard kernel/arch/x86_64/*.asm))
 

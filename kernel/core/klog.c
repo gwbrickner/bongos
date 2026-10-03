@@ -3,6 +3,9 @@
 
 #include "branding.h"
 #include "format.h"
+#include "panic.h"
+#include "preempt.h"
+#include "spinlock.h"
 
 #include <arch/cpu.h>
 #include <stdarg.h>
@@ -10,6 +13,44 @@
 
 #include "drivers/fbcon/fbcon.h"
 #include "drivers/serial/uart16550.h"
+
+/* klogLock serializes the sinks (UART, fbcon cursor/scroll state), which are not reentrant (D-173),
+ * and is a LEAF: nothing called under it (serialWriteString, fbcon*) may take a Spinlock. It is
+ * safe from an IRQ handler (irqsave). Once a panic is in progress it is bypassed, because the
+ * panicking context may itself hold it (a UBSan trip or #PF inside fbconWrite, or an NMI): the
+ * panic path only disables IRQs, as before M3.4 (D-188). */
+static Spinlock klogLock = SPINLOCK_INIT("klog");
+
+/* Begins/ends the sink section. `*locked` records whether klogLock was taken (false only during a
+ * panic, or when this CPU is already inside the section: an exception that logs nested in it).
+ * Returns the saved RFLAGS for klogOutputEnd(). */
+static uint64_t klogOutputBegin(bool *locked) {
+    if (panicInProgress()) {
+        *locked = false;
+        return archIrqSave();
+    }
+    CpuSync *s = cpuSync();
+    if (s->klogHeld != 0) {
+        /* This CPU is already inside the sink section with IRQs off, so only an exception or NMI
+         * can be here: #BP (which logs and resumes) or the report of a caught fault. Spinning on
+         * our own lock would hang; instead nest unlocked, as klog did before M3.4. */
+        *locked = false;
+        return archIrqSave();
+    }
+    uint64_t flags = spinLockIrqSave(&klogLock);
+    s->klogHeld = 1;
+    *locked = true;
+    return flags;
+}
+
+static void klogOutputEnd(bool locked, uint64_t irqFlags) {
+    if (locked) {
+        cpuSync()->klogHeld = 0;
+        spinUnlockIrqRestore(&klogLock, irqFlags);
+    } else {
+        archIrqRestore(irqFlags);
+    }
+}
 
 static const char *klogLevelName(KlogLevel level) {
     switch (level) {
@@ -72,19 +113,21 @@ void klogWrite(KlogLevel level, const char *tag, const char *fmt, ...) {
     char line[320];
     int written =
         ksnprintf(line, sizeof(line), "[%s] %s: %s\n", klogLevelName(level), tag, message);
-    /* D-173: the sinks (UART, fbcon cursor/scroll state) are not reentrant, and an IRQ handler may
-     * log, so the whole output section runs with IRQs off. */
-    uint64_t irqFlags = archIrqSave();
+    /* D-173/D-188: the sinks are not reentrant and an IRQ handler may log, so the whole output
+     * section runs under klogLock with IRQs off. */
+    bool locked;
+    uint64_t irqFlags = klogOutputBegin(&locked);
     serialWriteString(line);
     if (fbconActive()) {
         fbconSetColor(klogLevelColor(level), 0);
         fbconWrite(line, klogWrittenLen(written, sizeof(line)));
     }
-    archIrqRestore(irqFlags);
+    klogOutputEnd(locked, irqFlags);
 }
 
 void klogRaw(const char *s) {
-    uint64_t irqFlags = archIrqSave(); /* D-173: see klogWrite() */
+    bool locked;
+    uint64_t irqFlags = klogOutputBegin(&locked); /* D-173/D-188: see klogWrite() */
     serialWriteString(s);
     if (fbconActive()) {
         size_t n = 0;
@@ -94,5 +137,12 @@ void klogRaw(const char *s) {
         fbconSetColor(7, 0);
         fbconWrite(s, n);
     }
-    archIrqRestore(irqFlags);
+    klogOutputEnd(locked, irqFlags);
+}
+
+void klogTestRunInSection(void (*fn)(void *), void *arg) {
+    bool locked;
+    uint64_t irqFlags = klogOutputBegin(&locked);
+    fn(arg);
+    klogOutputEnd(locked, irqFlags);
 }

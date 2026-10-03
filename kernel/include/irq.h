@@ -3,8 +3,9 @@
  * (8259, local APIC, IOAPIC) lives under kernel/arch/x86_64/.
  *
  * Handler rules (D-173): a handler runs with IF=0 on the interrupted context's stack, is never
- * nested, must not sleep, must not call the allocators (pmm, slab, kmalloc, vmm, vmalloc) until the
- * real locks of M3.4 exist, and must not call archTrapCatch() or ktestFail(). A level-triggered
+ * nested, must not sleep, must not call the allocators (pmm, slab, kmalloc, vmm, vmalloc) until
+ * M3.5 fixes what the M3.4 spinlocks leave open (D-188: D-085(1), the slab's two-section free), and
+ * must not call archTrapCatch() or ktestFail(). A level-triggered
  * source must be deasserted before the handler returns, or it fires again straight after the EOI.
  * The kernel sends the EOI itself, after the handler returns. */
 #ifndef KERNEL_IRQ_H

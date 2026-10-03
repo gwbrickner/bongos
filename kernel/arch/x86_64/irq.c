@@ -11,6 +11,8 @@
 #include "acpi.h"
 #include "klog.h"
 #include "panic.h"
+#include "preempt.h"
+#include "lockdep.h"
 
 #include <arch/cpu.h>
 #include <arch/io.h>
@@ -326,7 +328,15 @@ void irqDispatch(TrapFrame *f) {
     vectorCounts[v]++;
     IrqHandler h = __atomic_load_n(&slots[v].handler, __ATOMIC_ACQUIRE);
     if (h != NULL) {
+        uint32_t preemptBefore = preemptCount();
+        uint32_t heldBefore = lockdepHeldDepth();
         h(v, slots[v].ctx);
+        /* D-187: a handler must return with every lock it took released and preemption balanced. */
+        if (preemptCount() != preemptBefore || lockdepHeldDepth() != heldBefore) {
+            panic("irq: handler for vector %u returned holding a spinlock or with preemption "
+                  "disabled",
+                  v);
+        }
     } else {
         /* Firmware leaves stale IRR bits, and QEMU latches edges on masked pins and delivers them
          * on unmask: neither may kill boot. Count it, log the first one per vector, and EOI. */

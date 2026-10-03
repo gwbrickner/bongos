@@ -22,6 +22,10 @@ _Noreturn void panic(const char *fmt, ...);
  * panicFinish(message) is the shared tail: a KTEST FAIL line + archDebugExit() if `ktest=` is
  * active, otherwise halt forever. Neither returns except panicEnter(). No locks; boot-time only. */
 bool panicEnter(void);
+
+/* True once panicEnter() has been entered (a panic is in progress). The lock validator and klog's
+ * lock bypass key on it: the panicking context may itself hold any lock. No locks; any context. */
+bool panicInProgress(void);
 _Noreturn void panicNested(void);
 _Noreturn void panicFinish(const char *message);
 

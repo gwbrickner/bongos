@@ -723,8 +723,8 @@ registered handler runs with IF=0, then the LAPIC EOI is sent. Vector 0xFF (spur
 with no EOI. After the 8259 remap only a spurious IRQ7/15 (vectors 39/47, told apart by the 8259
 in-service register) or a software `int` can reach 32-47; anything else there panics. A vector with
 no handler is counted, logged once, EOI'd, and is not fatal. Handlers are never nested, must not
-sleep, and must not allocate until real locks exist (M3.4). `archTrapCatch` refuses inside a
-handler. `kernelMain` enables interrupts right after `irqInit()`.
+sleep, and must not allocate until M3.5 closes what the M3.4 spinlocks leave open (D-188).
+`archTrapCatch` refuses inside a handler. `kernelMain` enables interrupts right after `irqInit()`.
 
 ### 7.3 Interrupt controllers
 - **8259:** remapped to 0x20-0x2F and fully masked at `irqInit()`; never used for delivery.
@@ -786,6 +786,27 @@ handler. `kernelMain` enables interrupts right after `irqInit()`.
 - **Preemptible kernel:** each CPU has a `preemptCount`, and holding a spinlock disables
   preemption. Preemption points are on IRQ return and in `preemptEnable()` when
   `needResched` is set.
+
+**M3.4 (D-183..D-189).** Delivered: the ticket `Spinlock` (`kernel/include/spinlock.h`,
+`spinlock-raw.h`; irqsave variants, `spinTryLock`, `spinAssertHeld`), `preemptCount` through an interim
+`CpuSync` (`preempt.h`; the `CpuLocal` field arrives with M3.5, §7.1), the `atomic.h` wrappers and the
+lock validator. `Mutex`, `RwLock`, `Semaphore`, `WaitQueue` and `Completion` need a scheduler and move
+to M4; `preemptEnable()` does not reschedule yet.
+- **Validator (debug builds, `kernel/sync/lockdep*.c`):** classes by init site (the static lock's
+  address, or one `static LockClassKey` per `spinInit()` call site), a bit-matrix order graph with a
+  BFS on each new edge, and per-CPU held-lock stacks. Reports: order inversion (with the stored
+  stack of every edge on the existing chain and the current stack), recursive locking, IRQ-unsafe
+  use (a lock taken in a hard IRQ and also with IRQs enabled), unlock of a lock not held. Every
+  report panics; ktests use `lockdepExpectBegin()`/`lockdepExpectEnd()` to assert one (D-187), and
+  the ktest-only `lockdepTestOff()`/`lockdepTestOn()` switch checks behavior while the validator is off (D-189).
+- **Lock order:** `vmm -> pmm`, anything `-> klog` (a leaf). The slab drops its lock before calling
+  the pmm, so there is no `slab -> pmm` order. klog is bypassed in a panic and when this CPU is
+  already inside its sink section (an exception that logs and resumes, `CpuSync.klogHeld`). The
+  validator's raw graph lock sits just above klog: its reports print through klog while holding it,
+  with validation of klog's own lock skipped.
+- **Which code uses them:** klog, pmm, vmm, slab, vmalloc and random hold real irqsave spinlocks;
+  timekeeping, the irq/IOAPIC tables, the RTC and LAPIC code stay IRQ-disable sections until M3.5
+  (D-188). Handlers still must not call the allocators until M3.5.
 
 ---
 
@@ -1357,7 +1378,12 @@ stay always-fatal, or (#BP) already resume unconditionally before archTrapCatch 
 (§7.2).
 Since M3.2 (D-173) interrupts are enabled during ktests: `archTrapCatch` refuses a fault taken inside an
 interrupt handler (resuming would strand the handler's ISR bit), restores IF after a caught fault, and the
-runner fails a test that returns with IF=0 (a leaked IRQ-disable).
+runner fails a test that returns with IF=0 (a leaked IRQ-disable). Since M3.4 (D-187) it also fails a test
+that returns with a spinlock held, `preemptCount` raised, `lockdepExpectBegin()` still armed or the
+validator left off by the ktest-only `lockdepTestOff()` (D-189; the runner turns it back on), and a debug
+run prints `lockdep: summary: enabled=1 classes=N edges=N expected-reports=N` before the DONE line (`make
+test` requires `enabled=1` and no unexpected `LOCKDEP:` report). `archTrapCatch` and `irqDispatch` panic if a
+caught fault or a handler leaves a lock held.
 
 ---
 

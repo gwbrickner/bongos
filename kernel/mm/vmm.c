@@ -6,6 +6,7 @@
 #include "arch/paging.h"
 #include "kva-internal.h"
 #include "panic.h"
+#include "spinlock.h"
 
 #include <arch/cpu.h>
 #include <stdbool.h>
@@ -15,15 +16,15 @@
 static KvaState kvaState;
 static bool vmmActive = false;
 
-/* --- lock: IRQ-disable only, same D-081/D-088 single-CPU justification (D-173) as the pmm's lock
- * (kernel/mm/pmm.c) -- a real spinlock arrives with SMP (M3.4/M3.5). Lock order: vmmLock ->
- * pmmLock (archMapPages/archUnmapPages call into the pmm for table-page allocation while vmmLock
- * is held; nothing here is ever called with pmmLock already held). */
+/* --- lock: an irqsave Spinlock since M3.4 (D-188), like the pmm's (kernel/mm/pmm.c). Lock order:
+ * vmmLock -> pmmLock (archMapPages/archUnmapPages call into the pmm for table-page allocation while
+ * vmmLock is held; nothing here is ever called with pmmLock already held). */
+static Spinlock vmmLockObj = SPINLOCK_INIT("vmm");
 static uint64_t vmmLock(void) {
-    return archIrqSave();
+    return spinLockIrqSave(&vmmLockObj);
 }
 static void vmmUnlock(uint64_t flags) {
-    archIrqRestore(flags);
+    spinUnlockIrqRestore(&vmmLockObj, flags);
 }
 
 void vmmInit(const BootInfo *bi, const BootMemRegion *map, uint32_t mapCount) {
