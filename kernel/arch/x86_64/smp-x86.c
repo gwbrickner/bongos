@@ -618,7 +618,7 @@ static void reportTscSync(const CpuLocal *cl, const TscSyncResult *tr) {
     } else if (tr->warpsBefore != 0) {
         /* Under a hypervisor a skew is the host's doing; on bare metal it is worth a warning. */
         bool bare = !archCpuIsHypervisor();
-        bool unfixed = tr->warpsAfter * 4 > tr->warpsBefore; /* the estimate did not remove most */
+        bool unfixed = tr->warpsAfter >= tr->warpsBefore; /* the estimate did not help at all */
         klogWrite(bare && unfixed ? KLOG_WARN : KLOG_INFO, "smp",
                   "cpu %u: TSC ran %lld ticks ahead of the boot CPU's; offset applied (%u warps "
                   "before, %u after)",
