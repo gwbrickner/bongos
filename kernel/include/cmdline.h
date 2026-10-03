@@ -13,6 +13,12 @@
  * token exists. `key` is given without the '='. No locks, boot-time only; pure. */
 bool cmdlineFindValue(const char *cmdline, const char *key, char *out, size_t outCap);
 
+/* Like cmdlineFindValue(), but returns the value of the last "<key>=" token in place: `*outValue`
+ * points into `cmdline` (not NUL-terminated at the value's end) and `*outLen` is its full length,
+ * so nothing is truncated. false (outputs untouched) if there is no such token. No locks; pure. */
+bool cmdlineFindValueSpan(const char *cmdline, const char *key, const char **outValue,
+                          size_t *outLen);
+
 /* cmdlineFindValue(cmdline, "ktest", ...). */
 bool cmdlineFindKtest(const char *cmdline, char *out, size_t outCap);
 

@@ -18,8 +18,9 @@ static bool cmdlineIsSep(char c) {
     return c == ' ' || c == '\t';
 }
 
-bool cmdlineFindValue(const char *cmdline, const char *key, char *out, size_t outCap) {
-    if (cmdline == NULL || key == NULL || out == NULL || outCap == 0) {
+bool cmdlineFindValueSpan(const char *cmdline, const char *key, const char **outValue,
+                          size_t *outLen) {
+    if (cmdline == NULL || key == NULL || outValue == NULL || outLen == NULL) {
         return false;
     }
     size_t keyLen = 0;
@@ -58,6 +59,20 @@ bool cmdlineFindValue(const char *cmdline, const char *key, char *out, size_t ou
         }
     }
     if (best == NULL) {
+        return false;
+    }
+    *outValue = best;
+    *outLen = bestLen;
+    return true;
+}
+
+bool cmdlineFindValue(const char *cmdline, const char *key, char *out, size_t outCap) {
+    if (out == NULL || outCap == 0) {
+        return false;
+    }
+    const char *best;
+    size_t bestLen;
+    if (!cmdlineFindValueSpan(cmdline, key, &best, &bestLen)) {
         return false;
     }
     size_t copyLen = (bestLen < outCap - 1) ? bestLen : outCap - 1;

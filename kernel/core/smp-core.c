@@ -6,17 +6,30 @@
 uint32_t smpParseCpusOption(const char *cmdline, uint32_t cpuMax, bool *present, bool *invalid) {
     *present = false;
     *invalid = false;
-    char buf[16];
-    if (!cmdlineFindValue(cmdline, "cpus", buf, sizeof(buf))) {
+    const char *v;
+    size_t len;
+    if (!cmdlineFindValueSpan(cmdline, "cpus", &v, &len)) {
         return cpuMax;
     }
     *present = true;
-    uint32_t n;
-    if (!cmdlineParseUint(buf, &n) || n == 0) {
+    /* Decimal, read in place and in full (a copy into a fixed buffer would truncate a long value
+     * into a different number); saturates just above cpuMax, since anything larger is clamped. */
+    uint64_t n = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (v[i] < '0' || v[i] > '9') {
+            *invalid = true;
+            return cpuMax;
+        }
+        n = n * 10 + (uint64_t)(v[i] - '0');
+        if (n > cpuMax) {
+            n = (uint64_t)cpuMax + 1;
+        }
+    }
+    if (len == 0 || n == 0) {
         *invalid = true;
         return cpuMax;
     }
-    return n > cpuMax ? cpuMax : n;
+    return n > cpuMax ? cpuMax : (uint32_t)n;
 }
 
 uint32_t smpSelectAps(const AcpiCpu *cpus, uint32_t cpuCount, uint32_t bspApicId, bool bspX2apic,

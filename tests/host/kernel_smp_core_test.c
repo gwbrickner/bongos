@@ -19,6 +19,18 @@ TEST(cmdlineFindValueTakesTheLastToken) {
     ASSERT_TRUE(strcmp(v, "all") == 0);
 }
 
+TEST(cmdlineFindValueSpanIsNotTruncated) {
+    const char *line = "cpus=1 cpus=0123456789012345678901234567890123456789 x=y";
+    const char *v = NULL;
+    size_t len = 0;
+    ASSERT_TRUE(cmdlineFindValueSpan(line, "cpus", &v, &len));
+    ASSERT_EQ(len, 40u);
+    ASSERT_TRUE(v == line + 12);
+    ASSERT_TRUE(cmdlineFindValueSpan("cpus=", "cpus", &v, &len) && len == 0);
+    v = NULL;
+    ASSERT_TRUE(!cmdlineFindValueSpan("cpu=4 xcpus=4", "cpus", &v, &len) && v == NULL);
+}
+
 TEST(cmdlineParseUintAcceptsOnlyDecimal) {
     uint32_t n = 77;
     ASSERT_TRUE(cmdlineParseUint("0", &n) && n == 0);
@@ -43,6 +55,37 @@ TEST(smpParseCpusOption) {
     ASSERT_TRUE(present && invalid);
     ASSERT_EQ(smpParseCpusOption("cpus=four", 64, &present, &invalid), 64u);
     ASSERT_TRUE(present && invalid);
+}
+
+/* BUG-M3.5-2: the value used to be copied into a 16-byte buffer and silently truncated, so a long
+ * value parsed as its first 15 characters ("0000000000000023" became 2), and a number above
+ * UINT32_MAX was "invalid" instead of clamped like any other value above cpuMax (D-193). */
+TEST(smpParseCpusOptionLongValues) {
+    bool present, invalid;
+    ASSERT_EQ(smpParseCpusOption("cpus=0000000000000023", 64, &present, &invalid), 23u);
+    ASSERT_TRUE(present && !invalid);
+    ASSERT_EQ(smpParseCpusOption("cpus=0000000000000003", 64, &present, &invalid), 3u);
+    ASSERT_TRUE(present && !invalid);
+    ASSERT_EQ(smpParseCpusOption("cpus=000000000000002x", 64, &present, &invalid), 64u);
+    ASSERT_TRUE(present && invalid);
+    ASSERT_EQ(smpParseCpusOption("cpus=99999999999", 64, &present, &invalid), 64u);
+    ASSERT_TRUE(present && !invalid);
+    ASSERT_EQ(
+        smpParseCpusOption("cpus=99999999999999999999999999999999999999", 64, &present, &invalid),
+        64u);
+    ASSERT_TRUE(present && !invalid);
+    ASSERT_EQ(smpParseCpusOption("cpus=00000000000000000000000000000000000000000000000000000000000"
+                                 "000000000000000002",
+                                 64, &present, &invalid),
+              2u);
+    ASSERT_TRUE(present && !invalid);
+    ASSERT_EQ(smpParseCpusOption("cpus=000000000000000000000000000000000000000000000", 64, &present,
+                                 &invalid),
+              64u);
+    ASSERT_TRUE(present && invalid);
+    /* A later valid token wins over an earlier long one. */
+    ASSERT_EQ(smpParseCpusOption("cpus=12345678901234567890 cpus=2", 64, &present, &invalid), 2u);
+    ASSERT_TRUE(present && !invalid);
 }
 
 static AcpiCpu cpu(uint32_t apicId, uint32_t flags) {
