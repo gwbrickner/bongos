@@ -5,7 +5,8 @@
 # --expect-serial banner-match bridge M1.2 used before the kernel existed (D-057). The release/USB
 # image (build/bongos.img) never runs ktests or writes port 0xF4. `make test` also runs the M1.4
 # GUI screenshot tests (D-070, tests/gui/run.sh) and a countdown smoke test against the shipped
-# boot.cfg, on top of the ktest matrix.
+# boot.cfg, on top of the ktest matrix. `make test-full` also runs tests/harness/smp-panic-check.sh
+# (M3.5, D-197/D-201): run-ending panics on 4 CPUs must end FAIL with exactly one report.
 .PHONY: test test-full _check-ktest-pass gui-test update-refs screenshot
 test: image imgdiff acpiextract kaslr-reloc-check
 	tests/harness/run-matrix.sh tests/harness/matrix.conf --image $(KTEST_IMAGE)
@@ -24,6 +25,7 @@ test-full: image acpiextract kaslr-reloc-check
 	@$(MAKE) --no-print-directory _check-ktest-pass MATRIX=tests/harness/matrix-full.conf
 	tests/harness/kaslr-check.sh --fw uefi
 	tests/harness/kaslr-check.sh --fw bios
+	tests/harness/smp-panic-check.sh --fw uefi $(if $(filter 1,$(RELEASE)),--release)
 
 # Re-runs the GUI tests alone (skips the ktest matrix and countdown smoke) -- useful while
 # iterating on a screenshot test without waiting on the rest of `make test`. FW selects the
