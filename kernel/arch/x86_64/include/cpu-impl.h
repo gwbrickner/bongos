@@ -59,8 +59,9 @@ static inline _Noreturn void archHaltForever(void) {
     }
 }
 
-/* `int3`: raises #BP, which the trap handler logs and resumes (a trap: execution continues after
- * the instruction). For ktests. Not IRQ-safe against an armed archTrapCatch; no locks. */
+/* `int3`: raises #BP, which the trap handler counts (archBreakpointHits()), logs through
+ * klogWrite() and resumes (a trap: execution continues after the instruction); archTrapCatch()
+ * never catches it. For ktests. Any context klogWrite() allows; takes no lock itself. */
 static inline void archBreakpoint(void) {
     __asm__ volatile("int3" ::: "memory");
 }

@@ -6,6 +6,7 @@
 #include "preempt.h"
 
 #include <arch/cpu.h>
+#include <arch/trap.h>
 
 KTEST(klog_format) {
     char buf[128];
@@ -39,13 +40,16 @@ KTEST(klog_format) {
 
 typedef struct {
     uint32_t heldBefore, heldAfter, preemptInside;
+    uint64_t hitsBefore, hitsAfter;
 } KlogSectionProbe;
 
 static void klogBreakpointInSection(void *arg) {
     KlogSectionProbe *p = arg;
     p->heldBefore = cpuSync()->klogHeld;
     p->preemptInside = preemptCount(); /* klogLock is really held: preemption is off */
-    archBreakpoint();                  /* #BP logs through klogWrite() and resumes */
+    p->hitsBefore = archBreakpointHits();
+    archBreakpoint(); /* #BP logs through klogWrite() and resumes */
+    p->hitsAfter = archBreakpointHits();
     p->heldAfter = cpuSync()->klogHeld;
 }
 
@@ -59,6 +63,7 @@ KTEST(klog_exception_in_section_does_not_hang) {
     KlogSectionProbe p = {0};
     klogTestRunInSection(klogBreakpointInSection, &p);
     KTEST_ASSERT_EQ(preemptCount(), base);
+    KTEST_ASSERT_EQ(p.hitsAfter, p.hitsBefore + 1); /* the nested exception really happened */
     KTEST_ASSERT_EQ(p.heldBefore, 1);
     KTEST_ASSERT_EQ(p.heldAfter, 1);
     KTEST_ASSERT_EQ(p.preemptInside, base + 1);
