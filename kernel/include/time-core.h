@@ -67,6 +67,17 @@ typedef struct {
  * STATUS_ERR_INVALID otherwise, `*epoch` untouched. `civil` may be NULL. Pure. */
 Status timeRtcDecode(const TimeRtcRaw *raw, uint64_t *epoch, TimeCivil *civil);
 
+/* --- cross-CPU TSC offset (D-198) ---------------------------------------------------------- */
+
+/* Estimates how far a responder CPU's TSC is ahead of the initiator's from `n` ping-pong rounds:
+ * the initiator read `t0`, the responder `t1`, the initiator `t2` (all raw TSC values, in that
+ * real-time order). It keeps the round with the smallest round trip (t2 - t0; rounds with t2 < t0
+ * are ignored) and returns offset = t1 - (t0 + (t2 - t0) / 2) in `*offset` and that round trip in
+ * `*rtt`; the estimate's error is at most half the round trip. STATUS_ERR_INVALID if `n` is 0 or
+ * no round is usable. Pure. */
+Status timeTscPingpongBest(const uint64_t *t0, const uint64_t *t1, const uint64_t *t2, uint32_t n,
+                           int64_t *offset, uint64_t *rtt);
+
 /* --- timer heap ---------------------------------------------------------------------------- */
 
 typedef struct TimerObj TimerObj;
@@ -83,6 +94,7 @@ struct TimerObj {
     void *ctx;
     TimerObj *batchNext; /* the expiry pass's private FIFO link */
     uint32_t heapIndex;  /* valid only while ARMED */
+    uint32_t cpu; /* the CPU whose queue holds it (set by timerArm(); timers are CPU-local) */
     uint8_t state;
 };
 

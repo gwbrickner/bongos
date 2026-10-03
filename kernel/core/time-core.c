@@ -231,3 +231,27 @@ bool timerHeapCheck(const TimerHeap *h) {
     }
     return true;
 }
+
+Status timeTscPingpongBest(const uint64_t *t0, const uint64_t *t1, const uint64_t *t2, uint32_t n,
+                           int64_t *offset, uint64_t *rtt) {
+    bool found = false;
+    uint64_t bestRtt = 0;
+    int64_t bestOff = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (t2[i] < t0[i]) {
+            continue;
+        }
+        uint64_t r = t2[i] - t0[i];
+        if (!found || r < bestRtt) {
+            found = true;
+            bestRtt = r;
+            bestOff = (int64_t)(t1[i] - (t0[i] + r / 2));
+        }
+    }
+    if (!found) {
+        return STATUS_ERR_INVALID;
+    }
+    *offset = bestOff;
+    *rtt = bestRtt;
+    return STATUS_OK;
+}

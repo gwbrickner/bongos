@@ -15,6 +15,7 @@
 #define SMP_STAGE_NONE    0u /* not started */
 #define SMP_STAGE_ENTERED 1u /* apMain() is running */
 #define SMP_STAGE_ONLINE  2u /* published in cpuTable and the online mask */
+#define SMP_STAGE_TSC     4u /* an AP is waiting for the BSP to run the cross-CPU TSC check (D-198) */
 #define SMP_STAGE_FAILED  3u /* apMain() gave up (the CPU parks) */
 
 /* --- smp-core.c: pure helpers (no locks, no allocation) ------------------------------------- */

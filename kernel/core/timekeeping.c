@@ -3,6 +3,7 @@
 
 #include "cpu-local.h"
 #include "klog.h"
+#include "kmalloc.h"
 #include "panic.h"
 
 #include <arch/cpu.h>
@@ -35,7 +36,8 @@ uint64_t timeMonotonicNs(void) {
     if (!inited) {
         return 0;
     }
-    return timeScale(archReadTscOrdered() - tscBase, tscToNs);
+    return timeScale(archReadTscOrdered() - tscBase - (uint64_t)cpuLocal()->arch.tscOffset,
+                     tscToNs);
 }
 
 uint64_t timeWallNs(void) {
@@ -120,6 +122,20 @@ void timeInit(void) {
     }
 }
 
+Status timeCpuAttach(CpuLocal *cl) {
+    if (cl == NULL || cl->timer != NULL) {
+        return STATUS_ERR_INVALID;
+    }
+    TimerCpu *tc = kmalloc(sizeof(*tc), KMALLOC_ZERO);
+    if (tc == NULL) {
+        return STATUS_ERR_NO_MEMORY;
+    }
+    timerHeapInit(&tc->heap);
+    tc->expiring = false;
+    cl->timer = tc;
+    return STATUS_OK;
+}
+
 void timerInit(TimerObj *t, TimerFn fn, void *ctx) {
     if (t == NULL || fn == NULL) {
         panicBug("timerInit: NULL timer or callback");
@@ -131,6 +147,7 @@ void timerInit(TimerObj *t, TimerFn fn, void *ctx) {
     /* batchNext is deliberately left alone: the expiry pass owns it while `t` is EXPIRED, and a
      * callback re-initialising a not-yet-run sibling must not cut the rest of the batch off. */
     t->heapIndex = 0;
+    t->cpu = 0;
     t->state = TIMER_IDLE;
 }
 
@@ -140,6 +157,13 @@ Status timerArm(TimerObj *t, uint64_t deadlineNs) {
     }
     uint64_t f = archIrqSave();
     TimerCpu *tc = timerCpu();
+    if (t->state != TIMER_IDLE && t->cpu != smpThisCpu()) {
+        archIrqRestore(f);
+        panicBug("timerArm: a timer queued on cpu %u was re-armed from cpu %u (timers are "
+                 "CPU-local, D-199)",
+                 (unsigned)t->cpu, (unsigned)smpThisCpu());
+    }
+    t->cpu = smpThisCpu();
     TimerObj *oldRoot = timerHeapPeek(&tc->heap);
     if (t->state == TIMER_ARMED) {
         timerHeapRemove(&tc->heap, t);
@@ -163,6 +187,12 @@ Status timerCancel(TimerObj *t) {
     }
     uint64_t f = archIrqSave();
     TimerCpu *tc = timerCpu();
+    if (t->state != TIMER_IDLE && t->cpu != smpThisCpu()) {
+        archIrqRestore(f);
+        panicBug("timerCancel: a timer queued on cpu %u was cancelled from cpu %u (timers are "
+                 "CPU-local, D-199)",
+                 (unsigned)t->cpu, (unsigned)smpThisCpu());
+    }
     Status st = STATUS_ERR_NOT_FOUND;
     if (t->state == TIMER_ARMED) {
         bool wasRoot = timerHeapPeek(&tc->heap) == t;

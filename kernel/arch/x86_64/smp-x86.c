@@ -15,6 +15,7 @@
 #include "kernel-boot.h"
 #include "klog.h"
 #include "kmalloc.h"
+#include "spinlock-raw.h"
 #include "panic.h"
 #include "pmm.h"
 #include "smp.h"
@@ -96,6 +97,12 @@ static const uint32_t fixedMtrrMsrs[11] = {MSR_MTRR_FIX64K,
                                            0x26E,
                                            0x26F};
 
+static bool archCpuIsHypervisor(void) {
+    uint32_t r[4];
+    archCpuid(1, 0, r);
+    return (r[2] >> 31) & 1u;
+}
+
 static bool cpuHasMtrr(void) {
     uint32_t r[4];
     archCpuid(1, 0, r);
@@ -174,6 +181,168 @@ static void mtrrApplyBsp(const BspCpuState *st) {
     archWriteCr0(cr0);
 }
 
+/* --- cross-CPU TSC check (D-198) -----------------------------------------------------------------
+ */
+
+/* The BSP and one AP run this protocol in lockstep (both IF=0) while the AP boots, in three phases
+ * separated by barriers: (A) both CPUs alternately stamp a shared `last` TSC value under one lock,
+ * and any reading below the previous one is a warp; (B) only if A saw a warp, 16 ping-pong rounds
+ * estimate how far the AP's TSC is ahead, keeping the round with the smallest round trip; (C) the
+ * check runs again with the estimate applied. The estimate becomes the AP's `tscOffset`, which
+ * timeMonotonicNs() subtracts (the hardware timer path uses the raw local TSC, so offsets never
+ * touch it). IA32_TSC_ADJUST is not written (D-198). Every wait is bounded; on a timeout both
+ * sides give up and the AP keeps offset 0. */
+#define TSC_WARP_ITER   4000u
+#define TSC_PING_ROUNDS 16u
+#define TSC_WAIT_NS     500000000ull
+
+typedef struct {
+    RawSpinlock lock;
+    uint64_t last;
+    uint32_t warps;
+    uint32_t barrier[4];
+    uint32_t failed;
+    uint32_t pingSeq, pongSeq;
+    uint64_t pongTsc;
+    int64_t offset;   /* the estimate: how far the AP's TSC is ahead of the BSP's */
+    int64_t fakeSkew; /* ktest only: added to the AP's readings, to exercise the estimator */
+} TscSync;
+
+static TscSync tscSync;
+
+typedef struct {
+    uint32_t warpsBefore, warpsAfter;
+    int64_t offset;
+    bool ok;
+} TscSyncResult;
+
+/* Spins until `*p >= want`; false on a timeout or if the other side already gave up. */
+static bool tscWait(TscSync *s, const uint32_t *p, uint32_t want) {
+    uint64_t deadline = timeMonotonicNs() + TSC_WAIT_NS;
+    while (ATOMIC_LOAD(p, MEM_ACQUIRE) < want) {
+        if (ATOMIC_LOAD(&s->failed, MEM_ACQUIRE) != 0) {
+            return false;
+        }
+        if (timeMonotonicNs() >= deadline) {
+            ATOMIC_STORE(&s->failed, 1, MEM_RELEASE);
+            return false;
+        }
+        archPause();
+    }
+    return true;
+}
+
+static bool tscBarrier(TscSync *s, uint32_t n) {
+    ATOMIC_FETCH_ADD(&s->barrier[n], 1, MEM_SEQ_CST);
+    return tscWait(s, &s->barrier[n], 2);
+}
+
+/* One side of the warp check: stamps the shared `last` for TSC_WARP_ITER rounds (or about 10 ms),
+ * reading its own TSC plus `adj`. Adds the warps it saw to s->warps. */
+static void tscWarpLoop(TscSync *s, int64_t adj, uint64_t spanTicks) {
+    uint64_t start = archReadTscOrdered();
+    uint32_t warps = 0;
+    for (uint32_t i = 0; i < TSC_WARP_ITER; i++) {
+        rawSpinLock(&s->lock);
+        uint64_t prev = s->last;
+        uint64_t now = archReadTscOrdered() + (uint64_t)adj;
+        s->last = now;
+        rawSpinUnlock(&s->lock);
+        if (now < prev) {
+            warps++;
+        }
+        if (archReadTscOrdered() - start > spanTicks) {
+            break;
+        }
+    }
+    ATOMIC_FETCH_ADD(&s->warps, warps, MEM_SEQ_CST);
+}
+
+/* BSP half. Runs with IF=0 once the AP is waiting (SMP_STAGE_TSC). */
+static void tscSyncBsp(TscSync *s, TscSyncResult *out) {
+    *out = (TscSyncResult){0};
+    uint64_t span = timeTscHz() / 100;
+    if (!tscBarrier(s, 0)) { /* both sides are ready */
+        return;
+    }
+    tscWarpLoop(s, 0, span);
+    if (!tscBarrier(s, 1)) {
+        return;
+    }
+    out->warpsBefore = ATOMIC_LOAD(&s->warps, MEM_ACQUIRE);
+    if (out->warpsBefore != 0) {
+        uint64_t t0[TSC_PING_ROUNDS], t1[TSC_PING_ROUNDS], t2[TSC_PING_ROUNDS];
+        for (uint32_t r = 0; r < TSC_PING_ROUNDS; r++) {
+            t0[r] = archReadTscOrdered();
+            ATOMIC_STORE(&s->pingSeq, r + 1, MEM_SEQ_CST);
+            if (!tscWait(s, &s->pongSeq, r + 1)) {
+                return;
+            }
+            t2[r] = archReadTscOrdered();
+            t1[r] = s->pongTsc;
+        }
+        int64_t off;
+        uint64_t rtt;
+        if (timeTscPingpongBest(t0, t1, t2, TSC_PING_ROUNDS, &off, &rtt) != STATUS_OK) {
+            ATOMIC_STORE(&s->failed, 1, MEM_RELEASE);
+            return;
+        }
+        s->offset = off;
+        out->offset = off;
+        ATOMIC_STORE(&s->warps, 0, MEM_SEQ_CST);
+    }
+    if (!tscBarrier(s, 2)) {
+        return;
+    }
+    if (out->warpsBefore != 0) {
+        tscWarpLoop(s, 0, span);
+    }
+    if (!tscBarrier(s, 3)) { /* both rechecks are done before anyone reads the count */
+        return;
+    }
+    out->warpsAfter = ATOMIC_LOAD(&s->warps, MEM_ACQUIRE);
+    out->ok = true;
+}
+
+/* AP half; `cl` is this CPU. `out->ok` is set when the check completed (the estimate is in
+ * out->offset, not yet applied); a timeout leaves it clear. */
+static void tscSyncAp(TscSync *s, const CpuLocal *cl, TscSyncResult *out) {
+    *out = (TscSyncResult){0};
+    uint64_t span = timeTscHz() / 100;
+    int64_t skew = s->fakeSkew;
+    int64_t adj = skew - cl->arch.tscOffset;
+    if (!tscBarrier(s, 0)) {
+        return;
+    }
+    tscWarpLoop(s, adj, span);
+    if (!tscBarrier(s, 1)) {
+        return;
+    }
+    uint32_t warps = ATOMIC_LOAD(&s->warps, MEM_ACQUIRE);
+    out->warpsBefore = warps;
+    if (warps != 0) {
+        for (uint32_t r = 0; r < TSC_PING_ROUNDS; r++) {
+            if (!tscWait(s, &s->pingSeq, r + 1)) {
+                return;
+            }
+            s->pongTsc = archReadTscOrdered() + (uint64_t)adj;
+            ATOMIC_STORE(&s->pongSeq, r + 1, MEM_SEQ_CST);
+        }
+    }
+    if (!tscBarrier(s, 2)) {
+        return;
+    }
+    if (warps != 0) {
+        out->offset = s->offset;
+        tscWarpLoop(s, adj - s->offset, span);
+    }
+    if (!tscBarrier(s, 3)) {
+        return;
+    }
+    out->warpsAfter = ATOMIC_LOAD(&s->warps, MEM_ACQUIRE);
+    out->ok = true;
+}
+
 /* --- the AP side -------------------------------------------------------------------------------
  */
 
@@ -243,6 +412,17 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
         } else {
             klogWrite(KLOG_WARN, "smp", "cpu %u: MTRRs differ from the boot CPU's", cl->cpuId);
         }
+    }
+
+    lapicTimerCpuSetup(); /* this CPU's LAPIC timer; its queue (cl->timer) was attached by the BSP
+                           */
+
+    /* Cross-CPU TSC check against the BSP, which runs its half while we wait in SMP_STAGE_TSC. */
+    ATOMIC_STORE(&cl->bootStage, SMP_STAGE_TSC, MEM_RELEASE);
+    TscSyncResult tr;
+    tscSyncAp(&tscSync, cl, &tr);
+    if (tr.ok && tr.offset != 0) {
+        cl->arch.tscOffset = tr.offset; /* timeMonotonicNs() on this CPU subtracts it from now on */
     }
 
     /* Publish: the CpuLocal first, then the online mask, then a full local TLB flush (a shootdown
@@ -389,10 +569,26 @@ static CpuLocal *allocAp(uint32_t cpuId, uint32_t apicId) {
         cl->arch.istBottom[i] = (uint64_t)(uintptr_t)ist[i];
         cl->arch.istTop[i] = (uint64_t)(uintptr_t)ist[i] + AP_STACK_SIZE;
     }
-    if (pmmCpuAttach(cl) != STATUS_OK || slabCpuAttach(cl) != STATUS_OK) {
+    if (pmmCpuAttach(cl) != STATUS_OK || slabCpuAttach(cl) != STATUS_OK ||
+        timeCpuAttach(cl) != STATUS_OK) {
         return NULL;
     }
     return cl;
+}
+
+static void reportTscSync(const CpuLocal *cl, const TscSyncResult *tr) {
+    if (!tr->ok) {
+        klogWrite(KLOG_WARN, "smp", "cpu %u: the TSC check timed out; its clock is not compared",
+                  cl->cpuId);
+    } else if (tr->warpsBefore != 0) {
+        /* Under a hypervisor a skew is the host's doing; on bare metal it is worth a warning. */
+        bool bare = !archCpuIsHypervisor();
+        klogWrite(bare && tr->warpsAfter != 0 ? KLOG_WARN : KLOG_INFO, "smp",
+                  "cpu %u: TSC ran %lld ticks ahead of the boot CPU's; offset applied (%u warps "
+                  "before, %u after)",
+                  cl->cpuId, (long long)tr->offset, (unsigned)tr->warpsBefore,
+                  (unsigned)tr->warpsAfter);
+    }
 }
 
 /* Starts one AP and waits for it (D-193). true once it is ONLINE. */
@@ -412,8 +608,18 @@ static bool bootAp(CpuLocal *cl) {
         lapicSendIpi(cl->apicId, sipi);
     }
 
+    memset(&tscSync, 0, sizeof(tscSync));
+    bool tscDone = false;
     uint64_t deadline = timeMonotonicNs() + AP_ONLINE_TIMEOUT_NS;
     while (ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE) != SMP_STAGE_ONLINE) {
+        if (!tscDone && ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE) == SMP_STAGE_TSC) {
+            tscDone = true;
+            TscSyncResult tr;
+            uint64_t f = archIrqSave();
+            tscSyncBsp(&tscSync, &tr);
+            archIrqRestore(f);
+            reportTscSync(cl, &tr);
+        }
         if (ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE) == SMP_STAGE_FAILED ||
             timeMonotonicNs() >= deadline) {
             klogWrite(KLOG_WARN, "smp",

@@ -4,6 +4,7 @@
 #include "cmdline.h"
 #include "framework/test.h"
 #include "smp.h"
+#include "time-core.h"
 
 #include <string.h>
 
@@ -104,4 +105,26 @@ TEST(smpPickTrampolinePageChoosesHighestUsablePageBelowTheLimit) {
                           region(0x2800, 0x800, BOOT_MEM_USABLE),
                           region(0x100000, 0x100000, BOOT_MEM_USABLE)};
     ASSERT_TRUE(!smpPickTrampolinePage(m4, 3, &p));
+}
+
+TEST(timeTscPingpongBestPicksTheSmallestRoundTrip) {
+    /* The responder's TSC is 1000 ticks ahead. Round 1 has the tightest trip (rtt 20): its estimate
+     * is exact; the others are skewed by asymmetric delays. */
+    uint64_t t0[3] = {100, 200, 300};
+    uint64_t t1[3] = {1190, 1210, 1380};
+    uint64_t t2[3] = {200, 220, 500};
+    int64_t off;
+    uint64_t rtt;
+    ASSERT_EQ(timeTscPingpongBest(t0, t1, t2, 3, &off, &rtt), STATUS_OK);
+    ASSERT_EQ(rtt, 20u);
+    ASSERT_EQ(off, 1000);
+    /* A responder that is behind gives a negative offset. */
+    uint64_t u1[1] = {5000};
+    uint64_t u0[1] = {10000}, u2[1] = {10100};
+    ASSERT_EQ(timeTscPingpongBest(u0, u1, u2, 1, &off, &rtt), STATUS_OK);
+    ASSERT_EQ(off, 5000 - 10050);
+    /* Unusable input. */
+    uint64_t bad0[1] = {10}, bad2[1] = {5};
+    ASSERT_EQ(timeTscPingpongBest(bad0, u1, bad2, 1, &off, &rtt), STATUS_ERR_INVALID);
+    ASSERT_EQ(timeTscPingpongBest(t0, t1, t2, 0, &off, &rtt), STATUS_ERR_INVALID);
 }

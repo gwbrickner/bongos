@@ -34,11 +34,21 @@ bool timeWallValid(void);
  * IRQ-safe; never sleep. */
 uint64_t timeTscHz(void);
 
+/* Gives CPU `cl` its timer queue (`cl->timer`), so its LAPIC timer can be used once that CPU runs
+ * lapicTimerCpuSetup() (D-199). Called by the BSP for an AP before the AP starts, after timeInit()
+ * and slabInit(). STATUS_ERR_INVALID: `cl` NULL or already attached. STATUS_ERR_NO_MEMORY. Not
+ * IRQ-safe (allocates). */
+struct CpuLocal;
+Status timeCpuAttach(struct CpuLocal *cl);
+
 /* Timer objects live in caller storage and must outlive their arming (a stack object is fine only
  * if cancelled before the frame returns). The callback runs in IRQ context on the arming CPU with
  * IF=0 and irqDepth()==1, after the kernel has popped the timer: no allocation, no sleeping, no
  * ktest assertions (the irq.h handler rules); klogWrite() is IRQ-safe but keep handlers short.
- * It may call timerArm()/timerCancel() on any timer, itself included. */
+ * It may call timerArm()/timerCancel() on any timer of its own CPU, itself included. Timers are
+ * CPU-local (D-199): a timer lives on the queue of the CPU that armed it, and re-arming or
+ * cancelling it from another CPU while it is queued is a kernel bug (panicBug) until M4 adds a
+ * cross-CPU path. */
 /* `fn` must not be NULL (panicBug). `t` must be fresh or idle: calling this on a timer that is
  * still armed leaves a dangling queue entry and corrupts the queue (timerCancel() it first). On a
  * timer popped for dispatch but not yet run it is safe, and the callback never runs (as with
