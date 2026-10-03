@@ -3,16 +3,14 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-02 (M3.3 merged; M3.4 finished, PR #22 open)
+**Last updated:** 2026-10-02 (M3.4 merged; M3.5 started)
 
 ## Next step
-**M3.4 Locking + lock validator is finished** (log `docs/logs/M3.4.md`; three finish sweeps `SWEEP: PASS`, reviewer
-`VERDICT: PASS`) on the session branch `claude/resume-bongos-dev-prrfwz`; PR [#22](https://github.com/gwbrickner/bongos/pull/22) is open,
-`needs-owner`. Next: owner merges it and answers the M3.4 questions below, then start **M3.5 SMP bring-up** (Needs M3.3 and
-M3.4 are done).
+**M3.5 SMP bring-up is in progress** (log `docs/logs/M3.5.md`) on the session branch `claude/optimistic-hawking-qw4tzr`.
+M3.4 merged (PR #22). Next: architect consult for the SMP design, then plan step 1 (`CpuLocal` through GS base).
 
 ## Current milestone
-None in progress (M3.4 awaits the owner's merge of PR #22).
+M3.5 SMP bring-up (`needs-owner`).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
