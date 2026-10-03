@@ -1,7 +1,9 @@
 /* The physical memory manager (D-079..D-082, ROADMAP M2.2): pmmInit() ties the pure pmm-map.c
  * scan, the early.c bump allocator, and the buddy.c core together, then this file exposes pmm.h's
- * public alloc/free/stats API on top of a BSP-only per-CPU cache. */
+ * public alloc/free/stats API on top of per-CPU page caches (D-199). */
 #include "arch/early-map.h"
+#include "cpu-local.h"
+#include "kmalloc.h"
 #include "bootinfo-validate.h" /* bootMemTypeName */
 #include "klog.h"
 #include "panic.h"
@@ -21,10 +23,11 @@ static uint64_t pmmReclaimedPagesValue;
 static uint64_t pmmAcpiReclaimedPagesValue; /* subset of the above: ACPI_RECLAIM (M3.1) */
 static PmmBugKind pmmLastBugKind = PMM_BUG_NONE;
 
-/* --- BSP-only per-CPU cache: order-0 only, one free list per zone (D-081). No cpu index appears
- * in any call -- pmmLocalCache() is the one place that knows there's only the BSP today; M3.5
- * replaces its body with a real `cpuLocal()->pmmCache[zone]` lookup and nothing else in this file
- * changes. */
+/* --- per-CPU page caches: order-0 only, one free list per zone (D-081, D-199). Each CPU owns a
+ * PmmCpu reached through cpuLocal()->pmm; the caches are still protected by the one global pmmLock
+ * (no lockless fast path: it would need a CAS on Page.state to keep D-082's exact double-free
+ * detection), so a remote CPU's cache can be drained or counted under that lock. `pmmCpus[]`
+ * registers every attached blob (under pmmLock) for the stats and drain-all paths. */
 typedef struct {
     ListNode pages;
     uint32_t count;
@@ -33,22 +36,36 @@ typedef struct {
 #define PMM_PCP_BATCH 32
 #define PMM_PCP_HIGH  (6 * PMM_PCP_BATCH)
 
-static PmmPcpList pmmBspCache[PMM_ZONE_COUNT];
+struct PmmCpu {
+    PmmPcpList cache[PMM_ZONE_COUNT];
+};
+
+typedef struct PmmCpu PmmCpu;
+static PmmCpu pmmBspCpu;
+static PmmCpu *pmmCpus[CPU_MAX];
+static uint32_t pmmCpuCount;
 
 static PmmPcpList *pmmLocalCache(PmmZoneId zone) {
-    return &pmmBspCache[zone];
+    return &((PmmCpu *)cpuLocal()->pmm)->cache[zone];
 }
 
-static void pmmCacheInitAll(void) {
+static void pmmCpuInit(PmmCpu *c) {
     for (uint32_t z = 0; z < PMM_ZONE_COUNT; z++) {
-        listInit(&pmmBspCache[z].pages);
-        pmmBspCache[z].count = 0;
+        listInit(&c->cache[z].pages);
+        c->cache[z].count = 0;
     }
 }
 
-/* --- lock: a real irqsave Spinlock since M3.4 (D-188). Handlers still never allocate (D-173):
- * D-085(1) (validation outside the lock) and the slab's two-section free stay open until M3.5. Lock
- * order: vmm -> pmm (see vmm.c); klog is a leaf below everything. */
+static void pmmCacheInitAll(void) {
+    pmmCpuInit(&pmmBspCpu);
+    pmmCpus[0] = &pmmBspCpu;
+    pmmCpuCount = 1;
+    cpuLocal()->pmm = &pmmBspCpu;
+}
+
+/* --- lock: a real irqsave Spinlock since M3.4 (D-188). Handlers may allocate and free pages
+ * (D-200: validation runs under the lock since M3.5, D-085(1)). Lock order: vmm -> pmm (see vmm.c);
+ * klog is a leaf below everything. */
 static Spinlock pmmLockObj = SPINLOCK_INIT("pmm");
 static uint64_t pmmLock(void) {
     return spinLockIrqSave(&pmmLockObj);
@@ -137,32 +154,40 @@ uint64_t pmmHhdmBase(void) {
     return pmmHhdmBaseValue;
 }
 
-/* Validates a pmmFreePages() call against the Page-state machine and returns the block's pfn via
- * `*outPfn` on success. Deliberately called with pmmLock NOT held (see pmmBug's own comment) --
- * every failure path below calls pmmBug(), which never returns. */
-static void pmmValidateForFree(Page *page, uint32_t order, uint64_t *outPfn) {
+/* Validates a pmmFreePages() call against the Page-state machine. Called WITH pmmLock held
+ * (D-085(1): a racing double free must be seen by exactly one of the two callers): returns
+ * PMM_BUG_NONE and the block's pfn in `*outPfn`, or the bug kind (and the offending pfn) for the
+ * caller to report after dropping the lock -- pmmBug() must never fire with pmmLock held (see its
+ * own comment). */
+static PmmBugKind pmmValidateForFree(Page *page, uint32_t order, uint64_t *outPfn) {
     if (page == NULL) {
-        pmmBug(PMM_BUG_INVALID_PAGE, 0);
+        *outPfn = 0;
+        return PMM_BUG_INVALID_PAGE;
     }
     uintptr_t addr = (uintptr_t)page;
     if (addr < PAGE_ARRAY_VA || (addr - PAGE_ARRAY_VA) % sizeof(Page) != 0) {
-        pmmBug(PMM_BUG_INVALID_PAGE, 0);
+        *outPfn = 0;
+        return PMM_BUG_INVALID_PAGE;
     }
     uint64_t pfn = pageToPfn(page);
     if (!pmmPfnValid(pfn)) {
-        pmmBug(PMM_BUG_INVALID_PAGE, pfn);
+        *outPfn = pfn;
+        return PMM_BUG_INVALID_PAGE;
     }
     if (order > PMM_MAX_ORDER) {
-        pmmBug(PMM_BUG_BAD_ORDER, pfn);
+        *outPfn = pfn;
+        return PMM_BUG_BAD_ORDER;
     }
     if ((pfn & (((uint64_t)1 << order) - 1)) != 0) {
-        pmmBug(PMM_BUG_MISALIGNED, pfn);
+        *outPfn = pfn;
+        return PMM_BUG_MISALIGNED;
     }
 
     switch (page->state) {
         case PAGE_STATE_ALLOCATED:
             if (page->order != order) {
-                pmmBug(PMM_BUG_ORDER_MISMATCH, pfn);
+                *outPfn = pfn;
+                return PMM_BUG_ORDER_MISMATCH;
             }
             /* M2.4, D-095: an owner (the slab allocator or vmalloc) must clear its Page.flags
              * ownership bit on every page of the block before ever calling pmmFreePages() -- a
@@ -170,14 +195,16 @@ static void pmmValidateForFree(Page *page, uint32_t order, uint64_t *outPfn) {
              * freeing someone else's live memory directly), either way a kernel bug. */
             for (uint64_t p = pfn; p < pfn + ((uint64_t)1 << order); p++) {
                 if (pageFromPfn(p)->flags & PAGE_F_OWNER_MASK) {
-                    pmmBug(PMM_BUG_OWNED_PAGE, p);
+                    *outPfn = p;
+                    return PMM_BUG_OWNED_PAGE;
                 }
             }
             *outPfn = pfn;
-            return;
+            return PMM_BUG_NONE;
         case PAGE_STATE_BUDDY:
         case PAGE_STATE_PCP:
-            pmmBug(PMM_BUG_DOUBLE_FREE, pfn);
+            *outPfn = pfn;
+            return PMM_BUG_DOUBLE_FREE;
         case PAGE_STATE_TAIL: {
             /* Is `pfn` covered by some block that's *already* free? For every alignment k, the
              * k-aligned floor of `pfn` is a multiple of 2^k; if that candidate head is a free BUDDY
@@ -190,15 +217,19 @@ static void pmmValidateForFree(Page *page, uint32_t order, uint64_t *outPfn) {
                 uint64_t headPfn = pfn & ~(((uint64_t)1 << k) - 1);
                 Page *head = pageFromPfn(headPfn);
                 if (head->state == PAGE_STATE_BUDDY && head->order >= k) {
-                    pmmBug(PMM_BUG_DOUBLE_FREE, pfn);
+                    *outPfn = pfn;
+                    return PMM_BUG_DOUBLE_FREE;
                 }
             }
-            pmmBug(PMM_BUG_NOT_HEAD, pfn);
+            *outPfn = pfn;
+            return PMM_BUG_NOT_HEAD;
         }
         case PAGE_STATE_RESERVED:
-            pmmBug(PMM_BUG_RESERVED_FRAME, pfn);
+            *outPfn = pfn;
+            return PMM_BUG_RESERVED_FRAME;
         default:
-            pmmBug(PMM_BUG_CORRUPT_STATE, pfn);
+            *outPfn = pfn;
+            return PMM_BUG_CORRUPT_STATE;
     }
 }
 
@@ -266,10 +297,9 @@ static void pmmCacheFreeLocked(PmmZoneId zone, uint64_t pfn) {
     }
 }
 
-void pmmDrainLocalCache(void) {
-    uint64_t flags = pmmLock();
+static void pmmDrainCacheLocked(PmmCpu *c) {
     for (uint32_t z = 0; z < PMM_ZONE_COUNT; z++) {
-        PmmPcpList *cache = pmmLocalCache(z);
+        PmmPcpList *cache = &c->cache[z];
         ListNode *node;
         while ((node = listPopHead(&cache->pages)) != NULL) {
             cache->count--;
@@ -278,7 +308,49 @@ void pmmDrainLocalCache(void) {
             buddyFreeBlock(&pmmZones[z], pageToPfn(p), 0);
         }
     }
+}
+
+void pmmDrainLocalCache(void) {
+    uint64_t flags = pmmLock();
+    pmmDrainCacheLocked((PmmCpu *)cpuLocal()->pmm);
     pmmUnlock(flags);
+}
+
+void pmmDrainAllCaches(void) {
+    uint64_t flags = pmmLock();
+    for (uint32_t i = 0; i < pmmCpuCount; i++) {
+        pmmDrainCacheLocked(pmmCpus[i]);
+    }
+    pmmUnlock(flags);
+}
+
+Status pmmCpuAttach(CpuLocal *cl) {
+    if (cl == NULL || cl->pmm != NULL) {
+        return STATUS_ERR_INVALID;
+    }
+    uint64_t flags = pmmLock();
+    if (pmmCpuCount >= CPU_MAX) {
+        pmmUnlock(flags);
+        return STATUS_ERR_NO_MEMORY;
+    }
+    pmmUnlock(flags);
+    /* The blob comes from kmalloc (the slab owns pmm pages, so this nests pmm only through the
+     * slab's own grow path, never under pmmLock). */
+    PmmCpu *c = kmalloc(sizeof(*c), KMALLOC_ZERO);
+    if (c == NULL) {
+        return STATUS_ERR_NO_MEMORY;
+    }
+    pmmCpuInit(c);
+    flags = pmmLock();
+    if (pmmCpuCount >= CPU_MAX) {
+        pmmUnlock(flags);
+        kfree(c);
+        return STATUS_ERR_NO_MEMORY;
+    }
+    pmmCpus[pmmCpuCount++] = c;
+    cl->pmm = c;
+    pmmUnlock(flags);
+    return STATUS_OK;
 }
 
 Status pmmAllocPages(uint32_t order, PmmFlags flags, Page **outPage) {
@@ -331,9 +403,12 @@ Status pmmAllocPages(uint32_t order, PmmFlags flags, Page **outPage) {
 
 void pmmFreePages(Page *page, uint32_t order) {
     uint64_t pfn;
-    pmmValidateForFree(page, order, &pfn); /* unlocked; never returns on failure */
-
     uint64_t irqFlags = pmmLock();
+    PmmBugKind bug = pmmValidateForFree(page, order, &pfn);
+    if (bug != PMM_BUG_NONE) {
+        pmmUnlock(irqFlags);
+        pmmBug(bug, pfn);
+    }
 #ifdef KERNEL_DEBUG
     for (uint64_t p = pfn; p < pfn + ((uint64_t)1 << order); p++) {
         pmmPoisonPage(pageFromPfn(p));
@@ -377,13 +452,14 @@ Status pmmAddFreeRange(uint64_t physBase, uint64_t length) {
         return STATUS_ERR_INVALID;
     }
 
+    uint64_t irqFlags = pmmLock();
     for (uint64_t p = startPfn; p < endPfn; p++) {
         if (!pmmPfnValid(p) || pageFromPfn(p)->state != PAGE_STATE_RESERVED) {
+            pmmUnlock(
+                irqFlags); /* D-085(1): checked under the lock, so overlapping adds race safely */
             return STATUS_ERR_INVALID;
         }
     }
-
-    uint64_t irqFlags = pmmLock();
     uint64_t pfn = startPfn;
     while (pfn < endPfn) {
         uint32_t order = (pfn == 0) ? PMM_MAX_ORDER : (uint32_t)__builtin_ctzll(pfn);
@@ -549,12 +625,16 @@ void pmmGetStats(PmmStats *out) {
     out->pageTablePages = pmmPageTablePages;
 
     for (uint32_t z = 0; z < PMM_ZONE_COUNT; z++) {
-        uint64_t zoneFree = pmmZones[z].freePages + pmmLocalCache(z)->count;
+        uint64_t cached = 0;
+        for (uint32_t i = 0; i < pmmCpuCount; i++) {
+            cached += pmmCpus[i]->cache[z].count;
+        }
+        uint64_t zoneFree = pmmZones[z].freePages + cached;
         out->zoneManagedPages[z] = pmmZones[z].managedPages;
         out->zoneFreePages[z] = zoneFree;
         out->managedPages += pmmZones[z].managedPages;
         out->freePages += zoneFree;
-        out->cachedPages += pmmLocalCache(z)->count;
+        out->cachedPages += cached;
     }
     out->allocatedPages = out->managedPages - out->freePages;
     pmmUnlock(irqFlags);

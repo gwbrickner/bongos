@@ -99,9 +99,20 @@ void pmmFreePages(Page *page, uint32_t order);
  * yes. May sleep: no. */
 Status pmmAddFreeRange(uint64_t physBase, uint64_t length);
 
-/* Drains the calling CPU's local page cache back to the buddy free lists (M2.2: the one BSP
- * cache). Locks: pmmLock. IRQ-safe: yes. May sleep: no. */
+/* Drains the calling CPU's local page cache back to the buddy free lists. Locks: pmmLock.
+ * IRQ-safe: yes. May sleep: no. */
 void pmmDrainLocalCache(void);
+
+/* Drains every attached CPU's page cache (the caches are protected by pmmLock, so a remote CPU's
+ * can be drained from here; D-199). Locks: pmmLock. IRQ-safe: yes. May sleep: no. */
+void pmmDrainAllCaches(void);
+
+/* Gives CPU `cl` its per-CPU page cache (`cl->pmm`) and registers it for the stats and
+ * drain-all paths. Called by the BSP for an AP before the AP starts (D-199); needs kmalloc, so only
+ * after slabInit(). STATUS_ERR_INVALID: `cl` NULL or already attached. STATUS_ERR_NO_MEMORY.
+ * Locks: pmmLock (not held across the allocation). IRQ-safe: no (allocates). May sleep: no. */
+struct CpuLocal;
+Status pmmCpuAttach(struct CpuLocal *cl);
 
 /* True if `pfn` has a Page entry at all (not necessarily free or even RAM -- see page.h). No
  * locks (span table is immutable after pmmInit); pure. */

@@ -5,10 +5,12 @@
 #include "slab-internal.h"
 
 #include "bootinfo.h"
+#include "cpu-local.h"
 #include "klog.h"
 #include "panic.h"
 #include "pmm.h"
 #include "spinlock.h"
+#include "vmalloc.h"
 #include "vmm.h"
 
 #include <arch/cpu.h>
@@ -21,6 +23,20 @@ extern void *memset(void *dst, int value, size_t n);
 
 static SlabCache slabCaches[SLAB_MAX_CACHES];
 static bool slabCacheInUse[SLAB_MAX_CACHES];
+
+/* Per-CPU magazines (D-094, D-199): one SlabMagazine per cache slot per CPU, reached through
+ * cpuLocal()->slab. Still protected by the one global slabLock (so another CPU's magazines can be
+ * flushed or counted under it); `slabCpus[]` registers every attached blob under slabLock. */
+typedef struct SlabCpu {
+    SlabMagazine mags[SLAB_MAX_CACHES];
+} SlabCpu;
+static SlabCpu slabBspCpu;
+static SlabCpu *slabCpus[CPU_MAX] = {&slabBspCpu};
+static uint32_t slabCpuCount = 1;
+
+static SlabMagazine *slabLocalMag(const SlabCache *cache) {
+    return &((SlabCpu *)cpuLocal()->slab)->mags[cache->slot];
+}
 static SlabCache *slabKmallocCaches[SLAB_KMALLOC_CLASS_COUNT];
 
 static SlabBugKind slabLastBugKind = SLAB_BUG_NONE;
@@ -240,6 +256,10 @@ static void slabPushObjectLocked(SlabCache *cache, void *ptr, uint64_t irqFlags)
         slabUnlock(irqFlags);
         slabBug(SLAB_BUG_CORRUPT, ptr);
     }
+    if (slabBufctl(r.slab)[r.index] != SLAB_BUFCTL_MAG) {
+        slabUnlock(irqFlags);
+        slabBug(SLAB_BUG_CORRUPT, ptr);
+    }
     slabFreeListPush(r.slab, (uint16_t)r.index);
     slabRehomeLocked(cache, r.slab);
 }
@@ -249,7 +269,9 @@ static void slabPushObjectLocked(SlabCache *cache, void *ptr, uint64_t irqFlags)
  * stale copy) for its own eventual slabUnlock(). */
 static void slabRefillLocked(SlabCache *cache, SlabMagazine *mag, uint64_t *irqFlags) {
     uint32_t need = mag->batch;
-    while (need > 0) {
+    /* `mag->count < mag->capacity` is re-checked on every pass: the lock is dropped to grow, and a
+     * handler on this CPU may free into this very magazine meanwhile (D-200). */
+    while (need > 0 && mag->count < mag->capacity) {
         Slab *slab;
         if (!listEmpty(&cache->partial)) {
             slab = LIST_CONTAINER(cache->partial.next, Slab, link);
@@ -268,8 +290,9 @@ static void slabRefillLocked(SlabCache *cache, SlabMagazine *mag, uint64_t *irqF
             cache->emptySlabCount++;
             slab = newSlab;
         }
-        while (need > 0 && slab->freeCount > 0) {
+        while (need > 0 && slab->freeCount > 0 && mag->count < mag->capacity) {
             uint16_t idx = slabFreeListPop(slab);
+            slabBufctl(slab)[idx] = SLAB_BUFCTL_MAG;
             mag->rounds[mag->count++] = slabSlot(slab, idx);
             need--;
         }
@@ -278,6 +301,20 @@ static void slabRefillLocked(SlabCache *cache, SlabMagazine *mag, uint64_t *irqF
 }
 
 /* --- public API --- */
+
+/* Resets one CPU's magazine for `cache`: empty, with the cache's capacity and batch (D-094). */
+static void slabMagInit(SlabMagazine *mag, const SlabCache *cache) {
+    uint32_t cap = cache->layout.stride == 0 ? 32 : 16384u / cache->layout.stride;
+    if (cap < 4) {
+        cap = 4;
+    }
+    if (cap > SLAB_MAG_MAX_ROUNDS) {
+        cap = SLAB_MAG_MAX_ROUNDS;
+    }
+    *mag = (SlabMagazine){0};
+    mag->capacity = (uint16_t)cap;
+    mag->batch = (uint16_t)(cap / 2);
+}
 
 static Status slabCacheCreateInternal(const char *name, size_t objSize, size_t align,
                                       SlabObjFn ctor, SlabObjFn dtor, uint32_t extraFlags,
@@ -309,6 +346,7 @@ static Status slabCacheCreateInternal(const char *name, size_t objSize, size_t a
     SlabCache *cache = &slabCaches[slot];
     *cache = (SlabCache){0};
     cache->magic = SLAB_CACHE_MAGIC;
+    cache->slot = (uint32_t)slot;
     uint32_t i = 0;
     for (; i < SLAB_NAME_MAX - 1 && name[i] != '\0'; i++) {
         cache->name[i] = name[i];
@@ -324,15 +362,11 @@ static Status slabCacheCreateInternal(const char *name, size_t objSize, size_t a
     listInit(&cache->full);
     listInit(&cache->empty);
 
-    uint32_t cap = cache->layout.stride == 0 ? 32 : 16384u / cache->layout.stride;
-    if (cap < 4) {
-        cap = 4;
+    flags = slabLock();
+    for (uint32_t c = 0; c < slabCpuCount; c++) {
+        slabMagInit(&slabCpus[c]->mags[slot], cache);
     }
-    if (cap > SLAB_MAG_MAX_ROUNDS) {
-        cap = SLAB_MAG_MAX_ROUNDS;
-    }
-    cache->bspMag.capacity = (uint16_t)cap;
-    cache->bspMag.batch = (uint16_t)(cap / 2);
+    slabUnlock(flags);
 
     *outCache = cache;
     return STATUS_OK;
@@ -343,12 +377,16 @@ Status slabCacheCreate(const char *name, size_t objSize, size_t align, SlabObjFn
     return slabCacheCreateInternal(name, objSize, align, ctor, dtor, 0, outCache);
 }
 
+/* Flushes the cache's magazine on EVERY attached CPU back to its slabs (D-199). */
 static void slabCacheFlushMagazineLocked(SlabCache *cache, uint64_t irqFlags) {
-    SlabMagazine *mag = &cache->bspMag;
-    for (uint32_t i = 0; i < mag->count; i++) {
-        slabPushObjectLocked(cache, mag->rounds[i], irqFlags);
+    for (uint32_t c = 0; c < slabCpuCount; c++) {
+        SlabMagazine *mag = &slabCpus[c]->mags[cache->slot];
+        for (uint32_t i = 0; i < mag->count; i++) {
+            slabPushObjectLocked(cache, mag->rounds[i], irqFlags);
+            mag->rounds[i] = NULL;
+        }
+        mag->count = 0;
     }
-    mag->count = 0;
 }
 
 void slabCacheShrink(SlabCache *cache) {
@@ -434,7 +472,7 @@ void *slabAlloc(SlabCache *cache, KmallocFlags flags) {
         slabUnlock(irqFlags);
         slabBug(SLAB_BUG_CORRUPT, NULL);
     }
-    SlabMagazine *mag = &cache->bspMag;
+    SlabMagazine *mag = slabLocalMag(cache);
     if (mag->count == 0) {
         slabRefillLocked(cache, mag, &irqFlags);
     }
@@ -442,6 +480,13 @@ void *slabAlloc(SlabCache *cache, KmallocFlags flags) {
     if (mag->count > 0) {
         obj = mag->rounds[--mag->count];
         mag->allocated++;
+        SlabResolved r;
+        SlabBugKind bug;
+        if (!slabResolvePointer(obj, &r, &bug) || slabBufctl(r.slab)[r.index] != SLAB_BUFCTL_MAG) {
+            slabUnlock(irqFlags);
+            slabBug(SLAB_BUG_CORRUPT, obj);
+        }
+        slabBufctl(r.slab)[r.index] = SLAB_BUFCTL_BUSY;
     }
     slabUnlock(irqFlags);
 
@@ -463,26 +508,17 @@ void *slabAlloc(SlabCache *cache, KmallocFlags flags) {
     return obj;
 }
 
-/* The double-free check (below) and the actual push onto the magazine are deliberately two
- * separate slabLock() critical sections, with the KERNEL_DEBUG redzone check/poison fill
- * unlocked in between (matching the pmm's own "validate, then mutate" pattern). Single-CPU today,
- * and interrupt handlers never allocate or free (D-173), so nothing else can run in the gap. Once
- * real concurrency exists (M3.4/M3.5), two CPUs racing to free the exact same pointer could both
- * pass the check before either pushes -- either merge these back into one critical section then, or
- * give the bufctl a third, transient "being freed" state to close the window. */
+/* Free is three steps (D-199): claim (under the lock: the object must be BUSY, and becomes FREEING,
+ * so two CPUs racing to free the same pointer cannot both pass), the unlocked KERNEL_DEBUG redzone
+ * check and poison fill, then push onto this CPU's magazine (MAG). The poison fill must finish
+ * before the push, or a handler on this CPU could allocate the object half-poisoned. */
 static void slabFreeCommon(SlabCache *cache, const SlabResolved *r, void *ptr) {
     uint16_t *bufctl = slabBufctl(r->slab);
-    SlabMagazine *mag = &cache->bspMag;
 
     uint64_t irqFlags = slabLock();
     bool dup = bufctl[r->index] != SLAB_BUFCTL_BUSY;
     if (!dup) {
-        for (uint32_t i = 0; i < mag->count; i++) {
-            if (mag->rounds[i] == ptr) {
-                dup = true;
-                break;
-            }
-        }
+        bufctl[r->index] = SLAB_BUFCTL_FREEING;
     }
     slabUnlock(irqFlags);
     if (dup) {
@@ -491,12 +527,16 @@ static void slabFreeCommon(SlabCache *cache, const SlabResolved *r, void *ptr) {
 
 #ifdef KERNEL_DEBUG
     if (!slabDebugCheckRedzones(cache, ptr)) {
+        irqFlags = slabLock();
+        bufctl[r->index] = SLAB_BUFCTL_BUSY; /* the object stays live: nothing was freed */
+        slabUnlock(irqFlags);
         slabBug(SLAB_BUG_REDZONE, ptr);
     }
     slabDebugPoisonFree(cache, ptr);
 #endif
 
     irqFlags = slabLock();
+    SlabMagazine *mag = slabLocalMag(cache);
     if (mag->count >= mag->capacity) {
         uint32_t flushN = mag->batch;
         for (uint32_t i = 0; i < flushN; i++) {
@@ -513,7 +553,14 @@ static void slabFreeCommon(SlabCache *cache, const SlabResolved *r, void *ptr) {
         }
         mag->count -= flushN;
         slabReclaimEmptyLocked(cache, SLAB_EMPTY_KEEP, &irqFlags);
+        /* The reclaim dropped the lock: a handler may have used this magazine meanwhile. */
+        mag = slabLocalMag(cache);
+        if (mag->count >= mag->capacity) {
+            slabUnlock(irqFlags);
+            slabBug(SLAB_BUG_CORRUPT, ptr);
+        }
     }
+    bufctl[r->index] = SLAB_BUFCTL_MAG;
     mag->rounds[mag->count++] = ptr;
     mag->allocated--;
     slabUnlock(irqFlags);
@@ -589,12 +636,42 @@ void slabCacheGetStats(const SlabCache *cache, SlabCacheStats *out) {
     uint64_t freeObjs = slabSumFreeLocked(&cache->partial) + slabSumFreeLocked(&cache->full) +
                         slabSumFreeLocked(&cache->empty);
     out->objsFree = freeObjs;
-    out->objsCached = cache->bspMag.count;
-    out->objsAllocated = cache->slabCount * cache->layout.objsPerSlab - freeObjs - out->objsCached;
+    uint64_t cached = 0;
+    for (uint32_t c = 0; c < slabCpuCount; c++) {
+        cached += slabCpus[c]->mags[cache->slot].count;
+    }
+    out->objsCached = cached;
+    out->objsAllocated = cache->slabCount * cache->layout.objsPerSlab - freeObjs - cached;
     slabUnlock(flags);
 }
 
+Status slabCpuAttach(CpuLocal *cl) {
+    if (cl == NULL || cl->slab != NULL) {
+        return STATUS_ERR_INVALID;
+    }
+    SlabCpu *c = vmalloc(sizeof(*c), VMALLOC_ZERO);
+    if (c == NULL) {
+        return STATUS_ERR_NO_MEMORY;
+    }
+    uint64_t flags = slabLock();
+    if (slabCpuCount >= CPU_MAX) {
+        slabUnlock(flags);
+        vfree(c);
+        return STATUS_ERR_NO_MEMORY;
+    }
+    for (uint32_t i = 0; i < SLAB_MAX_CACHES; i++) {
+        if (slabCacheInUse[i]) {
+            slabMagInit(&c->mags[i], &slabCaches[i]);
+        }
+    }
+    slabCpus[slabCpuCount++] = c;
+    cl->slab = c;
+    slabUnlock(flags);
+    return STATUS_OK;
+}
+
 void slabInit(void) {
+    cpuLocal()->slab = &slabBspCpu;
     for (uint32_t i = 0; i < SLAB_KMALLOC_CLASS_COUNT; i++) {
         char name[SLAB_NAME_MAX];
         uint32_t sz = slabKmallocClassSizes[i];

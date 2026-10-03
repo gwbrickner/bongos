@@ -74,10 +74,17 @@ void slabCacheDestroy(SlabCache *cache);
 void *slabAlloc(SlabCache *cache, KmallocFlags flags);
 void slabFree(SlabCache *cache, void *obj);
 
-/* Drains `cache`'s local magazine back to its slabs and releases every slab left fully empty.
- * `slabShrinkAll()` does this for every cache (kmalloc's included) -- ktest/diagnostic use,
- * mirroring pmmDrainLocalCache(). Neither is required before ordinary use. No locks required of
- * the caller; IRQ-safe; never sleeps. `slabCacheShrink(NULL)` is a no-op. */
+/* Gives CPU `cl` its per-CPU magazines (`cl->slab`, one per cache slot, vmalloc'd) and registers
+ * them so cache create/shrink/destroy/stats cover that CPU (D-199). Called by the BSP for an AP
+ * before the AP starts, after vmallocInit(). STATUS_ERR_INVALID: `cl` NULL or already attached.
+ * STATUS_ERR_NO_MEMORY. Locks: slabLock (not held across the allocation). IRQ-safe: no. */
+struct CpuLocal;
+Status slabCpuAttach(struct CpuLocal *cl);
+
+/* Drains `cache`'s magazines (every CPU's, D-199) back to its slabs and releases every slab left
+ * fully empty. `slabShrinkAll()` does this for every cache (kmalloc's included) -- ktest/diagnostic
+ * use, mirroring pmmDrainLocalCache(). Neither is required before ordinary use. No locks required
+ * of the caller; IRQ-safe; never sleeps. `slabCacheShrink(NULL)` is a no-op. */
 void slabCacheShrink(SlabCache *cache);
 void slabShrinkAll(void);
 

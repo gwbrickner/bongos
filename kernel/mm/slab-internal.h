@@ -11,12 +11,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SLAB_MAGIC      0x51AB51AB51AB51ABULL
-#define SLAB_BUFCTL_END 0xFFFFu /* free, last on the slab's free list */
-#define SLAB_BUFCTL_BUSY                                                                           \
-    0xFFFEu /* not on the slab's free list (caller-held or magazine-cached;                        \
-             * a magazine scan disambiguates the two for double-free                               \
-             * detection -- see slab.c's slabFreeCommon()) */
+#define SLAB_MAGIC       0x51AB51AB51AB51ABULL
+#define SLAB_BUFCTL_END  0xFFFFu /* free, last on the slab's free list */
+#define SLAB_BUFCTL_BUSY 0xFFFEu /* held by a caller */
+/* Magazine-cached states (D-199): which CPU's magazine holds an object is not recorded, so a
+ * double free is detected from the bufctl state alone on any CPU. */
+#define SLAB_BUFCTL_MAG     0xFFFDu /* parked in some CPU's magazine */
+#define SLAB_BUFCTL_FREEING 0xFFFCu /* claimed by a slabFree in progress (not yet in a magazine)   \
+                                     */
 #define SLAB_MAX_OBJECTS    1024u
 #define SLAB_MAX_ORDER      3u /* a slab is at most 4096 << 3 = 32 KiB */
 #define SLAB_NAME_MAX       24
@@ -88,7 +90,7 @@ struct SlabCache {
     ListNode partial, full, empty; /* list heads of Slab.link */
     uint64_t slabCount, emptySlabCount;
 
-    SlabMagazine bspMag; /* D-094: today's only "per-CPU" magazine */
+    uint32_t slot; /* index in slabCaches[] = this cache's magazine in every SlabCpu */
 };
 
 /* --- slab-core.c: pure layout/bufctl math, host-tested --- */

@@ -1,6 +1,7 @@
 /* Monotonic and wall clocks and the per-CPU timer queue (M3.3, D-176). See timekeeping.h. */
 #include "timekeeping.h"
 
+#include "cpu-local.h"
 #include "klog.h"
 #include "panic.h"
 
@@ -10,13 +11,18 @@
 
 #define TIMER_MAX_DELTA_NS (1ull << 40)
 
-/* One CPU's queue, laid out so M3.5 can move it into CpuLocal. */
+/* One CPU's queue; reached through cpuLocal()->timer (D-190, D-199). */
 typedef struct {
     TimerHeap heap;
     bool expiring; /* the interrupt handler is running callbacks; it reprograms when done */
 } TimerCpu;
 
-static TimerCpu bsp;
+static TimerCpu bspTimer;
+
+static inline TimerCpu *timerCpu(void) {
+    return (TimerCpu *)cpuLocal()->timer;
+}
+
 static bool inited;      /* the clock works (set before the LAPIC timer is calibrated) */
 static bool timersReady; /* the LAPIC timer is calibrated and programmed: timerArm() may be used */
 static uint64_t tscHzValue;
@@ -46,10 +52,11 @@ uint64_t timeTscHz(void) {
 
 /* Caller holds the IRQ-disable section. */
 static void reprogram(void) {
-    if (bsp.expiring) {
+    TimerCpu *tc = timerCpu();
+    if (tc->expiring) {
         return;
     }
-    TimerObj *root = timerHeapPeek(&bsp.heap);
+    TimerObj *root = timerHeapPeek(&tc->heap);
     if (root == NULL) {
         archTimerStop();
         return;
@@ -73,8 +80,9 @@ void timeInit(void) {
     if (timeMakeMult(hz, 1000000000ull, &mult) != STATUS_OK) {
         panic("time: cannot scale a %llu Hz TSC to nanoseconds", (unsigned long long)hz);
     }
-    timerHeapInit(&bsp.heap);
-    bsp.expiring = false;
+    timerHeapInit(&bspTimer.heap);
+    bspTimer.expiring = false;
+    cpuLocal()->timer = &bspTimer;
     tscHzValue = hz;
     tscToNs = mult;
     tscBase = archReadTscOrdered();
@@ -131,17 +139,18 @@ Status timerArm(TimerObj *t, uint64_t deadlineNs) {
         return STATUS_ERR_INVALID;
     }
     uint64_t f = archIrqSave();
-    TimerObj *oldRoot = timerHeapPeek(&bsp.heap);
+    TimerCpu *tc = timerCpu();
+    TimerObj *oldRoot = timerHeapPeek(&tc->heap);
     if (t->state == TIMER_ARMED) {
-        timerHeapRemove(&bsp.heap, t);
+        timerHeapRemove(&tc->heap, t);
         t->state = TIMER_IDLE;
     }
     uint64_t oldDeadline = t->deadlineNs;
     t->deadlineNs = deadlineNs;
-    Status st = timerHeapInsert(&bsp.heap, t);
+    Status st = timerHeapInsert(&tc->heap, t);
     if (st != STATUS_OK) {
         t->deadlineNs = oldDeadline; /* the contract: a refused `t` is left unchanged */
-    } else if (timerHeapPeek(&bsp.heap) != oldRoot || oldRoot == t) {
+    } else if (timerHeapPeek(&tc->heap) != oldRoot || oldRoot == t) {
         reprogram();
     }
     archIrqRestore(f);
@@ -153,10 +162,11 @@ Status timerCancel(TimerObj *t) {
         return STATUS_ERR_INVALID;
     }
     uint64_t f = archIrqSave();
+    TimerCpu *tc = timerCpu();
     Status st = STATUS_ERR_NOT_FOUND;
     if (t->state == TIMER_ARMED) {
-        bool wasRoot = timerHeapPeek(&bsp.heap) == t;
-        timerHeapRemove(&bsp.heap, t);
+        bool wasRoot = timerHeapPeek(&tc->heap) == t;
+        timerHeapRemove(&tc->heap, t);
         t->state = TIMER_IDLE;
         if (wasRoot) {
             reprogram();
@@ -177,14 +187,15 @@ bool timerIsArmed(const TimerObj *t) {
 void timeTimerIrq(uint32_t vector, void *ctx) {
     (void)vector;
     (void)ctx;
-    bsp.expiring = true;
+    TimerCpu *tc = timerCpu();
+    tc->expiring = true;
     uint64_t now = timeMonotonicNs();
     /* Collect everything due into a FIFO first, so a callback that re-arms itself with a deadline
      * in the past cannot loop inside one handler. */
     TimerObj *head = NULL, *tail = NULL;
-    for (TimerObj *t = timerHeapPeek(&bsp.heap); t != NULL && t->deadlineNs <= now;
-         t = timerHeapPeek(&bsp.heap)) {
-        timerHeapRemove(&bsp.heap, t);
+    for (TimerObj *t = timerHeapPeek(&tc->heap); t != NULL && t->deadlineNs <= now;
+         t = timerHeapPeek(&tc->heap)) {
+        timerHeapRemove(&tc->heap, t);
         t->state = TIMER_EXPIRED;
         t->batchNext = NULL;
         if (tail == NULL) {
@@ -202,6 +213,6 @@ void timeTimerIrq(uint32_t vector, void *ctx) {
         }
         t = next;
     }
-    bsp.expiring = false;
+    tc->expiring = false;
     reprogram();
 }
