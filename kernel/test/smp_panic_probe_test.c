@@ -7,6 +7,7 @@
 #include "cmdline.h"
 #include "cpu-local.h"
 #include "kernel-boot.h"
+#include "klog.h"
 #include "ktest.h"
 #include "lockdep.h"
 #include "panic.h"
@@ -82,6 +83,36 @@ KTEST(smp_panic_probe_bsp_aps_irqoff) {
         archPause();
     }
     panic("smp-panic-probe: the boot cpu panics while %u cpus spin with IF=0", n - 1);
+}
+
+static volatile uint32_t probeLogLines;
+
+static void probeLogFn(void *arg) {
+    (void)arg;
+    for (uint32_t i = 0;; i++) {
+        klogWrite(KLOG_INFO, "smp", "probe-spam cpu %u line %u", smpThisCpu(), i);
+        ATOMIC_FETCH_ADD(&probeLogLines, 1, MEM_SEQ_CST);
+    }
+}
+
+/* The BSP panics while every AP keeps logging with IF=1: the stop IPI must silence them before the
+ * report is printed (D-197), so no AP line may follow the PANIC line (the harness checks). */
+KTEST(smp_panic_probe_bsp_aps_logging) {
+    (void)ktestCtx;
+    if (!probeArmed()) {
+        return;
+    }
+    static SmpWork w[CPU_MAX];
+    uint32_t n = smpOnlineCount();
+    probeLogLines = 0;
+    for (uint32_t c = 1; c < n; c++) {
+        w[c] = (SmpWork){.fn = probeLogFn, .arg = NULL, .remaining = 1};
+        smpWorkPost(c, &w[c]);
+    }
+    while (ATOMIC_LOAD(&probeLogLines, MEM_SEQ_CST) < 8u * (n - 1)) {
+        archPause();
+    }
+    panic("smp-panic-probe: the boot cpu panics while %u cpus log", n - 1);
 }
 
 #ifdef KERNEL_DEBUG

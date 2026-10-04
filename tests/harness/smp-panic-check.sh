@@ -5,7 +5,8 @@
 #   - RESULT FAIL (the isa-debug-exit FAIL code: not a HANG, not a CRASH),
 #   - exactly one "PANIC: " report line and no "PANIC while already panicking" (the CPUs that lose
 #     the race park silently; no report interleaves with the winner's),
-#   - the probe's own "KTEST FAIL <probe>: panic: <message>" line.
+#   - the probe's own "KTEST FAIL <probe>: panic: <message>" line,
+#   - for smp_panic_probe_bsp_aps_logging: AP log lines before the report and none after it.
 # lockdep_probe_expect_other_cpu exists only in debug builds: with --release (make RELEASE=1) its
 # run is skipped; without it, a probe that never starts is a failure.
 #
@@ -35,6 +36,7 @@ PROBES=(
     "smp_panic_probe_ap|smp-panic-probe: cpu 1 panics$"
     "smp_panic_probe_all|smp-panic-probe: cpu [0-9]+ panics with every other cpu$"
     "smp_panic_probe_bsp_aps_irqoff|smp-panic-probe: the boot cpu panics while 3 cpus spin with IF=0$"
+    "smp_panic_probe_bsp_aps_logging|smp-panic-probe: the boot cpu panics while 3 cpus log$"
     "lockdep_probe_expect_other_cpu|lockdep: lock order inversion \(report above\)$"
 )
 
@@ -72,6 +74,13 @@ for entry in "${PROBES[@]}"; do
     grep -qE "^PANIC: $msg" <<< "$text" || errs+=("no 'PANIC: $msg' line")
     grep -qE "^KTEST FAIL $probe: panic: $msg" <<< "$text" ||
         errs+=("no 'KTEST FAIL $probe: panic: $msg' line")
+    if [ "$probe" = smp_panic_probe_bsp_aps_logging ]; then
+        # The APs logged before the panic, and the stop IPI silenced them before the report.
+        before=$(awk '/^PANIC/ { exit } /probe-spam/ { n++ } END { print n + 0 }' <<< "$text")
+        after=$(awk '/^PANIC/ { p = 1 } p && /probe-spam/ { n++ } END { print n + 0 }' <<< "$text")
+        [ "$before" -gt 0 ] || errs+=("no AP log line before the panic report")
+        [ "$after" = 0 ] || errs+=("$after AP log lines after the panic report (the other CPUs were not stopped)")
+    fi
     if [ ${#errs[@]} = 0 ]; then
         echo "RESULT smp-panic-check[$FW] $probe: PASS"
     else
