@@ -540,3 +540,84 @@ KTEST(smp_slab_magazine_is_per_cpu) {
     KTEST_ASSERT_EQ(n, 64);
     KTEST_ASSERT(!sawIt);
 }
+
+/* --- slab: a handler refills the magazine while a free has the lock dropped (D-200) ------------
+ */
+
+#define REFILL_OBJS 64u
+
+static SlabCache *refillCache;
+static void *refillHandlerObjs[2];
+static TimerObj refillTimer;
+static volatile uint32_t refillArmed, refillHandlerRan;
+
+static void refillTimerCb(TimerObj *t, void *ctx) {
+    (void)t;
+    (void)ctx;
+    /* Two frees fill the magazine the interrupted free had just flushed down to capacity - batch
+     * (capacity 4, batch 2 for objects this large). */
+    slabFree(refillCache, refillHandlerObjs[0]);
+    slabFree(refillCache, refillHandlerObjs[1]);
+    refillHandlerRan = 1;
+}
+
+/* Runs when a slab is released, which a free does with slabLock dropped and IF as its caller had
+ * it: the first time, let a timer interrupt land right here and free into this CPU's magazine. */
+static void refillDtor(void *obj) {
+    (void)obj;
+    if (!ATOMIC_XCHG(&refillArmed, 0, MEM_SEQ_CST)) {
+        return;
+    }
+    timerInit(&refillTimer, refillTimerCb, NULL);
+    if (timerArm(&refillTimer, timeMonotonicNs()) != STATUS_OK) {
+        return;
+    }
+    uint64_t deadline = timeMonotonicNs() + 1000000000ull;
+    while (!refillHandlerRan && timeMonotonicNs() < deadline) {
+        archPause();
+    }
+}
+
+static void refillFreeAll(void *arg) {
+    void **objs = arg;
+    for (uint32_t i = 0; i < REFILL_OBJS; i++) {
+        slabFree(refillCache, objs[i]);
+        objs[i] = NULL;
+    }
+}
+
+/* A free whose magazine is full flushes a batch and releases empty slabs with the lock dropped; a
+ * handler on the same CPU may free into that magazine meanwhile (D-200) and fill it again. The free
+ * must flush again, not report the full magazine as corruption. */
+KTEST(slab_free_handler_refills_magazine) {
+    slabShrinkAll();
+    pmmDrainAllCaches();
+    PmmStats before;
+    pmmGetStats(&before);
+    KTEST_ASSERT(slabCacheCreate("sweep-refill", 4096, 0, NULL, refillDtor, &refillCache) ==
+                 STATUS_OK);
+    refillHandlerObjs[0] = slabAlloc(refillCache, 0);
+    refillHandlerObjs[1] = slabAlloc(refillCache, 0);
+    KTEST_ASSERT(refillHandlerObjs[0] != NULL && refillHandlerObjs[1] != NULL);
+    static void *objs[REFILL_OBJS];
+    for (uint32_t i = 0; i < REFILL_OBJS; i++) {
+        objs[i] = slabAlloc(refillCache, 0);
+        KTEST_ASSERT(objs[i] != NULL);
+    }
+    refillHandlerRan = 0;
+    refillArmed = 1;
+    TrapCatchInfo info;
+    bool caught = archTrapCatch(TRAP_CATCH_KERNEL_BUG, refillFreeAll, objs, &info);
+    refillArmed = 0;
+    const void *bugObj;
+    SlabBugKind bug = slabTakeLastBug(&bugObj); /* SLAB_BUG_CORRUPT before the fix */
+    KTEST_ASSERT_EQ(bug, SLAB_BUG_NONE);
+    KTEST_ASSERT(!caught);
+    KTEST_ASSERT(refillHandlerRan); /* the interrupt really landed inside a release */
+    slabCacheDestroy(refillCache);  /* nothing leaked in a FREEING state */
+    refillCache = NULL;
+    pmmDrainAllCaches();
+    PmmStats after;
+    pmmGetStats(&after);
+    KTEST_ASSERT_EQ(after.freePages, before.freePages);
+}

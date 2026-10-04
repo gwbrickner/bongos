@@ -536,7 +536,9 @@ static void slabFreeCommon(SlabCache *cache, const SlabResolved *r, void *ptr) {
 
     irqFlags = slabLock();
     SlabMagazine *mag = slabLocalMag(cache);
-    if (mag->count >= mag->capacity) {
+    /* A loop, not an `if`: the reclaim below drops the lock (with IF as the caller had it), and a
+     * handler on this CPU may free into this very magazine meanwhile (D-200) and fill it again. */
+    while (mag->count >= mag->capacity) {
         uint32_t flushN = mag->batch;
         for (uint32_t i = 0; i < flushN; i++) {
             slabPushObjectLocked(cache, mag->rounds[i], irqFlags);
@@ -552,12 +554,7 @@ static void slabFreeCommon(SlabCache *cache, const SlabResolved *r, void *ptr) {
         }
         mag->count -= flushN;
         slabReclaimEmptyLocked(cache, SLAB_EMPTY_KEEP, &irqFlags);
-        /* The reclaim dropped the lock: a handler may have used this magazine meanwhile. */
         mag = slabLocalMag(cache);
-        if (mag->count >= mag->capacity) {
-            slabUnlock(irqFlags);
-            slabBug(SLAB_BUG_CORRUPT, ptr);
-        }
     }
     bufctl[r->index] = SLAB_BUFCTL_MAG;
     mag->rounds[mag->count++] = ptr;
