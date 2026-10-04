@@ -9,10 +9,12 @@
 #include "cpu-local.h"
 #include "klog.h"
 #include "ktest.h"
+#include "pmm.h"
 #include "smp.h"
 #include "timekeeping.h"
 
 #include <arch/cpu.h>
+#include <arch/paging.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -174,6 +176,25 @@ KTEST(smp_tsc_estimator_recovers_skew) {
             KTEST_ASSERT(after < before);
         }
     }
+}
+
+/* The trampoline's W^X exception is bounded (D-192): once bring-up is over, the page that held the
+ * AP startup code and its parameter block (the kernel CR3, CpuLocal and stack addresses) is zero,
+ * and the kernel's own page tables never map it at its identity address (only the freed temporary
+ * PML4 did, read-only and executable). */
+KTEST(smp_trampoline_scrubbed) {
+    uint64_t page = archSmpTrampolinePage();
+    if (smpOnlineCount() < 2) {
+        return; /* with no AP started (1 vCPU, cpus=1) there was no trampoline */
+    }
+    KTEST_ASSERT(page != 0 && page < 0x9F000 && (page & 0xFFF) == 0);
+    const volatile uint8_t *b = (const volatile uint8_t *)(uintptr_t)(pmmHhdmBase() + page);
+    uint32_t nonzero = 0;
+    for (uint32_t i = 0; i < 4096; i++) {
+        nonzero += b[i] != 0;
+    }
+    KTEST_ASSERT_EQ(nonzero, 0);
+    KTEST_ASSERT_EQ(archPagingRawPte(page), 0);
 }
 
 typedef struct {

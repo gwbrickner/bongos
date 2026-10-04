@@ -374,6 +374,10 @@ bool archTscSyncTest(uint32_t cpu, int64_t skew, uint32_t *warpsBefore, uint32_t
     return bsp.ok && ctx.res.ok;
 }
 
+uint64_t archSmpTrampolinePage(void) {
+    return trampPhys;
+}
+
 /* --- the AP side -------------------------------------------------------------------------------
  */
 

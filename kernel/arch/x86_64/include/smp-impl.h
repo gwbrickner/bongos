@@ -74,4 +74,9 @@ void apEntry64(void);
 bool archTscSyncTest(uint32_t cpu, int64_t skew, uint32_t *warpsBefore, uint32_t *warpsAfter,
                      int64_t *estimate);
 
+/* ktest-only (D-192): the physical address of the page smpInit() used for the AP trampoline, or 0
+ * if it started no AP. The page stays withheld from the allocators (D-080); smpInit() zeroes it
+ * after bring-up. */
+uint64_t archSmpTrampolinePage(void);
+
 #endif
