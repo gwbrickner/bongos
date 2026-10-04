@@ -167,7 +167,7 @@ SMP_REQUIRED_KTESTS := smp_cpulocal_bsp smp_online_matches_madt smp_call_functio
                        smp_vmalloc_concurrent_stress smp_timer_cross_cpu_misuse_caught \
                        smp_trap_catch_ignores_other_cpus smp_work_post_misuse_caught \
                        smp_pmm_cache_is_per_cpu smp_slab_magazine_is_per_cpu \
-                       slab_free_handler_refills_magazine
+                       slab_free_handler_refills_magazine smp_tsc_offset_is_subtracted
 LOCKDEP_REQUIRED_KTESTS := lockdep_inversion_reported lockdep_irq_safe_unsafe_reported \
                            lockdep_expect_per_cpu lockdep_irq_unsafe_in_irq_reported \
                            lockdep_irq_safe_then_irqs_on_reported lockdep_class_recursion_reported \

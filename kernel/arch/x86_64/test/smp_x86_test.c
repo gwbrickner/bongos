@@ -177,6 +177,52 @@ KTEST(smp_tsc_estimator_recovers_skew) {
 }
 
 typedef struct {
+    uint64_t ticks;            /* the pretend skew, in TSC ticks */
+    uint64_t before, during;   /* timeMonotonicNs() without and with it */
+    uint32_t ran, notRestored; /* per CPU */
+} OffsetProbe;
+
+static OffsetProbe offsetProbes[CPU_MAX];
+
+static void offsetProbeFn(void *arg) {
+    (void)arg;
+    CpuLocal *cl = cpuLocal();
+    OffsetProbe *p = &offsetProbes[cl->cpuId];
+    uint64_t f = archIrqSave(); /* no timer interrupt on this CPU sees the pretend offset */
+    int64_t saved = cl->arch.tscOffset;
+    p->before = timeMonotonicNs();
+    cl->arch.tscOffset = saved + (int64_t)p->ticks; /* as if this TSC ran `ticks` ahead */
+    p->during = timeMonotonicNs();
+    cl->arch.tscOffset = saved;
+    p->notRestored = timeMonotonicNs() < p->before;
+    archIrqRestore(f);
+    ATOMIC_STORE(&p->ran, 1, MEM_RELEASE);
+}
+
+/* D-198: timeMonotonicNs() subtracts the calling CPU's own tscOffset, so a CPU whose TSC runs ahead
+ * by the estimated offset reads the same clock as the boot CPU. (Under QEMU the measured offset is
+ * 0, so only a pretend one shows the subtraction is wired in, on every CPU.) */
+KTEST(smp_tsc_offset_is_subtracted) {
+    uint64_t ticks = timeTscHz() / 10; /* 100 ms */
+    KTEST_ASSERT(ticks != 0);
+    while (timeMonotonicNs() < 200000000ull) { /* so the pretend offset cannot wrap the clock */
+        archPause();
+    }
+    for (uint32_t i = 0; i < CPU_MAX; i++) {
+        offsetProbes[i] = (OffsetProbe){.ticks = ticks};
+    }
+    smpWorkRun(smpOnlineMask(), offsetProbeFn, NULL);
+    for (uint32_t i = 0; i < smpOnlineCount(); i++) {
+        const OffsetProbe *p = &offsetProbes[i];
+        KTEST_ASSERT_EQ(p->ran, 1);
+        KTEST_ASSERT(p->during < p->before);
+        uint64_t back = p->before - p->during; /* 100 ms less the time between the two reads */
+        KTEST_ASSERT(back > 50000000ull && back <= 100000000ull);
+        KTEST_ASSERT_EQ(p->notRestored, 0);
+    }
+}
+
+typedef struct {
     volatile uint32_t spinning, release;
 } NmiSpin;
 
