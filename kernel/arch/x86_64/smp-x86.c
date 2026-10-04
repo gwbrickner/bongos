@@ -578,40 +578,56 @@ static void prepareTrampoline(const CpuLocal *cl, uint32_t apicId, bool leafB) {
     d->kernelCr3 = archReadCr3();
 }
 
-/* Allocates one AP's CpuLocal, stacks and per-CPU subsystem blobs. NULL on failure (what was
- * allocated is leaked: a failed AP is rare and its memory is not worth the unwind). */
+/* Allocates one AP's CpuLocal, stacks and per-CPU subsystem blobs. NULL on failure, with everything
+ * freed that is not yet registered: a pmm/slab blob that pmmCpuAttach()/slabCpuAttach() accepted
+ * stays in that subsystem's registry for good (there is no detach), so from then on it is leaked
+ * (as is an AP that does not come online, D-193). The CpuLocal and the stacks are only referenced
+ * from here and are always freed. */
 static CpuLocal *allocAp(uint32_t cpuId, uint32_t apicId) {
     CpuLocal *cl = vmalloc(sizeof(*cl), VMALLOC_ZERO);
-    if (cl == NULL) {
-        return NULL;
-    }
-    cl->self = cl;
-    cl->cpuId = cpuId;
-    cl->apicId = apicId;
     uint8_t *kstack = vmalloc(AP_STACK_SIZE, 0);
     uint8_t *ist[3];
+    bool ok = cl != NULL && kstack != NULL;
     for (uint32_t i = 0; i < 3; i++) {
         ist[i] = vmalloc(AP_STACK_SIZE, 0);
-        if (ist[i] == NULL) {
-            return NULL;
+        ok = ok && ist[i] != NULL;
+    }
+    void *pmmBlob = ok ? kmalloc(pmmCpuBlobSize(), KMALLOC_ZERO) : NULL;
+    void *slabBlob = ok ? vmalloc(slabCpuBlobSize(), VMALLOC_ZERO) : NULL;
+    ok = ok && pmmBlob != NULL && slabBlob != NULL;
+    if (ok) {
+        cl->self = cl;
+        cl->cpuId = cpuId;
+        cl->apicId = apicId;
+        cl->arch.stackBottom = (uint64_t)(uintptr_t)kstack;
+        cl->arch.stackTop = (uint64_t)(uintptr_t)kstack + AP_STACK_SIZE;
+        for (uint32_t i = 0; i < 3; i++) {
+            cl->arch.istBottom[i] = (uint64_t)(uintptr_t)ist[i];
+            cl->arch.istTop[i] = (uint64_t)(uintptr_t)ist[i] + AP_STACK_SIZE;
+        }
+        if (pmmCpuAttach(cl, pmmBlob) != STATUS_OK) {
+            ok = false;
+        } else {
+            pmmBlob = NULL; /* registered: never freed */
+            if (slabCpuAttach(cl, slabBlob) != STATUS_OK) {
+                ok = false;
+            } else {
+                slabBlob = NULL;
+                ok = timeCpuAttach(cl) == STATUS_OK;
+            }
         }
     }
-    if (kstack == NULL) {
-        return NULL;
+    if (ok) {
+        return cl;
     }
-    cl->arch.stackBottom = (uint64_t)(uintptr_t)kstack;
-    cl->arch.stackTop = (uint64_t)(uintptr_t)kstack + AP_STACK_SIZE;
+    kfree(pmmBlob);
+    vfree(slabBlob);
     for (uint32_t i = 0; i < 3; i++) {
-        cl->arch.istBottom[i] = (uint64_t)(uintptr_t)ist[i];
-        cl->arch.istTop[i] = (uint64_t)(uintptr_t)ist[i] + AP_STACK_SIZE;
+        vfree(ist[i]);
     }
-    void *pmmBlob = kmalloc(pmmCpuBlobSize(), KMALLOC_ZERO);
-    void *slabBlob = vmalloc(slabCpuBlobSize(), VMALLOC_ZERO);
-    if (pmmBlob == NULL || slabBlob == NULL || pmmCpuAttach(cl, pmmBlob) != STATUS_OK ||
-        slabCpuAttach(cl, slabBlob) != STATUS_OK || timeCpuAttach(cl) != STATUS_OK) {
-        return NULL;
-    }
-    return cl;
+    vfree(kstack);
+    vfree(cl);
+    return NULL;
 }
 
 static void reportTscSync(const CpuLocal *cl, const TscSyncResult *tr) {
