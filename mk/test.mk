@@ -159,6 +159,7 @@ LOCK_REQUIRED_KTESTS := spin_trylock_semantics spin_irqsave_restores_if preempt_
 SMP_REQUIRED_KTESTS := smp_cpulocal_bsp smp_online_matches_madt smp_call_function_all_cpus \
                        irq_handler_may_allocate \
                        smp_call_function_refused_with_irqs_off smp_tlb_shootdown_batched \
+                       smp_call_function_refused_with_lock_held \
                        smp_stop_parks_cpus smp_gs_tables_per_cpu smp_cpu_state_matches_bsp \
                        smp_call_function_storm smp_tlb_shootdown_stress smp_pmm_concurrent_stress \
                        smp_cross_cpu_double_free_caught smp_ap_timer_fires_locally \

@@ -10,6 +10,7 @@
 #include "pmm.h"
 #include "preempt.h"
 #include "smp.h"
+#include "spinlock.h"
 #include "timekeeping.h"
 #include "vmalloc.h"
 #include "vmm.h"
@@ -113,6 +114,40 @@ KTEST(smp_call_function_refused_with_irqs_off) {
     archIrqRestore(f);
     KTEST_ASSERT(caught);
     KTEST_ASSERT_EQ(s.calls, 0);
+}
+
+static void callCountingTrigger(void *arg) {
+    smpCallFunction(smpOnlineMask(), callCounter, arg);
+}
+
+static Spinlock callHeldLock = SPINLOCK_INIT("smp-test-call-held");
+
+/* D-207 (2): with another CPU in the mask, calling with preemption disabled -- a held plain
+ * spinlock, which a target could be spinning on with IRQs off -- is refused (panicBug) before any
+ * CPU runs `fn`. The lock and the preemptDisable are taken outside archTrapCatch(), so the catch
+ * leaves nothing held (D-187). With only this CPU online the call runs locally, unrestricted. */
+KTEST(smp_call_function_refused_with_lock_held) {
+    CallState s = {0};
+    if (smpOnlineCount() < 2) {
+        preemptDisable();
+        smpCallFunction(smpOnlineMask(), callCounter, &s);
+        preemptEnable();
+        KTEST_ASSERT_EQ(s.calls, 1);
+        return;
+    }
+    TrapCatchInfo info;
+    preemptDisable();
+    bool caughtPreempt = archTrapCatch(TRAP_CATCH_KERNEL_BUG, callCountingTrigger, &s, &info);
+    preemptEnable();
+    spinLock(&callHeldLock);
+    bool caughtLock = archTrapCatch(TRAP_CATCH_KERNEL_BUG, callCountingTrigger, &s, &info);
+    spinUnlock(&callHeldLock);
+    KTEST_ASSERT(caughtPreempt);
+    KTEST_ASSERT(caughtLock);
+    KTEST_ASSERT_EQ(ATOMIC_LOAD(&s.calls, MEM_SEQ_CST), 0);
+    /* The same call with nothing held runs on every CPU. */
+    smpCallFunction(smpOnlineMask(), callCounter, &s);
+    KTEST_ASSERT_EQ(ATOMIC_LOAD(&s.calls, MEM_SEQ_CST), smpOnlineCount());
 }
 
 static uint64_t tlbHandled(uint32_t cpu) {
