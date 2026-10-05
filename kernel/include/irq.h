@@ -46,7 +46,8 @@ Status irqFreeVector(uint32_t vector);
 Status irqRegister(uint32_t vector, IrqHandler handler, void *ctx);
 /* STATUS_ERR_INVALID if nothing is registered, or the vector is still routed from an unmasked
  * GSI (mask it first). Does not wait for a handler already running on another CPU: the caller must
- * make sure the source is quiet (masked, drained) before it frees the handler's `ctx` (D-201).
+ * make sure the source is quiet (masked, drained) before it frees the handler's `ctx` or registers
+ * the vector again (a dispatch that loaded the old handler reads `ctx` afterwards, D-201).
  * Takes irqLock; not callable from a handler. */
 Status irqUnregister(uint32_t vector);
 
