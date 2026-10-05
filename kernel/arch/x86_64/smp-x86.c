@@ -774,6 +774,7 @@ static bool bootAp(CpuLocal *cl) {
             if (bspGiveUpLagProbe && cl->apicId == 1) {
                 /* Between reading the stage and the compare-exchange: the AP (stalled 3 s before
                  * its claim) claims in this window, and the exchange must then fail. */
+                klogWrite(KLOG_INFO, "smp", "bsp-giveup-lag-probe: delaying the give-up exchange");
                 delayNs(BSP_GIVE_UP_LAG_NS);
             }
 #endif

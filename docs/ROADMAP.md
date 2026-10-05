@@ -239,7 +239,7 @@ QEMU-verified only.
 
 **Done when:** the ktests pass, and the validator adds no false positives across the existing tests.
 
-### [ ] M3.5 SMP bring-up `needs-owner`
+### [x] M3.5 SMP bring-up `needs-owner`
 **Needs:** M3.3, M3.4
 1. `CpuLocal` through the GS base, and per-CPU GDT/TSS/IST stacks.
 2. The trampoline page below 1 MiB. INIT-SIPI-SIPI per the SDM, with timeouts.

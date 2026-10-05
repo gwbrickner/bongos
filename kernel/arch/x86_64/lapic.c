@@ -290,7 +290,9 @@ static void lapicInitCpu(const AcpiMadtInfo *madt, bool bsp) {
         }
     }
 
-    if (id != archCpuApicId()) {
+    /* BSP only: an AP must not log before it is published (D-206); apMain() has already checked
+     * that its id is the one the MADT gave it. */
+    if (bsp && id != archCpuApicId()) {
         klogWrite(KLOG_WARN, "lapic", "APIC id %u differs from CPUID's %u", id, archCpuApicId());
     }
     if (bsp) {

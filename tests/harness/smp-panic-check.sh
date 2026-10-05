@@ -206,6 +206,8 @@ else
     errs=()
     case "$result" in *": PASS"*) ;; *) errs+=("run result is '$result', want PASS") ;; esac
     grep -qx '\[info\] smp: 4 cpus online' <<< "$text" || errs+=("no '[info] smp: 4 cpus online' line")
+    grep -q 'bsp-giveup-lag-probe: delaying' <<< "$text" ||
+        errs+=("the BSP never reached the lag hook (the probe would pass vacuously)")
     grep -q 'did not come online' <<< "$text" && errs+=("the BSP gave up on the AP that had claimed")
     grep -qE '^\[info\] smp: cpu 1 apic-id=1 online$' <<< "$text" || errs+=("cpu 1 (apic-id 1) never came online")
     grep -q '^PANIC' <<< "$text" && errs+=("a panic was printed")

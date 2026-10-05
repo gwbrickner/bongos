@@ -6,11 +6,13 @@ the details belong in `docs/logs/M<p>.<n>.md`._
 **Last updated:** 2026-10-05 (M3.4 merged; M3.5 finished on the session branch, awaiting PR)
 
 ## Next step
-**M3.5 SMP bring-up is in progress** (log `docs/logs/M3.5.md`) on the session branch `claude/optimistic-hawking-qw4tzr`.
-M3.4 merged (PR #22). Architect design is in the M3.5 log (plan of record). Sub-steps 1-8 are implemented (AP bring-up, IPIs, TLB shootdown, per-CPU caches, ktests, D-190..D-203). Two finish sweeps, a step sweep and two review rounds (second: VERDICT PASS) are done. Next: final gates at HEAD, screenshot, paperwork, then the PR (needs-owner); see the log's Next step.
+**M3.5 SMP bring-up is finished** (log `docs/logs/M3.5.md`; sweeps `SWEEP: PASS`, review `VERDICT: PASS`, all gates green) on the
+session branch `claude/optimistic-hawking-qw4tzr`; no PR is open yet (it was not requested): open it with the body in the log
+(`needs-owner`). Then the owner answers the M3.5 questions below, and the next milestone is **M3.6 CPU features + FPU state**
+(Needs M3.5).
 
 ## Current milestone
-M3.5 SMP bring-up (`needs-owner`).
+None in progress (M3.5 awaits its PR and the owner's merge).
 
 ## Phase
 2: Blue Dream (CPU and memory core)
@@ -32,8 +34,9 @@ M3.5 SMP bring-up (`needs-owner`).
 | M3.2 | [#20](https://github.com/gwbrickner/bongos/pull/20) | 8259 remap+mask, local APIC (x2APIC or xAPIC over the new UC `vmmMapMmio`), IOAPICs with MADT overrides, vector allocator + `irq.h`, EOI-after-handler dispatch, IF=1 after `irqInit()`, 22 irq ktests, D-171..D-175 |
 | M3.3 | [#21](https://github.com/gwbrickner/bongos/pull/21) | Timekeeping: TSC calibrated against the PM timer (HPET optional), `timeMonotonicNs`, LAPIC timer (one-shot or TSC-deadline) + per-CPU 256-entry timer heap (`timerArm`/`timerCancel`), CMOS RTC `timeWallNs`, harness wall-clock-vs-host check, 25 ktests, D-176..D-182 |
 | M3.4 | [#22](https://github.com/gwbrickner/bongos/pull/22) | Locking: ticket `Spinlock` (irqsave, trylock), `preemptCount` via an interim `CpuSync`, `atomic.h`, the debug lock validator (classes by init site, order graph with both stacks on an inversion, recursion, IRQ-safety; ktest expect mode), klog/pmm/vmm/slab/vmalloc/random converted to real spinlocks, D-183..D-189 |
+| M3.5 | (PR not opened yet) | SMP: INIT-SIPI-SIPI through a flat trampoline, `CpuLocal` via GS (per-CPU GDT/TSS/IST), call-function and TLB-shootdown IPIs, stop/panic IPI, per-CPU pmm caches/slab magazines/timers, cross-CPU TSC check, IRQ-safe->unsafe lock check, `cpus=N`, matrix UEFI/BIOS x 1/4 CPUs, D-190..D-207 |
 
-The boot matrix covers `uefi 1` and `bios 1`, plus 3072 MiB and 4-CPU rows in `make test-full`. The final
+The boot matrix covers `uefi 1`, `bios 1`, `uefi 4` and `bios 4`, plus 3072 MiB rows in `make test-full`. The final
 boot screens are in `docs/screenshots/`.
 
 ## Blockers
@@ -55,12 +58,13 @@ Optional hardware checks never block a merge; the full steps are in each milesto
 - **M2.5:** enable CSM, boot the same stick in BIOS mode; report whether the menu and kernel screen appear.
 - **M1.4:** `dd` the image to a USB stick and boot it; check the menu, arrow keys and Enter, and the logged resolution.
 - **Default the main session to Sonnet** (D-117): add `"model": "sonnet"` to `.claude/settings.json` (owner-only change).
+- **M3.5:** boot the USB stick on the reference PC; report `smp: N cpus online` (expect 16), any `[warn] smp:` lines (expect none) and the `lapic: mode=` line; on the first KVM CI run check `smp_ap_early_panic: PASS (lapic: mode=x2apic)`.
 - **Re-run the cloud environment's setup script**, so fresh sessions get `libclang-rt-18-dev` and `gdb`. Until then run
   `sudo apt-get install -y libclang-rt-18-dev` in each new container (move the 403 PPAs out of
   `/etc/apt/sources.list.d/` if apt fails).
 
 ## Open leads (for the next `bug-sweeper` or `/milestone-sweep` to triage)
-- M3.4 leads for M3.5: the validator's expect-mode state is global (another CPU's real report of the armed kind would be swallowed); the deferred IRQ-safe -> IRQ-unsafe dependency check (D-186) is the real SMP deadlock class and should land with SMP; an exception between `klogHeld = 0` and the raw release in klog's sink section would self-deadlock (nothing can raise one there today); `panicEnter` is now an atomic exchange but the rest of the panic path is single-CPU.
+- M3.5 leads (see docs/sweeps/M3.5.md): an AP without x2APIC next to an x2APIC BSP would still nest-panic early (needs a per-CPU APIC-mode flag, a D-194 design choice); `archTrapCatch`'s `cpu`/`armed` stores are unordered (ktest-only); `slabAlloc` does not re-read `mag` after a refill (matters once M4 migrates threads); a BSP panic while an AP is mid-bring-up does not stop that AP; the D-187 balance checks still have no expected-panic harness row.
 - M3.3 sweep leads: SIGTERM to `tests/harness/run-qemu.sh` leaves `timeout`/QEMU running until `--timeout` (pre-existing); `clockref.c` would map a PM-timer GAS with a space id other than 0/1 as MMIO (unreachable: the ACPI parser only accepts 0/1); `timerInit` on a still-armed timer corrupts the queue (documented, not checked).
 - `make analyze` on main reports 5 warnings: `kernel/include/list.h:50` (a possible NULL
   `prev` dereference), `kernel/test/kmalloc_test.c:68,143,365`, and
