@@ -24,11 +24,11 @@ void vmallocInit(void);
  * VMALLOC_ZERO. Returns NULL for "no memory" (pmm exhaustion, KVA exhaustion, or a page-table
  * allocation failure partway through -- every partial mapping is unwound first) or if `size` is
  * over VMALLOC_MAX_SIZE; size 0 or an unknown flag panics via panicBug(). No locks required of
- * the caller; never sleeps. Must not be called from IRQ context or with IRQs already disabled
- * (load-bearing once M3.5 adds a real TLB shootdown to vfree() -- today's single-CPU kernel
- * can't yet violate this itself, but no caller should rely on that). The one sanctioned exception
- * is boot-time code on the BSP before any AP exists, where vfree()'s local INVLPG is already a full
- * shootdown (acpiInit(), D-170); it must still never be called from IRQ context. */
+ * the caller; never sleeps. Must not be called from IRQ context, with IRQs disabled or with a
+ * spinlock held once other CPUs are online: vfree() (and a failed vmalloc's unwind) waits for a TLB
+ * shootdown (D-196, D-207; panicBug otherwise). The one sanctioned exception is boot-time code on
+ * the BSP before any AP exists, where the local flush is already a full shootdown (acpiInit(),
+ * D-170); it must still never be called from IRQ context. */
 void *vmalloc(size_t size, VmallocFlags flags);
 
 /* Frees a pointer vmalloc() returned. NULL is a no-op. Any other misuse (a pointer this subsystem

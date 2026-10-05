@@ -3,11 +3,11 @@ _The main line's dashboard. Parallel-lane sessions never edit this file; they tr
 their own milestone log. Keep it under ~80 lines. Finished milestones get one line here, and
 the details belong in `docs/logs/M<p>.<n>.md`._
 
-**Last updated:** 2026-10-02 (M3.4 merged; M3.5 started)
+**Last updated:** 2026-10-05 (M3.4 merged; M3.5 finished on the session branch, awaiting PR)
 
 ## Next step
 **M3.5 SMP bring-up is in progress** (log `docs/logs/M3.5.md`) on the session branch `claude/optimistic-hawking-qw4tzr`.
-M3.4 merged (PR #22). Architect design is in the M3.5 log (plan of record). Sub-steps 1-8 are implemented (AP bring-up, IPIs, TLB shootdown, per-CPU caches, ktests, D-190..D-203). Two finish sweeps passed; review round 1 fixed (C1: AP give-up handshake, D-206). Next: step sweep of the review fixes, `make test-full` at HEAD, second review, screenshot, PR; see the log's Next step.
+M3.4 merged (PR #22). Architect design is in the M3.5 log (plan of record). Sub-steps 1-8 are implemented (AP bring-up, IPIs, TLB shootdown, per-CPU caches, ktests, D-190..D-203). Two finish sweeps, a step sweep and two review rounds (second: VERDICT PASS) are done. Next: final gates at HEAD, screenshot, paperwork, then the PR (needs-owner); see the log's Next step.
 
 ## Current milestone
 M3.5 SMP bring-up (`needs-owner`).

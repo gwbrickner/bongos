@@ -54,17 +54,23 @@ bool vmmKernelTablesActive(void);
  * 3A §11.12.4: mapping one physical page with two memory types is unsupported). Returns
  * STATUS_ERR_NO_MEMORY if a table page can't be allocated, after rolling back any leaves this call
  * already wrote. Locks: vmmLock
- * (IRQ-disable only, D-088 -- mirrors the pmm's D-081 lock, same single-CPU justification, D-173).
- * Lock order: vmmLock -> pmmLock. IRQ-safe: yes. May sleep: no. Panics if called before vmmInit().
- */
+ * (an irqsave spinlock, D-188). Lock order: vmmLock -> pmmLock. A fresh mapping needs no TLB
+ * flush, but a FAILED map shoots its rolled-back range down (D-196), so on failure -- like every
+ * unmap -- with other CPUs online the caller needs IF=1, no handler running and no spinlock held
+ * (panicBug otherwise, smpCallFunction()'s rule, D-207). IRQ-safe: only while one CPU is online
+ * (boot-time use before smpInit()); not from handlers once SMP is up. May sleep: no. Panics if
+ * called before vmmInit(). */
 Status vmmMapKernel(uint64_t va, uint64_t pa, uint64_t size, VmmFlags flags);
 
-/* Unmaps `[va, va+size)` (same alignment/bounds rules as vmmMapKernel), invalidating the TLB for
- * every page. Returns STATUS_ERR_NOT_FOUND if any page in the range isn't currently mapped, or
+/* Unmaps `[va, va+size)` (same alignment/bounds rules as vmmMapKernel) and shoots the range down on
+ * every online CPU (archTlbShootdownKernel, D-196: after dropping vmmLock, one request per call).
+ * Returns STATUS_ERR_NOT_FOUND if any page in the range isn't currently mapped, or
  * STATUS_ERR_INVALID for a bad range. Never frees the underlying physical frames or the page
- * tables themselves -- the caller owns the frames; page-table pages are never freed in M2.3 (no
- * safe point to reclaim one without a shootdown, which arrives with SMP, M3.4/M3.5). Locks:
- * vmmLock. IRQ-safe: yes. May sleep: no. */
+ * tables themselves -- the caller owns the frames, and must keep the KVA range reserved until this
+ * returns; page-table pages are never freed. Locks: vmmLock (not held across the shootdown). With
+ * other CPUs online the caller needs IF=1, no handler running and no spinlock held (panicBug
+ * otherwise, D-207); with one CPU there is no restriction. Not IRQ-safe once SMP is up. May
+ * sleep: no (it spins). */
 Status vmmUnmapKernel(uint64_t va, uint64_t size);
 
 /* Maps `[pa, pa+size)` (any alignment; rounded out to whole pages) into fresh KVA as RW, UC, NX,

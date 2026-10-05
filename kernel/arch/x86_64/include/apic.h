@@ -129,7 +129,8 @@ uint32_t ioapicCount(void);
 bool ioapicGsiUsable(uint32_t gsi);
 /* Programs `gsi`'s redirection entry to `rte` (written masked first, then the final value, so the
  * pin never fires half-programmed). STATUS_ERR_NOT_FOUND if no initialized IOAPIC owns `gsi`.
- * IRQ-disable section around the index/data pair; IRQ-safe; may not sleep. */
+ * Takes the IOAPIC spinlock (irqsave, D-201) around the index/data pair; IRQ-safe; may not sleep.
+ */
 Status ioapicWriteRte(uint32_t gsi, uint64_t rte);
 /* Sets or clears only the mask bit of `gsi`'s entry. Same errors and locking. */
 Status ioapicSetMask(uint32_t gsi, bool masked);

@@ -48,7 +48,7 @@ bool smpPickTrampolinePage(const BootMemRegion *map, uint32_t count, uint64_t *o
  * published itself in the online mask (`published`): from then on other CPUs may send it IPIs and
  * only a local TLB flush separates it from ONLINE, so giving up on it (the INIT included) would
  * leave a dead CPU in the mask; GIVE_UP otherwise (a failed or late AP that is not yet visible).
- * The stage PUBLISHING (the AP has claimed the right to publish, D-193) counts as published. The
+ * The stage PUBLISHING (the AP has claimed the right to publish, D-206) counts as published. The
  * caller must still turn GIVE_UP into a compare-exchange of the stage to FAILED, and re-evaluate if
  * that loses: the AP's own claim (TSC -> PUBLISHING) is the other half of the handshake, so exactly
  * one of them wins. Pure. */
@@ -148,7 +148,8 @@ void smpWorkRun(uint64_t cpuMask, SmpFn fn, void *arg);
 bool smpWorkRunPending(void);
 
 /* The stop NMI of the test mode: true (the CPU is marked stopped) when smpStopTestMode() is on and
- * the NMI is the stop IPI's fallback. Called by the NMI path. */
+ * the NMI is the stop IPI's fallback. Called by the NMI path only: NMI context (any IF state),
+ * takes no lock, never allocates or sleeps. */
 bool smpStopNmiHook(void);
 
 /* The handler registered on all four IPI vectors by smpInit() (IrqHandler signature). Runs in hard

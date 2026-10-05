@@ -178,4 +178,43 @@ for entry in "smp_ap_late|smp-ap-stall-probe" "smp_ap_late_tsc|smp-ap-stall-tsc-
         status=1
     fi
 done
+
+# The BSP half of the D-206 handshake: the AP with APIC id 1 stalls 3 s before it claims the right to
+# publish (smp-ap-stall-tsc-probe) and the BSP, past its 2 s deadline, waits 1.5 s between reading the
+# AP's stage and its give-up compare-exchange (smp-bsp-giveup-lag-probe): the AP claims inside that
+# window, so the exchange must fail and the BSP must go on waiting for it. Result: all 4 CPUs online,
+# no 'did not come online', and the ktests that follow neither hang nor panic. With the exchange
+# turned into a plain store the BSP INIT-parks a CPU that is already in the online mask.
+probe=smp_bsp_giveup_race
+if [ "$RELEASE" = 1 ]; then
+    echo "RESULT smp-panic-check[$FW] $probe: SKIP (release build: no probe hook)"
+else
+    name="smp-panic-$probe"
+    img="build/$name.img"
+    cfg="build/$name.cfg"
+    printf 'kernel = /bong/kernel.elf\ncmdline = ktest=smp_call_function_all_cpus,smp_tlb_shootdown_batched smp-ap-stall-tsc-probe smp-bsp-giveup-lag-probe\n' > "$cfg"
+    if ! build/tools/mkimage/mkimage --output "$img" --efi build/boot-uefi/BOOTX64.EFI \
+            --kernel build/kernel/kernel.elf --boot-cfg "$cfg" --stage1 build/boot-bios/stage1.bin \
+            --stage2 build/boot-bios/stage2.bin > /dev/null 2>&1; then
+        echo "smp-panic-check: mkimage failed for $probe"; rm -f "$cfg"; exit 1
+    fi
+    result=$(tests/harness/run-qemu.sh --image "$img" --fw "$FW" --cpus 4 --name "$name" \
+             --timeout 120 2>&1 | grep '^RESULT')
+    rm -f "$img" "$cfg"
+    log="build/logs/$name.serial.log"
+    text=$(tr -d '\r' < "$log" 2>/dev/null)
+    errs=()
+    case "$result" in *": PASS"*) ;; *) errs+=("run result is '$result', want PASS") ;; esac
+    grep -qx '\[info\] smp: 4 cpus online' <<< "$text" || errs+=("no '[info] smp: 4 cpus online' line")
+    grep -q 'did not come online' <<< "$text" && errs+=("the BSP gave up on the AP that had claimed")
+    grep -qE '^\[info\] smp: cpu 1 apic-id=1 online$' <<< "$text" || errs+=("cpu 1 (apic-id 1) never came online")
+    grep -q '^PANIC' <<< "$text" && errs+=("a panic was printed")
+    if [ ${#errs[@]} = 0 ]; then
+        echo "RESULT smp-panic-check[$FW] $probe: PASS"
+    else
+        for e in "${errs[@]}"; do echo "smp-panic-check[$FW] $probe: $e"; done
+        echo "RESULT smp-panic-check[$FW] $probe: FAIL (see $log)"
+        status=1
+    fi
+fi
 exit $status

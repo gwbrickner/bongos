@@ -88,8 +88,9 @@ void archTlbFlushLocal(uint64_t va, uint64_t size);
  * online CPU (one request per call, however many pages) and returns once all of them have. Callers
  * (vmm.c) invoke it AFTER dropping the vmm lock and while the range is still reserved in the KVA
  * allocator, so no one can remap that VA before every CPU has flushed it. With other CPUs online it
- * needs IF=1 and no handler running (smpCallFunction()'s rule); with one CPU it is just the local
- * flush, with no restriction. Not IRQ-safe once SMP is up; never sleeps. */
+ * needs IF=1, no handler running and no spinlock held, preemptCount()==0 (smpCallFunction()'s
+ * rule: panicBug otherwise, D-207); with one CPU it is just the local flush, with no restriction.
+ * Not IRQ-safe once SMP is up; never sleeps. */
 void archTlbShootdownKernel(uint64_t va, uint64_t size);
 
 /* Test/debug only (mirrors archBreakpointHits()'s existing precedent): the raw 4 KiB leaf PTE

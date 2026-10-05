@@ -89,6 +89,11 @@ static bool apEarlyPanicProbe;
 #define AP_STALL_NS          3000000000ull
 #define AP_STALL_INIT_LAG_NS 2000000000ull
 static uint32_t apStallProbe;
+/* KERNEL_DEBUG only: `smp-bsp-giveup-lag-probe` (with smp-ap-stall-tsc-probe) delays the BSP
+ * between reading an AP's stage and its give-up compare-exchange, so the AP's claim lands inside
+ * that window: a plain store there would INIT-park a published AP (the BSP half of D-206). */
+#define BSP_GIVE_UP_LAG_NS 1500000000ull
+static bool bspGiveUpLagProbe;
 #endif
 
 static void *hhdm(uint64_t phys) {
@@ -481,17 +486,11 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
                   cl->apicId);
         apFail(cl);
     }
-    if (dropped != 0) {
-        klogWrite(KLOG_WARN, "smp", "cpu %u: CR4 bits 0x%llx unsupported here, dropped", cl->cpuId,
-                  (unsigned long long)dropped);
-    }
-    if (mtrrSynced) {
-        if (mtrrMatchesBsp(&bspState)) {
-            klogWrite(KLOG_INFO, "smp", "cpu %u: MTRRs copied from the boot CPU", cl->cpuId);
-        } else {
-            klogWrite(KLOG_WARN, "smp", "cpu %u: MTRRs differ from the boot CPU's", cl->cpuId);
-        }
-    }
+    /* No klog before the AP is published (D-206): the BSP may INIT an AP it has given up on, and an
+     * INIT that lands inside klog's critical section would leave its lock held for good. What there
+     * is to say is kept and logged after ONLINE. */
+    bool mtrrCopied = mtrrSynced && mtrrMatchesBsp(&bspState);
+    bool mtrrDiffers = mtrrSynced && !mtrrCopied;
 
     lapicTimerCpuSetup(); /* this CPU's LAPIC timer; its queue (cl->timer) was attached by the BSP
                            */
@@ -509,7 +508,7 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
     }
 #endif
 
-    /* Claim the right to publish (D-193): the BSP gives up on an AP with a compare-exchange of the
+    /* Claim the right to publish (D-206): the BSP gives up on an AP with a compare-exchange of the
      * same word from a pre-publication stage to FAILED, so exactly one of us wins. Losing means the
      * BSP already decided (and is about to INIT us): park instead of appearing in the mask. */
     apAdvanceStage(cl, SMP_STAGE_TSC, SMP_STAGE_PUBLISHING);
@@ -525,6 +524,15 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
     /* Nothing that can block (the klog lock) between the online mask and ONLINE: the BSP waits for
      * a published AP however long it takes (smpApVerdict), so that stretch must stay this short. */
     ATOMIC_STORE(&cl->bootStage, SMP_STAGE_ONLINE, MEM_RELEASE);
+    if (dropped != 0) {
+        klogWrite(KLOG_WARN, "smp", "cpu %u: CR4 bits 0x%llx unsupported here, dropped", cl->cpuId,
+                  (unsigned long long)dropped);
+    }
+    if (mtrrCopied) {
+        klogWrite(KLOG_INFO, "smp", "cpu %u: MTRRs copied from the boot CPU", cl->cpuId);
+    } else if (mtrrDiffers) {
+        klogWrite(KLOG_WARN, "smp", "cpu %u: MTRRs differ from the boot CPU's", cl->cpuId);
+    }
     klogWrite(KLOG_INFO, "smp", "cpu %u apic-id=%u online", cl->cpuId, cl->apicId);
 
     smpIdleLoop();
@@ -742,6 +750,10 @@ static bool bootAp(CpuLocal *cl) {
         bool published = (smpOnlineMask() & ((uint64_t)1 << cl->cpuId)) != 0;
         SmpApVerdict v = smpApVerdict(stage, published, timeMonotonicNs() >= deadline);
         if (v == SMP_AP_ONLINE) {
+            if (!tscDone) { /* the AP timed out of the check alone: the boot CPU was too late */
+                klogWrite(KLOG_WARN, "smp", "cpu %u: the TSC check was skipped (boot CPU late)",
+                          cl->cpuId);
+            }
             return true;
         }
         if (v == SMP_AP_WAIT && !tscDone && stage == SMP_STAGE_TSC) {
@@ -758,6 +770,13 @@ static bool bootAp(CpuLocal *cl) {
             /* The AP's claim to publish (TSC -> PUBLISHING) races with this: whoever changes the
              * stage first wins, and if the AP won it is now published or about to be. */
             uint32_t seen = stage;
+#ifdef KERNEL_DEBUG
+            if (bspGiveUpLagProbe && cl->apicId == 1) {
+                /* Between reading the stage and the compare-exchange: the AP (stalled 3 s before
+                 * its claim) claims in this window, and the exchange must then fail. */
+                delayNs(BSP_GIVE_UP_LAG_NS);
+            }
+#endif
             if (!ATOMIC_CMPXCHG(&cl->bootStage, &seen, SMP_STAGE_FAILED, MEM_ACQ_REL,
                                 MEM_ACQUIRE)) {
                 continue;
@@ -791,6 +810,7 @@ void smpInit(void) {
     const char *cmdline = kernelCmdline();
 #ifdef KERNEL_DEBUG
     apEarlyPanicProbe = cmdlineHasToken(cmdline, "smp-ap-early-panic-probe");
+    bspGiveUpLagProbe = cmdlineHasToken(cmdline, "smp-bsp-giveup-lag-probe");
     apStallProbe = cmdlineHasToken(cmdline, "smp-ap-stall-probe")       ? AP_STALL_ENTERED
                    : cmdlineHasToken(cmdline, "smp-ap-stall-tsc-probe") ? AP_STALL_TSC
                                                                         : AP_STALL_NONE;
