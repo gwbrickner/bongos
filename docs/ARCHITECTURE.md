@@ -768,10 +768,12 @@ map/unmap calls (they can wait for a TLB shootdown, D-196). The IPI vectors are 
    is read-only and executable).
 4. The AP checks its APIC id, claims the run, goes real -> protected -> long mode on that PML4,
    reloads the kernel boot GDT and CS, switches to the kernel CR3, sets its GS base and runs
-   `apMain`: per-CPU GDT/TSS/IDT, the BSP's CR0/CR4/EFER, its own PAT (before any klog) and MTRRs
-   (D-194), the local APIC and LAPIC timer, the cross-CPU TSC check (§7.5), then it publishes
-   itself (`cpuTable`, the online mask, a full local TLB flush) and enters the idle loop (no
-   scheduler yet: `sti; hlt`, running work posted by `smpWorkPost`, D-202).
+   `apMain`: first its local APIC into the BSP's x2APIC mode if needed (so a panic can already stop
+   the other CPUs, D-205), then per-CPU GDT/TSS/IDT, the BSP's CR0/CR4/EFER, its own PAT (before any
+   klog) and MTRRs (D-194), the local APIC and LAPIC timer, the cross-CPU TSC check (§7.5), then it
+   claims the right to publish (a compare-exchange of its stage, the BSP's give-up being the other
+   half, D-206), publishes itself (`cpuTable`, the online mask, a full local TLB flush) and enters
+   the idle loop (no scheduler yet: `sti; hlt`, running work posted by `smpWorkPost`, D-202).
 5. The BSP waits for each AP with a timeout. An AP that fails is logged (`[warn] smp:`), sent an
    INIT to park it, and boot continues without it. An AP that has already put itself in the online
    mask is never given up on (`smpApVerdict`): only a local TLB flush separates it from `ONLINE`,
@@ -780,7 +782,7 @@ map/unmap calls (they can wait for a TLB shootdown, D-196). The IPI vectors are 
 **IPIs (D-195, D-196, D-197):** vector 0xF0 TLB shootdown, 0xF1 kick (wakes an idle CPU), 0xF2
 call-function and 0xF3 stop. `smpCallFunction()` posts an on-stack request in the target's mailbox
 (one slot per sender), sends the IPI and waits for completion with IF=1; with another CPU in the
-mask it needs IF=1 and no handler running (else `panicBug`). The TLB shootdown is one request per
+mask it needs IF=1, no handler running and no spinlock held (else `panicBug`). The TLB shootdown is one request per
 call (§6.3). A panic stops the other CPUs (stop IPI, then NMI for those that do not answer in
 100 ms) before printing; a CPU that loses the race to panic parks silently.
 

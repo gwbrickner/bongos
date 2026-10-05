@@ -57,9 +57,9 @@ void smpCallFunctionVec(uint64_t cpuMask, SmpFn fn, void *arg, uint32_t vector) 
         }
         return;
     }
-    if (!archInterruptsEnabled() || irqDepth() != 0) {
-        panicBug("smpCallFunction: needs IF=1 and no handler running (a wait with IRQs off can "
-                 "deadlock against another CPU's call)");
+    if (!archInterruptsEnabled() || irqDepth() != 0 || preemptCount() != 0) {
+        panicBug("smpCallFunction: needs IF=1, no handler running and no spinlock held (a wait "
+                 "there can deadlock against another CPU's call or a lock it spins on)");
     }
 
     preemptDisable(); /* one outstanding request per CPU: do not migrate or nest another send */

@@ -77,6 +77,10 @@ static uint64_t trampPhys;
  * before its local APIC is set up (tests/harness/smp-panic-check.sh): the panic's stop IPI must
  * still reach the BSP, and exactly one report must print. Set by smpInit() before any AP starts. */
 static bool apEarlyPanicProbe;
+/* KERNEL_DEBUG only: the `smp-ap-stall-probe` token makes the AP with APIC id 1 spin for 3 s in
+ * apMain() (past the BSP's 2 s deadline), so the BSP's give-up path runs on every such boot
+ * (tests/harness/ smp-panic-check.sh): the AP must end up parked and never in the online mask. */
+static bool apStallProbe;
 #endif
 
 static void *hhdm(uint64_t phys) {
@@ -448,6 +452,11 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
         panic("smp-ap-early-panic-probe: cpu %u panics before its local APIC is set up", cl->cpuId);
     }
 #endif
+#ifdef KERNEL_DEBUG
+    if (apStallProbe && cl->apicId == 1) {
+        delayNs(3000000000ull);
+    }
+#endif
     lapicInitAp(madtInfo);
     if (lapicId() != cl->apicId) {
         klogWrite(KLOG_ERROR, "smp", "cpu %u: local APIC id %u, expected %u", cl->cpuId, lapicId(),
@@ -475,6 +484,15 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
     tscSyncAp(&tscSync, cl, &tr);
     if (tr.ok && tr.offset != 0) {
         cl->arch.tscOffset = tr.offset; /* timeMonotonicNs() on this CPU subtracts it from now on */
+    }
+
+    /* Claim the right to publish (D-193): the BSP gives up on an AP with a compare-exchange of the
+     * same word from a pre-publication stage to FAILED, so exactly one of us wins. Losing means the
+     * BSP already decided (and is about to INIT us): park instead of appearing in the mask. */
+    uint32_t expectedStage = SMP_STAGE_TSC;
+    if (!ATOMIC_CMPXCHG(&cl->bootStage, &expectedStage, SMP_STAGE_PUBLISHING, MEM_ACQ_REL,
+                        MEM_ACQUIRE)) {
+        apFail(cl);
     }
 
     /* Publish: the CpuLocal first, then the online mask, then a full local TLB flush (a shootdown
@@ -542,8 +560,9 @@ static void freeTrampTables(void) {
 /* The AP's temporary tables: the kernel half is a by-value copy of the live kernel PML4's upper 256
  * entries (so the AP's stack and the kernel image are mapped), the low half maps only the
  * trampoline page, identity, read-only and executable (D-192: the HHDM alias stays RW; this PML4
- * is not the kernel's, which archPagingVerifyWx walks). Rebuilt before each AP, after that AP's
- * stacks exist, so a PML4 slot populated by an allocation is included. */
+ * is not the kernel's, which archPagingVerifyWx walks). All 256 kernel-half PML4 slots are
+ * allocated eagerly at boot and never rewritten (D-086), so the copy is complete whenever it is
+ * made; it is rebuilt before each AP only to start every AP from clean tables. */
 static void buildTrampTables(void) {
     uint64_t *pml4 = hhdm(tramp.pml4);
     uint64_t *pdpt = hhdm(tramp.pdpt);
@@ -706,19 +725,28 @@ static bool bootAp(CpuLocal *cl) {
         if (v == SMP_AP_ONLINE) {
             return true;
         }
-        if (!tscDone && stage == SMP_STAGE_TSC) {
+        if (v == SMP_AP_WAIT && !tscDone && stage == SMP_STAGE_TSC) {
             tscDone = true;
             TscSyncResult tr;
             uint64_t f = archIrqSave();
             tscSyncBsp(&tscSync, &tr);
             archIrqRestore(f);
             reportTscSync(cl, &tr);
+            continue; /* the check can take long (its waits are bounded at 500 ms each): the AP
+                       * may have published meanwhile, so decide from fresh state */
         }
         if (v == SMP_AP_GIVE_UP) {
+            /* The AP's claim to publish (TSC -> PUBLISHING) races with this: whoever changes the
+             * stage first wins, and if the AP won it is now published or about to be. */
+            uint32_t seen = stage;
+            if (!ATOMIC_CMPXCHG(&cl->bootStage, &seen, SMP_STAGE_FAILED, MEM_ACQ_REL,
+                                MEM_ACQUIRE)) {
+                continue;
+            }
             klogWrite(KLOG_WARN, "smp",
                       "cpu apic-id=%u did not come online (trampoline stage %u, boot stage %u)",
                       cl->apicId, (unsigned)trampWord(offsetof(ApTrampData, stage)),
-                      (unsigned)ATOMIC_LOAD(&cl->bootStage, MEM_ACQUIRE));
+                      (unsigned)stage);
             lapicSendIpi(cl->apicId, ICR_INIT); /* park it again */
             delayNs(AP_PARK_DELAY_NS);
             return false;
@@ -739,6 +767,7 @@ void smpInit(void) {
     const char *cmdline = kernelCmdline();
 #ifdef KERNEL_DEBUG
     apEarlyPanicProbe = cmdlineHasToken(cmdline, "smp-ap-early-panic-probe");
+    apStallProbe = cmdlineHasToken(cmdline, "smp-ap-stall-probe");
 #endif
     bool present, invalid;
     uint32_t maxTotal = smpParseCpusOption(cmdline, CPU_MAX, &present, &invalid);
@@ -763,9 +792,13 @@ void smpInit(void) {
         klogWrite(KLOG_INFO, "smp", "%u cpus have APIC ids above 254 and need x2APIC; not started",
                   skipped);
     }
-    if (present && !invalid && maxTotal < madtInfo->cpuCount) {
-        klogWrite(KLOG_INFO, "smp", "cpus=%u: limiting to %u of %u listed cpus", maxTotal, maxTotal,
-                  madtInfo->cpuCount);
+    uint32_t enabledCpus = 0;
+    for (uint32_t i = 0; i < madtInfo->cpuCount; i++) {
+        enabledCpus += (madtInfo->cpus[i].flags & 1u) != 0;
+    }
+    if (present && !invalid && maxTotal < enabledCpus) {
+        klogWrite(KLOG_INFO, "smp", "cpus=%u: limiting to %u of %u enabled cpus", maxTotal,
+                  maxTotal, enabledCpus);
     }
 
     if (apCount != 0) {

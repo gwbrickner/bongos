@@ -12,11 +12,12 @@
 #include <stdint.h>
 
 /* CpuLocal.bootStage values. */
-#define SMP_STAGE_NONE    0u /* not started */
-#define SMP_STAGE_ENTERED 1u /* apMain() is running */
-#define SMP_STAGE_ONLINE  2u /* published in cpuTable and the online mask */
-#define SMP_STAGE_TSC     4u /* an AP is waiting for the BSP to run the cross-CPU TSC check (D-198) */
-#define SMP_STAGE_FAILED  3u /* apMain() gave up (the CPU parks) */
+#define SMP_STAGE_NONE       0u /* not started */
+#define SMP_STAGE_ENTERED    1u /* apMain() is running */
+#define SMP_STAGE_ONLINE     2u /* published in cpuTable and the online mask */
+#define SMP_STAGE_FAILED     3u /* apMain() gave up, or the BSP gave up on the AP (the CPU parks) */
+#define SMP_STAGE_TSC        4u /* waiting for the BSP to run the cross-CPU TSC check (D-198) */
+#define SMP_STAGE_PUBLISHING 5u /* the AP won the claim: it is publishing itself, the BSP waits */
 
 /* --- smp-core.c: pure helpers (no locks, no allocation) ------------------------------------- */
 
@@ -47,7 +48,10 @@ bool smpPickTrampolinePage(const BootMemRegion *map, uint32_t count, uint64_t *o
  * published itself in the online mask (`published`): from then on other CPUs may send it IPIs and
  * only a local TLB flush separates it from ONLINE, so giving up on it (the INIT included) would
  * leave a dead CPU in the mask; GIVE_UP otherwise (a failed or late AP that is not yet visible).
- * Pure. */
+ * The stage PUBLISHING (the AP has claimed the right to publish, D-193) counts as published. The
+ * caller must still turn GIVE_UP into a compare-exchange of the stage to FAILED, and re-evaluate if
+ * that loses: the AP's own claim (TSC -> PUBLISHING) is the other half of the handshake, so exactly
+ * one of them wins. Pure. */
 typedef enum { SMP_AP_WAIT, SMP_AP_ONLINE, SMP_AP_GIVE_UP } SmpApVerdict;
 SmpApVerdict smpApVerdict(uint32_t bootStage, bool published, bool expired);
 
@@ -74,11 +78,14 @@ uint64_t smpOnlineMask(void);
 /* Runs `fn(arg)` on every online CPU in `cpuMask` (bit = dense id; offline bits are ignored),
  * including the caller's own if its bit is set, and returns once every one has finished (D-195).
  * `fn` runs in IRQ context on the target (IF=0, irqDepth()==1): it must follow the handler rules --
- * no sleeping, no vmalloc/vmm map/unmap, no smpCallFunction() of its own -- and may use the pmm and
- * kmalloc (D-200). The caller's own copy runs inline with IRQs disabled. With only the caller
- * online it runs locally and there are no context restrictions; otherwise (some other CPU in the
- * mask) the caller must have IF=1, irqDepth()==0 and hold no irqsave lock, or this panics
- * (panicBug) rather than risking the A-waits-for-B/B-waits-for-A deadlock. IF stays 1 while it
+ * no sleeping, no vmalloc/vmm map/unmap, no smpCallFunction() of its own -- and, by D-200, must not
+ * allocate either (IPI handlers never do), even though the pmm and kmalloc are legal in other
+ * handlers. The caller's own copy runs inline with IRQs disabled. With only the caller online it
+ * runs locally and there are no context restrictions; otherwise (some other CPU in the mask) the
+ * caller must have IF=1, irqDepth()==0 and hold no spinlock (preemptCount()==0: a held plain lock
+ * is just as deadly as an irqsave one, since the target may spin on it with IRQs off), or this
+ * panics (panicBug) rather than risking the A-waits-for-B/B-waits-for-A deadlock. The same
+ * contract passes up to archTlbShootdownKernel(), vmmUnmapKernel() and vfree(). IF stays 1 while it
  * waits, so two CPUs calling each other at once both make progress. A CPU that does not answer in
  * 10 s panics. Not IRQ-safe (waits); may not sleep (nothing sleeps yet). */
 void smpCallFunction(uint64_t cpuMask, SmpFn fn, void *arg);
@@ -87,8 +94,8 @@ void smpCallFunction(uint64_t cpuMask, SmpFn fn, void *arg);
  * and the call-function users are told apart in the per-CPU counters. */
 void smpCallFunctionVec(uint64_t cpuMask, SmpFn fn, void *arg, uint32_t vector);
 
-/* Sends the kick IPI to CPU `cpuId` (a no-op handler: it just wakes the CPU from `hlt`). IRQ-safe.
- */
+/* Sends the kick IPI to CPU `cpuId` (a no-op handler: it just wakes the CPU from `hlt`). IRQ-safe;
+ * takes no lock; panicBug if `cpuId` is not online. */
 void smpKick(uint32_t cpuId);
 
 /* Panic path (D-197): stops every other CPU (0xF3, then an NMI for those that did not answer in
@@ -120,25 +127,33 @@ typedef struct SmpWork {
 
 /* Posts `w` (fn, arg and `remaining` set by the caller; `w` must stay valid until it reaches 0) to
  * AP `cpuId` and kicks it. One work item per CPU at a time: posting while that CPU still has an
- * earlier one pending is a panicBug, and so is posting to the calling CPU or an offline one. */
+ * earlier one pending is a panicBug, and so is posting to the calling CPU or an offline one.
+ * Takes no lock; IRQ-safe (a store and an IPI); never sleeps. */
 void smpWorkPost(uint32_t cpuId, SmpWork *w);
 
-/* Waits (IF must be 1) until `w->remaining` reaches 0; panics after 30 s. */
+/* Waits until `w->remaining` reaches 0; panics after 30 s. Needs IF=1 and no handler running
+ * (panicBug otherwise) so this CPU keeps servicing IPIs while it waits. Takes no lock; not
+ * IRQ-safe; spins (nothing sleeps yet). */
 void smpWorkWait(SmpWork *w);
 
 /* Runs `fn(arg)` once on every online CPU in `cpuMask`: the caller's own inline (thread context),
- * every other one in its idle loop, and returns when all are done. Not from a handler. */
+ * every other one in its idle loop, and returns when all are done. Posts to each target before it
+ * waits; the wait has smpWorkWait()'s rules (IF=1, no handler), checked only then, so call it from
+ * thread context. Takes no lock; not IRQ-safe; spins. */
 void smpWorkRun(uint64_t cpuMask, SmpFn fn, void *arg);
 
 /* Runs the posted work of the calling AP, if any (the idle loop calls it with IF=0; it enables
- * interrupts around `fn`). Returns true if work ran. */
+ * interrupts around `fn`, so `fn` has the thread-context rules above). Returns true if work ran.
+ * Called only by an AP's idle loop; takes no lock; not IRQ-safe; may run for as long as `fn`. */
 bool smpWorkRunPending(void);
 
 /* The stop NMI of the test mode: true (the CPU is marked stopped) when smpStopTestMode() is on and
  * the NMI is the stop IPI's fallback. Called by the NMI path. */
 bool smpStopNmiHook(void);
 
-/* The handler registered on all four IPI vectors by smpInit() (IrqHandler signature). */
+/* The handler registered on all four IPI vectors by smpInit() (IrqHandler signature). Runs in hard
+ * IRQ context only (IF=0, irqDepth()==1), takes no lock, never allocates or sleeps; the stop vector
+ * halts the CPU unless the ktest-only test mode is on. */
 void smpIpiHandler(uint32_t vector, void *ctx);
 
 /* The arch hooks (smp-x86.c): send vector `vector` (fixed, edge) or an NMI to CPU `cpuId`.

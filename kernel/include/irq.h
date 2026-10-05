@@ -33,17 +33,21 @@ void irqInit(void);
  * that order; vmmLock/pmmLock are never taken inside one. IRQ-safe with respect to IF (callable
  * with IF=0 or 1). May sleep: no. */
 
-/* Allocates the lowest free dynamic vector in [48, 239]. STATUS_ERR_NO_MEMORY if none is left. */
+/* Allocates the lowest free dynamic vector in [48, 239]. STATUS_ERR_NO_MEMORY if none is left.
+ * Takes irqLock (an irqsave spinlock, D-201); not callable from a handler. */
 Status irqAllocVector(uint32_t *outVector);
 /* Frees an allocated vector. STATUS_ERR_INVALID if it is not allocated, still has a handler, or is
  * still routed from a GSI. */
 Status irqFreeVector(uint32_t vector);
 /* Registers `handler` for an allocated vector, or for one of the fixed ARCHITECTURE §7.2 vectors
  * (0xF0-0xF3 IPIs, 0xFE LAPIC timer). STATUS_ERR_INVALID: handler NULL, the vector neither
- * allocated nor fixed, or already registered. */
+ * allocated nor fixed, or already registered. Takes irqLock (an irqsave spinlock); not callable
+ * from a handler. */
 Status irqRegister(uint32_t vector, IrqHandler handler, void *ctx);
 /* STATUS_ERR_INVALID if nothing is registered, or the vector is still routed from an unmasked
- * GSI (mask it first). */
+ * GSI (mask it first). Does not wait for a handler already running on another CPU: the caller must
+ * make sure the source is quiet (masked, drained) before it frees the handler's `ctx` (D-201).
+ * Takes irqLock; not callable from a handler. */
 Status irqUnregister(uint32_t vector);
 
 /* Routes legacy ISA IRQ `isaIrq` (0-15) to `vector` through its ISO-resolved GSI, with the
@@ -57,7 +61,8 @@ Status irqUnregister(uint32_t vector);
 Status irqRouteIsa(uint32_t isaIrq, uint32_t vector, uint32_t *outGsi);
 /* Same for an explicit GSI and IRQ_ACTIVE_LOW/IRQ_LEVEL flags (PCI INTx later). Two pins never
  * share a vector: the LAPIC's EOI broadcast matches by vector, so sharing would break level
- * pins. */
+ * pins. Takes irqLock, then the IOAPIC lock (in that order, D-201); the entry targets the boot
+ * CPU's APIC id; not callable from a handler. */
 Status irqRouteGsi(uint32_t gsi, uint32_t vector, uint32_t flags);
 /* STATUS_ERR_NOT_FOUND if `gsi` is not routed; STATUS_ERR_INVALID if its vector has no handler. */
 Status irqUnmaskGsi(uint32_t gsi);

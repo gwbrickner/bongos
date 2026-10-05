@@ -87,24 +87,6 @@ bool cmdlineFindKtest(const char *cmdline, char *out, size_t outCap) {
     return cmdlineFindValue(cmdline, "ktest", out, outCap);
 }
 
-bool cmdlineParseUint(const char *s, uint32_t *out) {
-    if (s == NULL || out == NULL || *s == '\0') {
-        return false;
-    }
-    uint64_t v = 0;
-    for (; *s != '\0'; s++) {
-        if (*s < '0' || *s > '9') {
-            return false;
-        }
-        v = v * 10 + (uint64_t)(*s - '0');
-        if (v > 0xFFFFFFFFull) {
-            return false;
-        }
-    }
-    *out = (uint32_t)v;
-    return true;
-}
-
 bool cmdlineHasToken(const char *cmdline, const char *token) {
     if (cmdline == NULL || token == NULL) {
         return false;

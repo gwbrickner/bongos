@@ -9,6 +9,7 @@
 #include "cpu-local.h"
 #include "klog.h"
 #include "ktest.h"
+#include "preempt.h"
 #include "pmm.h"
 #include "smp.h"
 #include "timekeeping.h"
@@ -105,6 +106,30 @@ static void runProbes(void) {
         probes[i] = (CpuProbe){0};
     }
     smpWorkRun(smpOnlineMask(), probeFn, NULL);
+}
+
+/* D-190: the BSP's GS base is its CpuLocal, `self` is at offset 0, the TSS and GDT it runs on are
+ * the ones in its own CpuLocal, and cpuSync()/irqDepth live in it. (x86 MSRs and descriptor-table
+ * registers: arch test, CLAUDE.md placement rule.) */
+KTEST(smp_cpulocal_bsp) {
+    CpuLocal *cl = cpuLocal();
+    KTEST_ASSERT(cl == &cpuLocalBsp);
+    KTEST_ASSERT(cl->self == cl);
+    KTEST_ASSERT_EQ(archRdmsr(MSR_GS_BASE), (uint64_t)(uintptr_t)cl);
+    KTEST_ASSERT_EQ(archRdmsr(MSR_KERNEL_GS_BASE), 0);
+    KTEST_ASSERT_EQ(cl->cpuId, 0);
+    KTEST_ASSERT(cpuLocalOf(0) == cl);
+    KTEST_ASSERT(cpuLocalOf(CPU_MAX) == NULL);
+    KTEST_ASSERT(cpuSync() == &cl->sync);
+
+    uint64_t gdtrBuf[2] = {0, 0};
+    __asm__ volatile("sgdt %0" : "=m"(gdtrBuf));
+    KTEST_ASSERT_EQ((gdtrBuf[0] >> 16) | (gdtrBuf[1] << 48), (uint64_t)(uintptr_t)cl->arch.gdt);
+    uint16_t tr;
+    __asm__ volatile("str %0" : "=r"(tr));
+    KTEST_ASSERT_EQ(tr, GDT_SEL_TSS);
+    uint64_t rsp = (uint64_t)(uintptr_t)__builtin_frame_address(0);
+    KTEST_ASSERT(rsp >= cl->arch.stackBottom && rsp < cl->arch.stackTop);
 }
 
 /* ROADMAP M3.5 item 1: every CPU has its own GS-based CpuLocal, GDT, TSS, IST stacks and kernel

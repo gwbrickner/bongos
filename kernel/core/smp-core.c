@@ -89,7 +89,7 @@ SmpApVerdict smpApVerdict(uint32_t bootStage, bool published, bool expired) {
     if (bootStage == SMP_STAGE_ONLINE) {
         return SMP_AP_ONLINE;
     }
-    if (published) {
+    if (published || bootStage == SMP_STAGE_PUBLISHING) {
         return SMP_AP_WAIT;
     }
     if (bootStage == SMP_STAGE_FAILED || expired) {

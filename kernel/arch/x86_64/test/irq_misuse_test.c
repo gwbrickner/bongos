@@ -49,6 +49,7 @@ typedef struct {
     volatile uint32_t depth;
     volatile int32_t st[10];
     volatile uint32_t allocOut;
+    volatile uint32_t spare; /* an allocated, unregistered vector the handler tries to register */
     volatile bool isrAtEntry, isrAfterSpurious, isrAfterLegacy;
     volatile uint64_t spuriousDelta, legacyDelta;
 } InHandler;
@@ -71,7 +72,7 @@ static void apiFromHandler(uint32_t vector, void *ctx) {
     h->st[6] = irqUnmaskGsi(2);
     h->st[7] = irqMaskGsi(2);
     h->st[8] = irqUnrouteGsi(2);
-    h->st[9] = irqRegister(0xF0, apiFromHandler, ctx);
+    h->st[9] = irqRegister(h->spare, apiFromHandler, ctx);
 
     /* The spurious paths must not EOI: this handler's own vector is the one in service, so an
      * EOI from either would retire it right here. */
@@ -91,6 +92,9 @@ KTEST(irq_api_refused_in_handler) {
     uint32_t v;
     KTEST_ASSERT(irqAllocVector(&v) == STATUS_OK);
     KTEST_ASSERT(irqRegister(v, apiFromHandler, &inHandler) == STATUS_OK);
+    uint32_t spare;
+    KTEST_ASSERT(irqAllocVector(&spare) == STATUS_OK);
+    inHandler.spare = spare;
     uint32_t allocatedBefore = 0;
     {
         /* How many vectors are free now, so a leak from inside the handler shows. */
@@ -125,6 +129,11 @@ KTEST(irq_api_refused_in_handler) {
     KTEST_ASSERT(irqRegister(v, apiFromHandler, &inHandler) == STATUS_ERR_INVALID);
     KTEST_ASSERT(irqMaskGsi(2) == STATUS_ERR_NOT_FOUND);
     KTEST_ASSERT(irqRegister(0xF0, apiFromHandler, &inHandler) == STATUS_ERR_INVALID); /* SMP's */
+    /* The spare vector the handler tried to register was refused only because of the handler
+     * context (it is allocated and free): it still takes a registration now. */
+    KTEST_ASSERT(irqRegister(spare, apiFromHandler, &inHandler) == STATUS_OK);
+    KTEST_ASSERT(irqUnregister(spare) == STATUS_OK);
+    KTEST_ASSERT(irqFreeVector(spare) == STATUS_OK);
     KTEST_ASSERT(irqUnregister(v) == STATUS_OK);
     KTEST_ASSERT(irqFreeVector(v) == STATUS_OK);
     uint32_t got[193];
@@ -136,7 +145,7 @@ KTEST(irq_api_refused_in_handler) {
     for (uint32_t i = 0; i < n; i++) {
         KTEST_ASSERT(irqFreeVector(got[i]) == STATUS_OK);
     }
-    KTEST_ASSERT_EQ(n, allocatedBefore + 1);
+    KTEST_ASSERT_EQ(n, allocatedBefore + 2); /* `v` and `spare`, both freed above: nothing leaked */
 }
 
 /* --- a handler re-raising its own vector ----------------------------------------------------- */
@@ -252,12 +261,23 @@ KTEST(irq_fixed_vectors_dispatch) {
     uint64_t cTimer = irqVectorCount(0xFE);
     /* The mailbox is empty, so 0xF0/0xF2 run nothing; 0xF3 would stop this CPU for good unless the
      * ktest-only stop hook is on (it then only marks the CPU stopped). */
+    uint64_t ipi[4];
+    for (uint32_t i = 0; i < 4; i++) {
+        ipi[i] = cpuLocal()->mbox.ipiCount[i];
+    }
     smpStopTestMode(true);
     __asm__ volatile("int $0xF0");
     __asm__ volatile("int $0xF1");
     __asm__ volatile("int $0xF2");
     __asm__ volatile("int $0xF3");
+    bool stopped = smpCpuStopped(smpThisCpu());
     smpStopTestMode(false);
+    /* The SMP handler itself ran for each vector (the dispatch counter above would also count a
+     * vector with no handler), and the stop handler marked this CPU stopped. */
+    for (uint32_t i = 0; i < 4; i++) {
+        KTEST_ASSERT_EQ(cpuLocal()->mbox.ipiCount[i], ipi[i] + 1);
+    }
+    KTEST_ASSERT(stopped);
     __asm__ volatile("int $0xFE"); /* runs the timer handler (nothing due), then the EOI */
     KTEST_ASSERT(irqVectorCount(0xFE) >= cTimer + 1);
     for (uint32_t i = 0; i < 4; i++) {

@@ -22,11 +22,6 @@ bool cmdlineFindValueSpan(const char *cmdline, const char *key, const char **out
 /* cmdlineFindValue(cmdline, "ktest", ...). */
 bool cmdlineFindKtest(const char *cmdline, char *out, size_t outCap);
 
-/* Parses `s` as a plain decimal number (digits only, no sign or whitespace, at most UINT32_MAX)
- * into `*out`; false (leaving `out` untouched) for anything else, including an empty string. No
- * locks; pure. */
-bool cmdlineParseUint(const char *s, uint32_t *out);
-
 /* Whole-string glob match: '*' in `pattern` matches any substring (including empty), every other
  * character must match `name` literally. The match is anchored at both ends (the pattern must
  * describe the whole name, not a substring of it). No locks, boot-time only; pure. */

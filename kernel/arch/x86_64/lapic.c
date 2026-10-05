@@ -6,6 +6,7 @@
 
 #include "include/cpu-impl.h"
 
+#include "cpu-local.h"
 #include "klog.h"
 #include "panic.h"
 #include "vmm.h"
@@ -263,6 +264,10 @@ static void lapicInitCpu(const AcpiMadtInfo *madt, bool bsp) {
     }
 
     uint32_t id = lapicId();
+    if (bsp) {
+        /* Right away, not at smpInit(): irqRouteGsi() routes device IRQs to the BSP's APIC id. */
+        cpuLocal()->apicId = id;
+    }
     /* The LAPIC-NMI pin for this CPU (MADT type 4): NMI delivery, edge-triggered always (SDM
      * Vol 3A §10.5.1), polarity from the INTI flags. Without a match the pins stay masked. NMI
      * still always panics (D-074). */

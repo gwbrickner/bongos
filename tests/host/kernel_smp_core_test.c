@@ -31,18 +31,6 @@ TEST(cmdlineFindValueSpanIsNotTruncated) {
     ASSERT_TRUE(!cmdlineFindValueSpan("cpu=4 xcpus=4", "cpus", &v, &len) && v == NULL);
 }
 
-TEST(cmdlineParseUintAcceptsOnlyDecimal) {
-    uint32_t n = 77;
-    ASSERT_TRUE(cmdlineParseUint("0", &n) && n == 0);
-    ASSERT_TRUE(cmdlineParseUint("4294967295", &n) && n == 4294967295u);
-    n = 5;
-    ASSERT_TRUE(!cmdlineParseUint("4294967296", &n) && n == 5);
-    ASSERT_TRUE(!cmdlineParseUint("", &n));
-    ASSERT_TRUE(!cmdlineParseUint("-1", &n));
-    ASSERT_TRUE(!cmdlineParseUint("4x", &n));
-    ASSERT_TRUE(!cmdlineParseUint(" 4", &n));
-}
-
 TEST(smpParseCpusOption) {
     bool present, invalid;
     ASSERT_EQ(smpParseCpusOption("a b", 64, &present, &invalid), 64u);
@@ -184,4 +172,7 @@ TEST(smpApVerdictNeverGivesUpOnAPublishedAp) {
     ASSERT_EQ((int)smpApVerdict(SMP_STAGE_NONE, false, true), (int)SMP_AP_GIVE_UP);
     ASSERT_EQ((int)smpApVerdict(SMP_STAGE_ENTERED, false, false), (int)SMP_AP_WAIT);
     ASSERT_EQ((int)smpApVerdict(SMP_STAGE_FAILED, false, false), (int)SMP_AP_GIVE_UP);
+    /* An AP that won the claim to publish is waited for however late, published or not yet. */
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_PUBLISHING, false, true), (int)SMP_AP_WAIT);
+    ASSERT_EQ((int)smpApVerdict(SMP_STAGE_PUBLISHING, false, false), (int)SMP_AP_WAIT);
 }

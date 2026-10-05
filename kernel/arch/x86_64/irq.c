@@ -146,8 +146,9 @@ Status irqUnregister(uint32_t vector) {
     uint64_t f = spinLockIrqSave(&irqLockObj);
     Status st = STATUS_ERR_INVALID;
     if (slots[vector].handler != NULL && !(vectorGsi[vector] != NO_GSI && vectorUnmasked[vector])) {
+        /* ctx is left alone: another CPU's dispatch may have loaded the handler and be about to
+         * read it (D-201); the NULL handler is what stops later dispatches. */
         __atomic_store_n(&slots[vector].handler, NULL, __ATOMIC_RELEASE);
-        slots[vector].ctx = NULL;
         st = STATUS_OK;
     }
     spinUnlockIrqRestore(&irqLockObj, f);

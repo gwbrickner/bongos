@@ -11,7 +11,7 @@ CpuLocal *cpuLocalOf(uint32_t id) {
     if (id >= CPU_MAX) {
         return NULL;
     }
-    return cpuTable[id];
+    return __atomic_load_n(&cpuTable[id], __ATOMIC_ACQUIRE); /* an AP publishes it atomically */
 }
 
 void cpuLocalInitBsp(void) {
