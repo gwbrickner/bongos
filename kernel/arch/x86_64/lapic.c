@@ -295,6 +295,21 @@ static void lapicInitCpu(const AcpiMadtInfo *madt, bool bsp) {
     }
 }
 
+void lapicApMatchMode(void) {
+    if (!x2apic) {
+        return; /* xAPIC: the BSP's MMIO window serves every CPU; nothing to switch */
+    }
+    uint64_t base = archRdmsr(MSR_IA32_APIC_BASE);
+    uint32_t r[4];
+    archCpuid(1, 0, r);
+    bool x2Supported = (r[2] >> 21) & 1u;
+    /* Only the one legal step, xAPIC-enabled -> x2APIC (SDM Vol 3A §10.12.5); anything else is
+     * left for lapicInitAp() to fix up or panic about. */
+    if ((base & APIC_BASE_EXTD) == 0 && (base & APIC_BASE_EN) != 0 && x2Supported) {
+        archWrmsr(MSR_IA32_APIC_BASE, base | APIC_BASE_EXTD);
+    }
+}
+
 void lapicInit(const AcpiMadtInfo *madt) {
     lapicInitCpu(madt, true);
 }

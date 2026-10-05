@@ -72,6 +72,13 @@ static BspCpuState bspState;
 static const AcpiMadtInfo *madtInfo;
 static uint64_t trampPhys;
 
+#ifdef KERNEL_DEBUG
+/* KERNEL_DEBUG only: the `smp-ap-early-panic-probe` cmdline token makes cpu 1 panic in apMain()
+ * before its local APIC is set up (tests/harness/smp-panic-check.sh): the panic's stop IPI must
+ * still reach the BSP, and exactly one report must print. Set by smpInit() before any AP starts. */
+static bool apEarlyPanicProbe;
+#endif
+
 static void *hhdm(uint64_t phys) {
     return (void *)(uintptr_t)(pmmHhdmBase() + phys);
 }
@@ -402,6 +409,8 @@ static _Noreturn void smpIdleLoop(void) {
 /* Runs on the AP, IF=0, on its own stack (ap-entry.asm), with GS already set. Allocates nothing. */
 __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
     ATOMIC_STORE(&cl->bootStage, SMP_STAGE_ENTERED, MEM_RELEASE);
+    /* Before anything that can panic: a panic's stop IPI goes out in the BSP's APIC mode. */
+    lapicApMatchMode();
     archCpuInitAp(cl);
 
     /* Control registers first (CR4.PGE is what the PAT procedure toggles), reproducing the BSP's.
@@ -434,6 +443,11 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
     }
     archPatProgramThisCpu(); /* before any klog: the framebuffer is a WC mapping */
 
+#ifdef KERNEL_DEBUG
+    if (apEarlyPanicProbe && cl->cpuId == 1) {
+        panic("smp-ap-early-panic-probe: cpu %u panics before its local APIC is set up", cl->cpuId);
+    }
+#endif
     lapicInitAp(madtInfo);
     if (lapicId() != cl->apicId) {
         klogWrite(KLOG_ERROR, "smp", "cpu %u: local APIC id %u, expected %u", cl->cpuId, lapicId(),
@@ -723,6 +737,9 @@ void smpInit(void) {
     cpuLocalBsp.apicId = lapicId();
     cpuLocalBsp.bootStage = SMP_STAGE_ONLINE;
     const char *cmdline = kernelCmdline();
+#ifdef KERNEL_DEBUG
+    apEarlyPanicProbe = cmdlineHasToken(cmdline, "smp-ap-early-panic-probe");
+#endif
     bool present, invalid;
     uint32_t maxTotal = smpParseCpusOption(cmdline, CPU_MAX, &present, &invalid);
     if (invalid) {

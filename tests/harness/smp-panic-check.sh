@@ -89,4 +89,47 @@ for entry in "${PROBES[@]}"; do
         status=1
     fi
 done
+
+# A panic on an AP during bring-up, before its local APIC is set up (KERNEL_DEBUG hook in apMain,
+# cmdline token smp-ap-early-panic-probe, no ktest): its stop IPI must reach the BSP (which is
+# waiting for that AP with IF=1), and the report must be the only one. The run then halts (no ktest,
+# so no isa-debug-exit): the expected result is HANG at the short timeout. Under x2APIC (KVM's
+# `-cpu max`) this also proves the AP's APIC already follows the BSP's mode at that point.
+probe=smp_ap_early_panic
+if [ "$RELEASE" = 1 ]; then
+    echo "RESULT smp-panic-check[$FW] $probe: SKIP (release build: no probe hook)"
+else
+    name="smp-panic-$probe"
+    img="build/$name.img"
+    cfg="build/$name.cfg"
+    printf 'kernel = /bong/kernel.elf\ncmdline = smp-ap-early-panic-probe\n' > "$cfg"
+    if ! build/tools/mkimage/mkimage --output "$img" --efi build/boot-uefi/BOOTX64.EFI \
+            --kernel build/kernel/kernel.elf --boot-cfg "$cfg" --stage1 build/boot-bios/stage1.bin \
+            --stage2 build/boot-bios/stage2.bin > /dev/null 2>&1; then
+        echo "smp-panic-check: mkimage failed for $probe"; rm -f "$cfg"; exit 1
+    fi
+    result=$(tests/harness/run-qemu.sh --image "$img" --fw "$FW" --cpus 4 --name "$name" \
+             --timeout 60 2>&1 | grep '^RESULT')
+    rm -f "$img" "$cfg"
+    log="build/logs/$name.serial.log"
+    text=$(tr -d '\r' < "$log" 2>/dev/null)
+    errs=()
+    case "$result" in *": HANG"*) ;; *) errs+=("run result is '$result', want HANG (halted after the report)") ;; esac
+    grep -q 'smp: trampoline page=' <<< "$text" || errs+=("the boot never reached AP bring-up")
+    npanic=$(grep -c '^PANIC' <<< "$text")
+    [ "$npanic" = 1 ] || errs+=("$npanic lines start with PANIC, want exactly 1")
+    grep -q 'PANIC while already panicking' <<< "$text" && errs+=("a nested-panic report was printed")
+    grep -qE '^PANIC: smp-ap-early-panic-probe: cpu 1 panics before its local APIC is set up$' \
+        <<< "$text" || errs+=("no 'PANIC: smp-ap-early-panic-probe: cpu 1 ...' line")
+    grep -qE 'did not come online|cpus online' <<< "$text" &&
+        errs+=("the BSP kept booting after the AP's panic (it was not stopped)")
+    mode=$(grep -oE 'lapic: mode=[a-z0-9]+' <<< "$text" | head -1)
+    if [ ${#errs[@]} = 0 ]; then
+        echo "RESULT smp-panic-check[$FW] $probe: PASS (${mode:-lapic mode unknown})"
+    else
+        for e in "${errs[@]}"; do echo "smp-panic-check[$FW] $probe: $e"; done
+        echo "RESULT smp-panic-check[$FW] $probe: FAIL (see $log)"
+        status=1
+    fi
+fi
 exit $status

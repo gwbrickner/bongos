@@ -70,6 +70,15 @@ void lapicInit(const AcpiMadtInfo *madt);
  * lapicInit() already. Panics if the AP cannot match the BSP's mode. Boot-time, IF=0, on the AP. */
 void lapicInitAp(const AcpiMadtInfo *madt);
 
+/* The first thing an AP does (apMain, before even its IDT is loaded): when the BSP runs x2APIC
+ * and this CPU's local APIC came out of INIT in xAPIC mode, switches it to x2APIC, so that every
+ * IPI this CPU sends from then on (lapicSendIpi() picks the interface from the BSP's mode) is one
+ * its APIC decodes. Without it a panic on the AP before lapicInitAp() #GPs on its own stop IPI,
+ * losing the report and leaving the other CPUs running. Does nothing in xAPIC mode, when the APIC
+ * is already in x2APIC mode, or when the switch is not possible (lapicInitAp() then panics as
+ * before). Boot-time, IF=0, on the AP; no locks; never fails. */
+void lapicApMatchMode(void);
+
 /* Sends an IPI to the CPU whose APIC ID is `apicId` (physical destination): `icrLo` is the ICR's
  * low dword (delivery mode, vector, level; e.g. 0x4500 INIT, 0x4600|page SIPI, 0x4000|vector
  * fixed). x2APIC: an mfence then one WRMSR; xAPIC: the two-register sequence in an IRQ-disable
