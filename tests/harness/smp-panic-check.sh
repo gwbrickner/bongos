@@ -133,19 +133,25 @@ else
     fi
 fi
 
-# An AP that is too slow (KERNEL_DEBUG hook in apMain, cmdline token smp-ap-stall-probe: the AP with
-# APIC id 1 spins for 3 s, past the BSP's 2 s deadline): the BSP must give up on it cleanly (one
-# warning, an INIT, its id reused by the next AP) and never leave it in the online mask, so the
-# call-function and TLB-shootdown ktests that follow neither hang nor panic waiting for it (a
-# dead CPU in the mask would stall them for 10 s and panic). 4 vCPUs -> 3 online.
-probe=smp_ap_late
-if [ "$RELEASE" = 1 ]; then
-    echo "RESULT smp-panic-check[$FW] $probe: SKIP (release build: no probe hook)"
-else
+# An AP that is too slow (KERNEL_DEBUG hooks in apMain: the AP with APIC id 1 spins for 3 s, past
+# the BSP's 2 s deadline; token smp-ap-stall-probe right after it entered, smp-ap-stall-tsc-probe
+# after the TSC check, just before its claim): the BSP must give up on it cleanly (one warning, its
+# id reused by the next AP). The hooks also delay the BSP's park INIT past the end of the stall, so
+# the AP's own half of the D-206 handshake is what must keep it out of the online mask: it must
+# never print an "apic-id=1 online" line. The call-function and TLB-shootdown ktests that follow
+# must neither hang nor panic (a dead CPU in the mask would stall them for 10 s and panic).
+# 4 vCPUs -> 3 online.
+for entry in "smp_ap_late|smp-ap-stall-probe" "smp_ap_late_tsc|smp-ap-stall-tsc-probe"; do
+    probe=${entry%%|*}
+    token=${entry#*|}
+    if [ "$RELEASE" = 1 ]; then
+        echo "RESULT smp-panic-check[$FW] $probe: SKIP (release build: no probe hook)"
+        continue
+    fi
     name="smp-panic-$probe"
     img="build/$name.img"
     cfg="build/$name.cfg"
-    printf 'kernel = /bong/kernel.elf\ncmdline = ktest=smp_call_function_all_cpus,smp_tlb_shootdown_batched smp-ap-stall-probe\n' > "$cfg"
+    printf 'kernel = /bong/kernel.elf\ncmdline = ktest=smp_call_function_all_cpus,smp_tlb_shootdown_batched %s\n' "$token" > "$cfg"
     if ! build/tools/mkimage/mkimage --output "$img" --efi build/boot-uefi/BOOTX64.EFI \
             --kernel build/kernel/kernel.elf --boot-cfg "$cfg" --stage1 build/boot-bios/stage1.bin \
             --stage2 build/boot-bios/stage2.bin > /dev/null 2>&1; then
@@ -162,6 +168,7 @@ else
     nlate=$(grep -cE '^\[warn\] smp: cpu apic-id=1 did not come online ' <<< "$text")
     [ "$nlate" = 1 ] || errs+=("$nlate 'did not come online' warnings for apic-id 1, want 1")
     grep -qE '^\[info\] smp: cpu 1 apic-id=2 online$' <<< "$text" || errs+=("the next AP did not reuse cpu id 1")
+    grep -qE 'smp: cpu [0-9]+ apic-id=1 online' <<< "$text" && errs+=("the given-up AP published itself (apic-id=1 online)")
     grep -q '^PANIC' <<< "$text" && errs+=("a panic was printed")
     if [ ${#errs[@]} = 0 ]; then
         echo "RESULT smp-panic-check[$FW] $probe: PASS"
@@ -170,5 +177,5 @@ else
         echo "RESULT smp-panic-check[$FW] $probe: FAIL (see $log)"
         status=1
     fi
-fi
+done
 exit $status

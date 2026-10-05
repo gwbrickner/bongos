@@ -78,9 +78,17 @@ static uint64_t trampPhys;
  * still reach the BSP, and exactly one report must print. Set by smpInit() before any AP starts. */
 static bool apEarlyPanicProbe;
 /* KERNEL_DEBUG only: the `smp-ap-stall-probe` token makes the AP with APIC id 1 spin for 3 s in
- * apMain() (past the BSP's 2 s deadline), so the BSP's give-up path runs on every such boot
- * (tests/harness/ smp-panic-check.sh): the AP must end up parked and never in the online mask. */
-static bool apStallProbe;
+ * apMain() right after it entered (`smp-ap-stall-tsc-probe`: after the TSC check, just before its
+ * claim), past the BSP's 2 s deadline, so the BSP's give-up path runs on every such boot
+ * (tests/harness/smp-panic-check.sh). The BSP then also delays that AP's park INIT by
+ * AP_STALL_INIT_LAG_NS, past the end of the stall: the AP's own half of the D-206 handshake, not
+ * the INIT, must keep it out of the online mask. */
+#define AP_STALL_NONE        0u
+#define AP_STALL_ENTERED     1u
+#define AP_STALL_TSC         2u
+#define AP_STALL_NS          3000000000ull
+#define AP_STALL_INIT_LAG_NS 2000000000ull
+static uint32_t apStallProbe;
 #endif
 
 static void *hhdm(uint64_t phys) {
@@ -398,6 +406,16 @@ static _Noreturn void apFail(CpuLocal *cl) {
     archHaltForever();
 }
 
+/* Moves this AP's stage from `from` to `to`, or parks it if the BSP gave up on it meanwhile (its
+ * compare-exchange to FAILED won, D-206). Every step of the AP's stage is one of these: a plain
+ * store would overwrite the BSP's FAILED and let a given-up AP go on to claim and publish itself
+ * if the BSP's park INIT arrived late. */
+static void apAdvanceStage(CpuLocal *cl, uint32_t from, uint32_t to) {
+    if (!ATOMIC_CMPXCHG(&cl->bootStage, &from, to, MEM_ACQ_REL, MEM_ACQUIRE)) {
+        archHaltForever(); /* the stage stays FAILED */
+    }
+}
+
 /* The idle loop of an AP with no scheduler (M4 replaces it): `sti; hlt` in one asm statement, so
  * an interrupt that arrives between the two cannot be lost (the STI shadow covers the hlt). */
 static _Noreturn void smpIdleLoop(void) {
@@ -412,7 +430,7 @@ static _Noreturn void smpIdleLoop(void) {
 
 /* Runs on the AP, IF=0, on its own stack (ap-entry.asm), with GS already set. Allocates nothing. */
 __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
-    ATOMIC_STORE(&cl->bootStage, SMP_STAGE_ENTERED, MEM_RELEASE);
+    apAdvanceStage(cl, SMP_STAGE_NONE, SMP_STAGE_ENTERED);
     /* Before anything that can panic: a panic's stop IPI goes out in the BSP's APIC mode. */
     lapicApMatchMode();
     archCpuInitAp(cl);
@@ -453,8 +471,8 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
     }
 #endif
 #ifdef KERNEL_DEBUG
-    if (apStallProbe && cl->apicId == 1) {
-        delayNs(3000000000ull);
+    if (apStallProbe == AP_STALL_ENTERED && cl->apicId == 1) {
+        delayNs(AP_STALL_NS);
     }
 #endif
     lapicInitAp(madtInfo);
@@ -479,21 +497,22 @@ __attribute__((used)) _Noreturn void apMain(CpuLocal *cl) {
                            */
 
     /* Cross-CPU TSC check against the BSP, which runs its half while we wait in SMP_STAGE_TSC. */
-    ATOMIC_STORE(&cl->bootStage, SMP_STAGE_TSC, MEM_RELEASE);
+    apAdvanceStage(cl, SMP_STAGE_ENTERED, SMP_STAGE_TSC);
     TscSyncResult tr;
     tscSyncAp(&tscSync, cl, &tr);
     if (tr.ok && tr.offset != 0) {
         cl->arch.tscOffset = tr.offset; /* timeMonotonicNs() on this CPU subtracts it from now on */
     }
+#ifdef KERNEL_DEBUG
+    if (apStallProbe == AP_STALL_TSC && cl->apicId == 1) {
+        delayNs(AP_STALL_NS);
+    }
+#endif
 
     /* Claim the right to publish (D-193): the BSP gives up on an AP with a compare-exchange of the
      * same word from a pre-publication stage to FAILED, so exactly one of us wins. Losing means the
      * BSP already decided (and is about to INIT us): park instead of appearing in the mask. */
-    uint32_t expectedStage = SMP_STAGE_TSC;
-    if (!ATOMIC_CMPXCHG(&cl->bootStage, &expectedStage, SMP_STAGE_PUBLISHING, MEM_ACQ_REL,
-                        MEM_ACQUIRE)) {
-        apFail(cl);
-    }
+    apAdvanceStage(cl, SMP_STAGE_TSC, SMP_STAGE_PUBLISHING);
 
     /* Publish: the CpuLocal first, then the online mask, then a full local TLB flush (a shootdown
      * that missed this CPU because it was not in the mask yet must not leave a stale entry behind,
@@ -747,6 +766,11 @@ static bool bootAp(CpuLocal *cl) {
                       "cpu apic-id=%u did not come online (trampoline stage %u, boot stage %u)",
                       cl->apicId, (unsigned)trampWord(offsetof(ApTrampData, stage)),
                       (unsigned)stage);
+#ifdef KERNEL_DEBUG
+            if (apStallProbe != AP_STALL_NONE && cl->apicId == 1) {
+                delayNs(AP_STALL_INIT_LAG_NS); /* a late INIT: the AP must park itself */
+            }
+#endif
             lapicSendIpi(cl->apicId, ICR_INIT); /* park it again */
             delayNs(AP_PARK_DELAY_NS);
             return false;
@@ -767,7 +791,9 @@ void smpInit(void) {
     const char *cmdline = kernelCmdline();
 #ifdef KERNEL_DEBUG
     apEarlyPanicProbe = cmdlineHasToken(cmdline, "smp-ap-early-panic-probe");
-    apStallProbe = cmdlineHasToken(cmdline, "smp-ap-stall-probe");
+    apStallProbe = cmdlineHasToken(cmdline, "smp-ap-stall-probe")       ? AP_STALL_ENTERED
+                   : cmdlineHasToken(cmdline, "smp-ap-stall-tsc-probe") ? AP_STALL_TSC
+                                                                        : AP_STALL_NONE;
 #endif
     bool present, invalid;
     uint32_t maxTotal = smpParseCpusOption(cmdline, CPU_MAX, &present, &invalid);
